@@ -1,0 +1,15 @@
+[package]
+name = "TinyHarness"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.89"
+clap = { version = "4.6.1", features = ["derive"] }
+ollama-rs = { version = "0.3.4", features = ["stream"] }
+tokio = { version = "1.52.1", features = ["full"] }
+tokio-stream = "0.1.18"
+libc = "0.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+schemars = "1.2.1"
