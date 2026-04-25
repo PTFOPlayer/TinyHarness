@@ -2,6 +2,7 @@ pub mod ls;
 pub mod tool;
 pub mod read;
 
+use crate::provider::ToolInfo;
 use crate::tools::tool::Tool;
 
 pub struct ToolManager {
@@ -17,7 +18,7 @@ impl ToolManager {
         self.tools.push(tool);
     }
 
-    pub fn get_ollama_tools(&self) -> Vec<ollama_rs::generation::tools::ToolInfo> {
+    pub fn get_ollama_tools(&self) -> Vec<ToolInfo> {
         self.tools.iter().map(|t| t.tool_info.clone()).collect()
     }
 

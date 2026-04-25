@@ -1,9 +1,53 @@
+pub mod llama_cpp;
 pub mod ollama;
 
 use std::fmt::Display;
 
-use ollama_rs::generation::{chat::ChatMessageResponse, tools::{ToolCall, ToolInfo}};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub function: ToolCallFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub content: String,
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatMessageResponse {
+    pub message: ChatMessage,
+    pub done: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolInfo {
+    #[serde(rename = "type")]
+    pub tool_type: ToolType,
+    pub function: ToolFunctionInfo,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ToolType {
+    Function,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolFunctionInfo {
+    pub name: String,
+    pub description: String,
+    pub parameters: schemars::Schema,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Role {
@@ -36,9 +80,9 @@ pub trait Provider {
     fn select_model(&mut self, name: String);
 
     async fn chat(
-        &mut self, 
-        messages: Vec<Message>, 
-        prompt: String, 
+        &mut self,
+        messages: Vec<Message>,
+        prompt: String,
         send: Sender<ChatMessageResponse>,
         tools: Vec<ToolInfo>,
     );

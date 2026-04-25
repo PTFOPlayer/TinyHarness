@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
+use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
 use crate::tools::tool::Tool;
-use ollama_rs::generation::tools::ToolInfo;
 
 pub fn read_tool(args: HashMap<String, String>) -> String {
     let path = match args.get("path") {
@@ -44,8 +44,8 @@ fn read_partial(path: &str, from: usize, to: usize) -> String {
 
 pub fn read_tool_entry() -> Tool {
     let tool_info = ToolInfo {
-        tool_type: ollama_rs::generation::tools::ToolType::Function,
-        function: ollama_rs::generation::tools::ToolFunctionInfo {
+        tool_type: ToolType::Function,
+        function: ToolFunctionInfo {
             name: "read".to_string(),
             description: "Read file content. Returns the entire file or a specific line range if from/to are provided.".to_string(),
             parameters: schemars::schema_for!(serde_json::Map::<String, serde_json::Value>),

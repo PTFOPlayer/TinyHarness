@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use ollama_rs::generation::tools::ToolInfo;
+
+use crate::provider::ToolInfo;
 
 pub struct Tool {
     pub name: String,

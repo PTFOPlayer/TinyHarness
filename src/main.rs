@@ -12,12 +12,14 @@ use std::{
     sync::Arc,
 };
 
-use ollama_rs::generation::{chat::ChatMessageResponse, tools::ToolCall};
+use clap::Parser;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::provider::{Message, Provider, Role, ollama::OllamaProvider};
+use crate::provider::{
+    ChatMessageResponse, Message, Provider, Role, ToolCall,
+    llama_cpp::LlamaCppProvider, ollama::OllamaProvider,
+};
 
-// ANSI color codes
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const BLUE: &str = "\x1b[34m";
@@ -28,16 +30,37 @@ struct Args {
     #[arg(short, long)]
     ollama: bool,
     #[arg(short, long)]
-    llamacpp: bool,
-    #[arg(short, long)]
+    llama_cpp: bool,
+    #[arg(short, long, default_value_t=String::new())]
     url: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let provider: Arc<Mutex<dyn Provider + Send + Sync>> = Arc::new(Mutex::new(
-        OllamaProvider::new(String::from("http://127.0.0.1:11434")),
-    ));
+    let args = Args::parse();
+
+    let default_url = if args.llama_cpp {
+        "http://127.0.0.1:8080"
+    } else {
+        "http://127.0.0.1:11434"
+    };
+
+    let url = if args.url.is_empty() {
+        default_url.to_string()
+    } else {
+        args.url
+    };
+
+    let provider: Arc<Mutex<dyn Provider + Send + Sync>> = if args.llama_cpp {
+        let llama = LlamaCppProvider::new(url);
+        if let Err(e) = llama.health_check().await {
+            eprintln!("{}Error:{} LlamaCpp health check failed: {}", BOLD, RESET, e);
+            std::process::exit(1);
+        }
+        Arc::new(Mutex::new(llama))
+    } else {
+        Arc::new(Mutex::new(OllamaProvider::new(url)))
+    };
 
     {
         let mut provider = provider.lock().await;
@@ -82,7 +105,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Drain any leftover messages in the channel
         while let Ok(_) = recv.try_recv() {}
 
-        // Main conversation loop with tool support
         loop {
             let messages_cloned = messages.clone();
             let send_cloned = send.clone();
@@ -124,32 +146,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             stdout.write(RESET.as_bytes())?;
 
-            if !tool_calls.is_empty() {
-                stdout.write(format!("\n{}Tool call(s) detected: {}{}\n\n", BOLD, tool_calls.len(), RESET).as_bytes())?;
-                
-                messages.push(Message {
-                    role: Role::Assistant,
-                    content: response_content.clone(),
-                    tool_calls: tool_calls.clone(),
-                });
-
-                for call in &tool_calls {
-                    stdout.write(format!("  Executing tool: {}\n", call.function.name).as_bytes())?;
-                    stdout.flush()?;
-                    let result = tool_manager
-                        .execute_tool_call(&call.function.name, &call.function.arguments);
-                    stdout.write(format!("  Result: {}\n", result.lines().next().unwrap_or(&result)).as_bytes())?;
-                    stdout.flush()?;
-                    messages.push(Message {
-                        role: Role::System,
-                        content: format!(
-                            "Tool '{}' result:\n{}\n\nUse this result to continue helping the user.",
-                            call.function.name, result
-                        ),
-                        tool_calls: vec![],
-                    });
-                }
-
+            if handle_tool_calls(&tool_calls, &response_content, &mut messages, &tool_manager, &mut stdout).await? {
                 continue;
             }
 
@@ -164,4 +161,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
         stdout.write("\n".as_bytes())?;
         stdout.flush()?;
     }
+}
+
+async fn handle_tool_calls<W: Write>(
+    tool_calls: &[ToolCall],
+    response_content: &str,
+    messages: &mut Vec<Message>,
+    tool_manager: &ToolManager,
+    stdout: &mut W,
+) -> Result<bool, Box<dyn Error>> {
+    if tool_calls.is_empty() {
+        return Ok(false);
+    }
+
+    stdout.write(format!("\n{}Tool call(s) detected: {}{}\n\n", BOLD, tool_calls.len(), RESET).as_bytes())?;
+
+    messages.push(Message {
+        role: Role::Assistant,
+        content: response_content.to_string(),
+        tool_calls: tool_calls.to_vec(),
+    });
+
+    for call in tool_calls {
+        stdout.write(format!("  Executing tool: {}\n", call.function.name).as_bytes())?;
+        stdout.flush()?;
+        let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments);
+        stdout.write(format!("  Result: {}\n", result.lines().next().unwrap_or(&result)).as_bytes())?;
+        stdout.flush()?;
+        messages.push(Message {
+            role: Role::System,
+            content: format!(
+                "Tool '{}' result:\n{}\n\nUse this result to continue helping the user.",
+                call.function.name, result
+            ),
+            tool_calls: vec![],
+        });
+    }
+
+    Ok(true)
 }
