@@ -76,20 +76,11 @@ src/
     └── read.rs          # `read` tool — read file contents
 ```
 
-## Development
 
-### Adding a new tool
+## AI Usage & Security Disclosure
 
-1. Create a new file in `src/tools/` (e.g., `grep.rs`).
-2. Implement the tool logic and an entry function returning a `Tool`.
-3. Register the tool in `main.rs`:
-   ```rust
-   tool_manager.register_tool(grep_tool_entry());
-   ```
+TinyHarness provides a framework that grants Large Language Models (LLMs) the ability to interact with your local filesystem through tool calling. While powerful, this capability introduces specific risks:
 
-### Adding a new provider
-
-1. Create `src/provider/my_provider.rs`.
-2. Implement the `Provider` trait using the shared types from `mod.rs`.
-3. Register it: `pub mod my_provider;` in `mod.rs`.
-4. Wire it up in `main.rs` with a CLI flag.
+- **Security Risk**: Granting an AI execution privileges on your host system can be dangerous. It is strongly recommended to run this framework within a **sandboxed environment** (e.g., a Docker container or a dedicated VM) to prevent accidental or malicious modification of critical system files.
+- **Non-Deterministic Behavior**: LLMs are prone to "hallucinations" and may generate incorrect or unintended tool arguments. Always review the AI's proposed actions before execution in production environments.
+- **User Accountability**: The user assumes full responsibility for all operations performed by the AI via the integrated tools. Ensure you have appropriate backups and permissions configured.

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::Tool;
+use crate::tools::tool::{build_string_params_schema, Tool};
 
 pub fn ls_tool(args: HashMap<String, String>) -> String {
     let path = match args.get("path") {
@@ -49,7 +49,10 @@ pub fn ls_tool_entry() -> Tool {
         function: ToolFunctionInfo {
             name: "ls".to_string(),
             description: "List directory contents. Returns a newline-separated list of files and directories in the specified path.".to_string(),
-            parameters: schemars::schema_for!(serde_json::Map::<String, serde_json::Value>),
+            parameters: build_string_params_schema(
+                &[("path", "The directory path to list")],
+                &[],
+            ),
         },
     };
 

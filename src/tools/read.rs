@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::Tool;
+use crate::tools::tool::{build_string_params_schema, Tool};
 
 pub fn read_tool(args: HashMap<String, String>) -> String {
     let path = match args.get("path") {
@@ -48,7 +48,13 @@ pub fn read_tool_entry() -> Tool {
         function: ToolFunctionInfo {
             name: "read".to_string(),
             description: "Read file content. Returns the entire file or a specific line range if from/to are provided.".to_string(),
-            parameters: schemars::schema_for!(serde_json::Map::<String, serde_json::Value>),
+            parameters: build_string_params_schema(
+                &[("path", "The absolute path to the file to read")],
+                &[
+                    ("from", "Starting line number (0-based, optional)", "0"),
+                    ("to", "Number of lines to read (optional, reads entire file if omitted)", ""),
+                ],
+            ),
         },
     };
 

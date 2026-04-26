@@ -1,6 +1,11 @@
+pub mod edit;
+pub mod glob;
+pub mod grep;
 pub mod ls;
-pub mod tool;
 pub mod read;
+pub mod run;
+pub mod tool;
+pub mod write;
 
 use crate::provider::ToolInfo;
 use crate::tools::tool::Tool;

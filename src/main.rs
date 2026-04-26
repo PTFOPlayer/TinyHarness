@@ -4,7 +4,10 @@ pub mod tools;
 
 use crate::{
     system_prompt::system_prompt,
-    tools::{ToolManager, ls::ls_tool_entry, read::read_tool_entry},
+    tools::{
+        ToolManager, edit::edit_tool_entry, glob::glob_tool_entry, grep::grep_tool_entry,
+        ls::ls_tool_entry, read::read_tool_entry, run::run_tool_entry, write::write_tool_entry,
+    },
 };
 use std::{
     error::Error,
@@ -22,6 +25,7 @@ use crate::provider::{
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
+const RED: &str = "\x1b[31m";
 const BLUE: &str = "\x1b[34m";
 const ORANGE: &str = "\x1b[38;5;208m";
 
@@ -72,6 +76,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut tool_manager = ToolManager::new();
     tool_manager.register_tool(ls_tool_entry());
     tool_manager.register_tool(read_tool_entry());
+    tool_manager.register_tool(write_tool_entry());
+    tool_manager.register_tool(edit_tool_entry());
+    tool_manager.register_tool(grep_tool_entry());
+    tool_manager.register_tool(run_tool_entry());
+    tool_manager.register_tool(glob_tool_entry());
 
     let ollama_tools = tool_manager.get_ollama_tools();
     let mut messages = vec![system_prompt()];
@@ -182,7 +191,43 @@ async fn handle_tool_calls<W: Write>(
         tool_calls: tool_calls.to_vec(),
     });
 
+    let sensitive_tools = ["run", "write", "edit"];
+
     for call in tool_calls {
+        let needs_confirmation = sensitive_tools.contains(&call.function.name.as_str());
+
+        if needs_confirmation {
+            stdout.write(format!(
+                "{}{}⚠ Tool '{}' requires confirmation{}",
+                RED, BOLD, call.function.name, RESET
+            ).as_bytes())?;
+            stdout.write(format!(
+                "\n  Arguments: {}\n",
+                serde_json::to_string_pretty(&call.function.arguments).unwrap_or_default()
+            ).as_bytes())?;
+            stdout.write(format!("{}Proceed? (y/N):{} ", BOLD, RESET).as_bytes())?;
+            stdout.flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).expect("Failed to read line");
+            let input = input.trim().to_lowercase();
+
+            if input != "y" && input != "yes" {
+                stdout.write(format!("{}  Skipped by user{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
+                stdout.flush()?;
+                messages.push(Message {
+                    role: Role::System,
+                    content: format!(
+                        "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
+                        call.function.name,
+                        serde_json::to_string_pretty(&call.function.arguments).unwrap_or_default()
+                    ),
+                    tool_calls: vec![],
+                });
+                continue;
+            }
+        }
+
         stdout.write(format!("  Executing tool: {}\n", call.function.name).as_bytes())?;
         stdout.flush()?;
         let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments);
