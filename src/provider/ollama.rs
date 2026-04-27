@@ -117,11 +117,26 @@ impl Provider for OllamaProvider {
             .think(ThinkType::False)
             .tools(ollama_tools);
 
-        let mut stream = self
+        let stream = self
             .client
             .send_chat_messages_stream(request)
-            .await
-            .unwrap();
+            .await;
+
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = send
+                    .send(ChatMessageResponse {
+                        message: ChatMessage {
+                            content: format!("Error: {}", e),
+                            tool_calls: vec![],
+                        },
+                        done: true,
+                    })
+                    .await;
+                return;
+            }
+        };
 
         while let Some(Ok(res)) = stream.next().await {
             let ours = from_ollama_response(res);

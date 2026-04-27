@@ -1,8 +1,10 @@
+pub mod commands;
 pub mod provider;
 pub mod system_prompt;
 pub mod tools;
 
 use crate::{
+    commands::CommandDispatcher,
     system_prompt::system_prompt,
     tools::{
         ToolManager, edit::edit_tool_entry, glob::glob_tool_entry, grep::grep_tool_entry,
@@ -16,11 +18,12 @@ use std::{
 };
 
 use clap::Parser;
+use rustyline::{Completer, Editor, Helper, Highlighter, Hinter, completion::Completer, error::ReadlineError, highlight::Highlighter, hint::Hinter, validate::Validator};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::provider::{
-    ChatMessageResponse, Message, Provider, Role, ToolCall,
-    llama_cpp::LlamaCppProvider, ollama::OllamaProvider,
+    ChatMessageResponse, Message, Provider, Role, ToolCall, llama_cpp::LlamaCppProvider,
+    ollama::OllamaProvider,
 };
 
 const RESET: &str = "\x1b[0m";
@@ -28,6 +31,110 @@ const BOLD: &str = "\x1b[1m";
 const RED: &str = "\x1b[31m";
 const BLUE: &str = "\x1b[34m";
 const ORANGE: &str = "\x1b[38;5;208m";
+const GRAY: &str = "\x1b[90m";
+
+#[derive(Completer, Helper, Highlighter, Hinter)]
+struct CommandHelper {
+    #[rustyline(Completer)]
+    completer: CommandCompleter,
+    #[rustyline(Hinter)]
+    hinter: CommandHinter,
+    #[rustyline(Highlighter)]
+    highlighter: CommandHighlighter,
+}
+
+impl Validator for CommandHelper {}
+
+struct CommandCompleter;
+
+impl Completer for CommandCompleter {
+    type Candidate = String;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        if !line.starts_with('/') || pos == 0 {
+            return Ok((0, vec![]));
+        }
+
+        let prefix = &line[..pos];
+        let cmd_prefix = prefix.to_lowercase();
+
+        let matches: Vec<String> = CommandDispatcher::command_names()
+            .iter()
+            .filter(|name| name.starts_with(&cmd_prefix))
+            .take(3)
+            .map(|s| s.to_string())
+            .collect();
+
+        if matches.is_empty() {
+            return Ok((0, vec![]));
+        }
+
+        Ok((0, matches))
+    }
+}
+
+struct CommandHinter;
+
+impl Hinter for CommandHinter {
+    type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
+        if !line.starts_with('/') || pos == 0 || line.len() != pos {
+            return None;
+        }
+
+        let prefix = line.to_lowercase();
+        let matches: Vec<&str> = CommandDispatcher::command_names()
+            .iter()
+            .filter(|name| name.starts_with(&prefix))
+            .take(3)
+            .copied()
+            .collect();
+
+        if matches.is_empty() {
+            return None;
+        }
+
+        if matches.len() == 1 {
+            let hint = matches[0][pos..].to_string();
+            if !hint.is_empty() {
+                return Some(hint);
+            }
+        }
+
+        let suggestions = matches.join("  ");
+        Some(format!("  ({})", suggestions))
+    }
+}
+
+struct CommandHighlighter;
+
+impl Highlighter for CommandHighlighter {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
+        if line.starts_with('/') {
+            std::borrow::Cow::Owned(format!("{}{}{}", BLUE, line, RESET))
+        } else {
+            std::borrow::Cow::Borrowed(line)
+        }
+    }
+
+    fn highlight_hint<'l>(&self, hint: &'l str) -> std::borrow::Cow<'l, str> {
+        std::borrow::Cow::Owned(format!("{}{}{}", GRAY, hint, RESET))
+    }
+
+    fn highlight_candidate<'l>(
+        &self,
+        candidate: &'l str,
+        _completion: rustyline::CompletionType,
+    ) -> std::borrow::Cow<'l, str> {
+        std::borrow::Cow::Owned(format!("{}{}{}", BLUE, candidate, RESET))
+    }
+}
 
 #[derive(clap::Parser, Debug)]
 struct Args {
@@ -58,7 +165,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let provider: Arc<Mutex<dyn Provider + Send + Sync>> = if args.llama_cpp {
         let llama = LlamaCppProvider::new(url);
         if let Err(e) = llama.health_check().await {
-            eprintln!("{}Error:{} LlamaCpp health check failed: {}", BOLD, RESET, e);
+            eprintln!(
+                "{}Error:{} LlamaCpp health check failed: {}",
+                BOLD, RESET, e
+            );
             std::process::exit(1);
         }
         Arc::new(Mutex::new(llama))
@@ -89,19 +199,78 @@ async fn main() -> Result<(), Box<dyn Error>> {
     stdout.write("╔════════════════════════════════════════════════════════╗\n".as_bytes())?;
     stdout.write("║           TinyHarness AI Assistant                     ║\n".as_bytes())?;
     stdout.write("╚════════════════════════════════════════════════════════╝\n\n".as_bytes())?;
+    stdout.write(
+        format!(
+            "{}Tip:{} Type {} to see available commands\n\n",
+            GRAY, RESET, "/help"
+        )
+        .as_bytes(),
+    )?;
     stdout.flush()?;
 
+    let helper = CommandHelper {
+        completer: CommandCompleter,
+        hinter: CommandHinter,
+        highlighter: CommandHighlighter,
+    };
+    let mut rl = Editor::new()?;
+    rl.set_helper(Some(helper));
+    rl.load_history(".tinyharness_history").ok();
+
+    let mut dispatcher = CommandDispatcher::new(Arc::clone(&provider));
+
     loop {
-        stdout.write_all(format!("{}> {}{}", BOLD, RESET, BLUE).as_bytes())?;
-        stdout.flush()?;
+        let readline = rl.readline(&format!("{}> {}{}", BOLD, RESET, BLUE));
+        let user_input = match readline {
+            Ok(line) => {
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                rl.add_history_entry(&trimmed)?;
+                trimmed
+            }
+            Err(ReadlineError::Interrupted) => {
+                // Ctrl+C — show exit hint instead of silently skipping
+                stdout.write("\n".as_bytes())?;
+                stdout.write(
+                    format!(
+                        "{}Use {}/exit{} or {}{}Ctrl+D{} to exit.\n",
+                        GRAY, BLUE, GRAY, GRAY, BOLD, RESET
+                    )
+                    .as_bytes(),
+                )?;
+                stdout.flush()?;
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                // Ctrl+D — exit
+                stdout.write("\n".as_bytes())?;
+                break;
+            }
+            Err(err) => {
+                eprintln!("{}Error reading input: {}{}", RED, err, RESET);
+                break;
+            }
+        };
 
-        let mut user_input = String::new();
-        io::stdin()
-            .read_line(&mut user_input)
-            .expect("Failed to read line");
-        user_input = user_input.trim().to_string();
-
-        if user_input.is_empty() {
+        if user_input.starts_with('/') {
+            match CommandDispatcher::parse(&user_input) {
+                Some(cmd) => {
+                    if let Err(e) = dispatcher.dispatch(cmd, &mut messages).await {
+                        eprintln!("{}{}{}", RED, e, RESET);
+                    }
+                    if dispatcher.exit_requested {
+                        break;
+                    }
+                }
+                None => {
+                    eprintln!(
+                        "{}Unknown command: {}{}{}\n  Type {}/help{} for available commands.{}",
+                        RED, BLUE, user_input, RED, BLUE, RED, RESET
+                    );
+                }
+            }
             continue;
         }
 
@@ -137,7 +306,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if !msg.message.tool_calls.is_empty() {
                     tool_calls = msg.message.tool_calls.clone();
                 }
-                
+
                 if msg.done {
                     received_done = true;
                 }
@@ -147,15 +316,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     stdout.write(format!("{}", msg.message.content).as_bytes())?;
                     stdout.flush()?;
                 }
-                
+
                 if received_done {
                     break;
                 }
             }
 
+            if !received_done {
+                stdout.write(RESET.as_bytes())?;
+                stdout.write(format!(
+                    "{}Error:{} Provider request failed or was interrupted.\n",
+                    RED, RESET
+                ).as_bytes())?;
+                messages.pop();
+                break;
+            }
+
             stdout.write(RESET.as_bytes())?;
 
-            if handle_tool_calls(&tool_calls, &response_content, &mut messages, &tool_manager, &mut stdout).await? {
+            if handle_tool_calls(
+                &tool_calls,
+                &response_content,
+                &mut messages,
+                &tool_manager,
+                &mut stdout,
+            )
+            .await?
+            {
                 continue;
             }
 
@@ -170,6 +357,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         stdout.write("\n".as_bytes())?;
         stdout.flush()?;
     }
+
+    // Save history on exit
+    rl.save_history(".tinyharness_history").ok();
+
+    Ok(())
 }
 
 async fn handle_tool_calls<W: Write>(
@@ -183,7 +375,15 @@ async fn handle_tool_calls<W: Write>(
         return Ok(false);
     }
 
-    stdout.write(format!("\n{}Tool call(s) detected: {}{}\n\n", BOLD, tool_calls.len(), RESET).as_bytes())?;
+    stdout.write(
+        format!(
+            "\n{}Tool call(s) detected: {}{}\n\n",
+            BOLD,
+            tool_calls.len(),
+            RESET
+        )
+        .as_bytes(),
+    )?;
 
     messages.push(Message {
         role: Role::Assistant,
@@ -197,23 +397,32 @@ async fn handle_tool_calls<W: Write>(
         let needs_confirmation = sensitive_tools.contains(&call.function.name.as_str());
 
         if needs_confirmation {
-            stdout.write(format!(
-                "{}{}⚠ Tool '{}' requires confirmation{}",
-                RED, BOLD, call.function.name, RESET
-            ).as_bytes())?;
-            stdout.write(format!(
-                "\n  Arguments: {}\n",
-                serde_json::to_string_pretty(&call.function.arguments).unwrap_or_default()
-            ).as_bytes())?;
+            stdout.write(
+                format!(
+                    "{}{}⚠ Tool '{}' requires confirmation{}",
+                    RED, BOLD, call.function.name, RESET
+                )
+                .as_bytes(),
+            )?;
+            stdout.write(
+                format!(
+                    "\n  Arguments: {}\n",
+                    serde_json::to_string_pretty(&call.function.arguments).unwrap_or_default()
+                )
+                .as_bytes(),
+            )?;
             stdout.write(format!("{}Proceed? (y/N):{} ", BOLD, RESET).as_bytes())?;
             stdout.flush()?;
 
             let mut input = String::new();
-            io::stdin().read_line(&mut input).expect("Failed to read line");
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
             let input = input.trim().to_lowercase();
 
             if input != "y" && input != "yes" {
-                stdout.write(format!("{}  Skipped by user{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
+                stdout
+                    .write(format!("{}  Skipped by user{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
                 stdout.flush()?;
                 messages.push(Message {
                     role: Role::System,
@@ -231,7 +440,9 @@ async fn handle_tool_calls<W: Write>(
         stdout.write(format!("  Executing tool: {}\n", call.function.name).as_bytes())?;
         stdout.flush()?;
         let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments);
-        stdout.write(format!("  Result: {}\n", result.lines().next().unwrap_or(&result)).as_bytes())?;
+        stdout.write(
+            format!("  Result: {}\n", result.lines().next().unwrap_or(&result)).as_bytes(),
+        )?;
         stdout.flush()?;
         messages.push(Message {
             role: Role::System,

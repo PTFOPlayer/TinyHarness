@@ -49,7 +49,7 @@ pub struct ToolFunctionInfo {
     pub parameters: schemars::Schema,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Role {
     System,
     User,
@@ -66,7 +66,7 @@ impl Display for Role {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
