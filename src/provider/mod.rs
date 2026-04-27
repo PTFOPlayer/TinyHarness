@@ -49,7 +49,7 @@ pub struct ToolFunctionInfo {
     pub parameters: schemars::Schema,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Role {
     System,
     User,

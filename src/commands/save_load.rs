@@ -1,14 +1,28 @@
 use std::fs;
 
-use crate::provider::Message;
+use serde::{Deserialize, Serialize};
 
-pub fn execute_save(path: &str, messages: &[Message]) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(messages).map_err(|e| format!("Failed to serialize: {}", e))?;
+use crate::{mode::AgentMode, provider::Message};
+
+#[derive(Serialize, Deserialize)]
+struct ConversationData {
+    mode: AgentMode,
+    messages: Vec<Message>,
+}
+
+pub fn execute_save(path: &str, messages: &[Message], mode: AgentMode) -> Result<(), String> {
+    let data = ConversationData {
+        mode,
+        messages: messages.to_vec(),
+    };
+    let json =
+        serde_json::to_string_pretty(&data).map_err(|e| format!("Failed to serialize: {}", e))?;
     fs::write(path, &json).map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
     println!(
-        "{}Saved {} messages to {}{}{}",
+        "{}Saved {} messages ({}) to {}{}{}",
         crate::BOLD,
         messages.len(),
+        mode,
         crate::BLUE,
         path,
         crate::RESET
@@ -16,10 +30,27 @@ pub fn execute_save(path: &str, messages: &[Message]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn execute_load(path: &str) -> Result<Vec<Message>, String> {
-    let json = fs::read_to_string(path).map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
-    let messages: Vec<Message> =
-        serde_json::from_str(&json).map_err(|e| format!("Failed to parse '{}': {}", path, e))?;
+pub fn execute_load(path: &str) -> Result<(AgentMode, Vec<Message>), String> {
+    let json =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
+
+    // Try new format first (with mode), fall back to old format (just messages)
+    if let Ok(data) = serde_json::from_str::<ConversationData>(&json) {
+        println!(
+            "{}Loaded {} messages ({}) from {}{}{}",
+            crate::BOLD,
+            data.messages.len(),
+            data.mode,
+            crate::BLUE,
+            path,
+            crate::RESET
+        );
+        return Ok((data.mode, data.messages));
+    }
+
+    // Fallback: old format (just a Vec<Message>)
+    let messages: Vec<Message> = serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse '{}': {}", path, e))?;
     println!(
         "{}Loaded {} messages from {}{}{}",
         crate::BOLD,
@@ -28,5 +59,5 @@ pub fn execute_load(path: &str) -> Result<Vec<Message>, String> {
         path,
         crate::RESET
     );
-    Ok(messages)
+    Ok((AgentMode::Casual, messages))
 }

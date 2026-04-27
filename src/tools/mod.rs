@@ -27,6 +27,16 @@ impl ToolManager {
         self.tools.iter().map(|t| t.tool_info.clone()).collect()
     }
 
+    /// Returns only read-only tools (ls, read, grep, glob) — no write/edit/run.
+    pub fn get_readonly_tools(&self) -> Vec<ToolInfo> {
+        let readonly_names = ["ls", "read", "grep", "glob"];
+        self.tools
+            .iter()
+            .filter(|t| readonly_names.contains(&t.name.as_str()))
+            .map(|t| t.tool_info.clone())
+            .collect()
+    }
+
     pub fn execute_tool_call(&self, tool_name: &str, arguments: &serde_json::Value) -> String {
         if let Some(tool) = self.tools.iter().find(|t| t.name == tool_name) {
             tool::execute_tool_call(tool, arguments)
