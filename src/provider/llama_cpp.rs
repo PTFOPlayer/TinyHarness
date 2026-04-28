@@ -124,6 +124,10 @@ impl Provider for LlamaCppProvider {
         self.model = Some(name);
     }
 
+    fn current_model(&self) -> Option<String> {
+        self.model.clone()
+    }
+
     async fn chat(
         &mut self,
         messages: Vec<Message>,
@@ -317,6 +321,12 @@ fn to_openai_message(msg: Message) -> OpenAIMessage {
                 }
             }
         }
+        Role::Tool => OpenAIMessage {
+            role: "tool".to_string(),
+            content: msg.content,
+            tool_calls: None,
+            tool_call_id: None,
+        },
     }
 }
 

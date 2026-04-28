@@ -140,7 +140,12 @@ impl CommandDispatcher {
             }
             Command::Model(name) => {
                 if name.is_empty() {
-                    return Err("Usage: /model <name> — e.g. /model gemma4:31b-cloud".to_string());
+                    let provider = self.provider.lock().await;
+                    match provider.current_model() {
+                        Some(model) => println!("{}Current model: {}{}{}", BOLD, BLUE, model, RESET),
+                        None => println!("{}No model selected.{}", ORANGE, RESET),
+                    }
+                    return Ok(());
                 }
                 let mut provider = self.provider.lock().await;
                 models::execute_select(&mut *provider, &name).await

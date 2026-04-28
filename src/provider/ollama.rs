@@ -34,6 +34,7 @@ impl From<Message> for OllamaChatMessage {
                 }
                 m
             }
+            Role::Tool => OllamaChatMessage::tool(msg.content),
         }
     }
 }
@@ -98,6 +99,10 @@ impl Provider for OllamaProvider {
         self.model = Some(name);
     }
 
+    fn current_model(&self) -> Option<String> {
+        self.model.clone()
+    }
+
     async fn chat(
         &mut self,
         messages: Vec<Message>,
@@ -113,9 +118,13 @@ impl Provider for OllamaProvider {
         let ollama_tools: Vec<ollama_rs::generation::tools::ToolInfo> =
             tools.into_iter().map(to_ollama_tool_info).collect();
 
-        let request = ChatMessageRequest::new(model, chat_messages)
-            .think(ThinkType::Medium)
-            .tools(ollama_tools);
+        let mut request = ChatMessageRequest::new(model, chat_messages)
+            .think(ThinkType::Medium);
+
+        if !ollama_tools.is_empty() {
+            request = request.tools(ollama_tools);
+            request.think = None;
+        }
 
         let stream = self
             .client

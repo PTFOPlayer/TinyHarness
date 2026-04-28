@@ -54,6 +54,7 @@ pub enum Role {
     System,
     User,
     Assistant,
+    Tool,
 }
 
 impl Display for Role {
@@ -62,6 +63,7 @@ impl Display for Role {
             Role::System => f.write_str("System"),
             Role::User => f.write_str("User"),
             Role::Assistant => f.write_str("Assistant"),
+            Role::Tool => f.write_str("Tool"),
         }
     }
 }
@@ -78,6 +80,8 @@ pub trait Provider {
     async fn list_models(&self) -> Vec<String>;
 
     fn select_model(&mut self, name: String);
+
+    fn current_model(&self) -> Option<String>;
 
     async fn chat(
         &mut self,

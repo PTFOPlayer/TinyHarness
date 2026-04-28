@@ -411,7 +411,7 @@ async fn handle_tool_calls<W: Write>(
         )?;
         stdout.flush()?;
         messages.push(Message {
-            role: Role::System,
+            role: Role::Tool,
             content: format!(
                 "Tool '{}' result:\n{}\n\nUse this result to continue helping the user.",
                 call.function.name, result
