@@ -1,3 +1,5 @@
+use crate::style::*;
+
 pub fn execute() {
-    println!("{}Goodbye!{}", crate::ORANGE, crate::RESET);
+    println!("{}Goodbye!{}", ORANGE, RESET);
 }

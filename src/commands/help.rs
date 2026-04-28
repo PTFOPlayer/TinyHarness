@@ -1,9 +1,10 @@
+use crate::style::*;
 use super::CommandDispatcher;
 
 pub fn execute() {
-    println!("\n{}Available commands:{}", crate::BOLD, crate::RESET);
+    println!("\n{}Available commands:{}", BOLD, RESET);
     for (name, desc) in CommandDispatcher::command_descriptions() {
-        println!("  {}{:<20}{} {}", crate::BLUE, name, crate::RESET, desc);
+        println!("  {}{:<20}{} {}", BLUE, name, RESET, desc);
     }
     println!();
 }

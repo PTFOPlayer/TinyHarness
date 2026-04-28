@@ -1,8 +1,5 @@
 use crate::context::WorkspaceContext;
-
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const GRAY: &str = "\x1b[90m";
+use crate::style::*;
 
 pub fn execute(ctx: &WorkspaceContext) {
     println!("\n{}Workspace Context:{}", BOLD, RESET);

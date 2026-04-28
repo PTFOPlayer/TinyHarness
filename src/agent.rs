@@ -11,19 +11,13 @@ use rustyline::{
 
 use tokio::sync::{Mutex, mpsc};
 
+use crate::style::*;
 use crate::{
     commands::CommandDispatcher,
     mode::AgentMode,
     provider::{ChatMessageResponse, Message, Provider, Role, ToolCall, ToolInfo},
     tools::ToolManager,
 };
-
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const RED: &str = "\x1b[31m";
-const BLUE: &str = "\x1b[34m";
-const ORANGE: &str = "\x1b[38;5;208m";
-const GRAY: &str = "\x1b[90m";
 
 #[derive(Completer, Helper, Highlighter, Hinter)]
 struct CommandHelper {
@@ -155,9 +149,14 @@ pub async fn run_agent_loop(
         hinter: CommandHinter,
         highlighter: CommandHighlighter,
     };
+    let history_dir = std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".local/share/tinyharness"))
+        .unwrap_or_else(|_| std::path::PathBuf::from(".tinyharness_history"));
+    std::fs::create_dir_all(&history_dir).ok();
+    let history_path = history_dir.join("history.txt");
     let mut rl = Editor::new()?;
     rl.set_helper(Some(helper));
-    rl.load_history(".tinyharness_history").ok();
+    rl.load_history(&history_path).ok();
 
     loop {
         let mode_label = dispatcher.current_mode.to_string();
@@ -307,7 +306,7 @@ pub async fn run_agent_loop(
     }
 
     // Save history on exit
-    rl.save_history(".tinyharness_history").ok();
+    rl.save_history(&history_path).ok();
 
     Ok(())
 }
@@ -347,18 +346,35 @@ async fn handle_tool_calls<W: Write>(
         if needs_confirmation {
             stdout.write(
                 format!(
-                    "{}{}⚠ Tool '{}' requires confirmation{}",
+                    "\n{}{}⚠ Tool '{}' requires confirmation{}",
                     RED, BOLD, call.function.name, RESET
                 )
                 .as_bytes(),
             )?;
-            stdout.write(
-                format!(
-                    "\n  Arguments: {}\n",
-                    serde_json::to_string_pretty(&call.function.arguments).unwrap_or_default()
-                )
-                .as_bytes(),
-            )?;
+
+            // Pretty-print arguments in a cleaner format
+            let args_str = match &call.function.arguments {
+                serde_json::Value::Object(map) => {
+                    let mut lines: Vec<String> = Vec::new();
+                    for (key, val) in map {
+                        let val_str = match val {
+                            serde_json::Value::String(s) => {
+                                if s.len() > 80 {
+                                    format!("{}... ({} chars)", &s[..77], s.len())
+                                } else {
+                                    s.clone()
+                                }
+                            }
+                            other => other.to_string(),
+                        };
+                        lines.push(format!("    {}: {}", key, val_str));
+                    }
+                    lines.join("\n")
+                }
+                other => format!("  {}", serde_json::to_string_pretty(other).unwrap_or_default()),
+            };
+            stdout.write(format!("{}\n", args_str).as_bytes())?;
+
             stdout.write(format!("{}Proceed? (y/N):{} ", BOLD, RESET).as_bytes())?;
             stdout.flush()?;
 
@@ -372,12 +388,14 @@ async fn handle_tool_calls<W: Write>(
                 stdout
                     .write(format!("{}  Skipped by user{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
                 stdout.flush()?;
+
+                // Compact argument summary for the system message
+                let args_summary = format_args_summary(&call.function.arguments);
                 messages.push(Message {
                     role: Role::System,
                     content: format!(
                         "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
-                        call.function.name,
-                        serde_json::to_string_pretty(&call.function.arguments).unwrap_or_default()
+                        call.function.name, args_summary
                     ),
                     tool_calls: vec![],
                 });
@@ -403,4 +421,30 @@ async fn handle_tool_calls<W: Write>(
     }
 
     Ok(true)
+}
+
+/// Format tool call arguments as a compact single-line summary.
+fn format_args_summary(arguments: &serde_json::Value) -> String {
+    match arguments {
+        serde_json::Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(key, val)| {
+                    let val_str = match val {
+                        serde_json::Value::String(s) => {
+                            if s.len() > 60 {
+                                format!("\"{}...\"", &s[..57])
+                            } else {
+                                format!("\"{}\"", s)
+                            }
+                        }
+                        other => other.to_string(),
+                    };
+                    format!("{}={}", key, val_str)
+                })
+                .collect();
+            parts.join(", ")
+        }
+        other => other.to_string(),
+    }
 }

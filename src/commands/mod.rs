@@ -13,6 +13,7 @@ use crate::{
     context::WorkspaceContext,
     mode::AgentMode,
     provider::{Message, Provider, Role},
+    style::*,
 };
 
 pub enum Command {
@@ -148,10 +149,10 @@ impl CommandDispatcher {
                 if mode_str.is_empty() {
                     println!(
                         "{}Current mode: {}{}{}",
-                        crate::BOLD,
-                        crate::BLUE,
+                        BOLD,
+                        BLUE,
                         self.current_mode,
-                        crate::RESET
+                        RESET
                     );
                     return Ok(());
                 }
@@ -159,9 +160,9 @@ impl CommandDispatcher {
                 if new_mode == self.current_mode {
                     println!(
                         "{}Already in {} mode.{}",
-                        crate::ORANGE,
+                        ORANGE,
                         new_mode,
-                        crate::RESET
+                        RESET
                     );
                     return Ok(());
                 }
@@ -172,9 +173,9 @@ impl CommandDispatcher {
                 }
                 println!(
                     "{}Switched to {} mode.{}",
-                    crate::BOLD,
-                    crate::BLUE,
-                    crate::RESET
+                    BOLD,
+                    BLUE,
+                    RESET
                 );
                 Ok(())
             }

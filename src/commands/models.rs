@@ -1,13 +1,14 @@
 use crate::provider::Provider;
+use crate::style::*;
 
 pub async fn execute_list(provider: &dyn Provider) -> Result<(), String> {
     let models = provider.list_models().await;
     if models.is_empty() {
-        println!("{}No models available.{}", crate::ORANGE, crate::RESET);
+        println!("{}No models available.{}", ORANGE, RESET);
     } else {
-        println!("\n{}Available models:{}", crate::BOLD, crate::RESET);
+        println!("\n{}Available models:{}", BOLD, RESET);
         for model in &models {
-            println!("  {}{}{}", crate::BLUE, model, crate::RESET);
+            println!("  {}{}{}", BLUE, model, RESET);
         }
         println!();
     }
@@ -18,24 +19,12 @@ pub async fn execute_select(provider: &mut dyn Provider, name: &str) -> Result<(
     let models = provider.list_models().await;
     if models.iter().any(|m| m == name) {
         provider.select_model(name.to_string());
-        println!(
-            "{}Switched to model: {}{}{}",
-            crate::BOLD,
-            crate::BLUE,
-            name,
-            crate::RESET
-        );
+        println!("{}Switched to model: {}{}{}", BOLD, BLUE, name, RESET);
         Ok(())
     } else {
         // Still switch even if not in list (model might be pullable)
         provider.select_model(name.to_string());
-        println!(
-            "{}Set model to: {}{}{}",
-            crate::BOLD,
-            crate::BLUE,
-            name,
-            crate::RESET
-        );
+        println!("{}Set model to: {}{}{}", BOLD, BLUE, name, RESET);
         Ok(())
     }
 }

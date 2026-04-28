@@ -3,12 +3,10 @@ pub mod commands;
 pub mod context;
 pub mod mode;
 pub mod provider;
+pub mod style;
 pub mod tools;
 
 use std::{error::Error, sync::Arc};
-
-use clap::Parser;
-use tokio::sync::Mutex;
 
 use crate::{
     agent::run_agent_loop,
@@ -20,11 +18,9 @@ use crate::{
         ls::ls_tool_entry, read::read_tool_entry, run::run_tool_entry, write::write_tool_entry,
     },
 };
-
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const BLUE: &str = "\x1b[34m";
-const ORANGE: &str = "\x1b[38;5;208m";
+use clap::Parser;
+use style::*;
+use tokio::sync::Mutex;
 
 #[derive(clap::Parser, Debug)]
 struct Args {
@@ -55,7 +51,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let provider: Arc<Mutex<dyn Provider + Send + Sync>> = if args.llama_cpp {
         let llama = LlamaCppProvider::new(url);
         if let Err(e) = llama.health_check().await {
-            eprintln!("{}Error:{} LlamaCpp health check failed: {}", BOLD, RESET, e);
+            eprintln!(
+                "{}Error:{} LlamaCpp health check failed: {}",
+                BOLD, RESET, e
+            );
             std::process::exit(1);
         }
         Arc::new(Mutex::new(llama))
@@ -95,5 +94,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut dispatcher = CommandDispatcher::new(Arc::clone(&provider), workspace_ctx);
 
-    run_agent_loop(provider, tool_manager, ollama_tools, &mut messages, &mut dispatcher).await
+    run_agent_loop(
+        provider,
+        tool_manager,
+        ollama_tools,
+        &mut messages,
+        &mut dispatcher,
+    )
+    .await
 }

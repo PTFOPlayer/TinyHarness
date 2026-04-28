@@ -114,7 +114,7 @@ impl Provider for OllamaProvider {
             tools.into_iter().map(to_ollama_tool_info).collect();
 
         let request = ChatMessageRequest::new(model, chat_messages)
-            .think(ThinkType::False)
+            .think(ThinkType::Medium)
             .tools(ollama_tools);
 
         let stream = self
