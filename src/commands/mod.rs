@@ -4,12 +4,14 @@ pub mod exit;
 pub mod help;
 pub mod models;
 pub mod save_load;
+pub mod settings;
 
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
 use crate::{
+    config::Settings,
     context::WorkspaceContext,
     mode::AgentMode,
     provider::{Message, Provider, Role},
@@ -26,6 +28,7 @@ pub enum Command {
     Exit,
     Save(String),
     Load(String),
+    Settings,
 }
 
 pub struct CommandDispatcher {
@@ -80,6 +83,7 @@ impl CommandDispatcher {
             "/exit" | "/quit" => Some(Command::Exit),
             "/save" => Some(Command::Save(arg.unwrap_or_default())),
             "/load" => Some(Command::Load(arg.unwrap_or_default())),
+            "/settings" => Some(Command::Settings),
             _ => None,
         }
     }
@@ -99,6 +103,7 @@ impl CommandDispatcher {
             "/quit",
             "/save",
             "/load",
+            "/settings",
         ]
     }
 
@@ -117,6 +122,7 @@ impl CommandDispatcher {
             ("/quit", "Exit the application"),
             ("/save <file>", "Save conversation to a JSON file"),
             ("/load <file>", "Load conversation from a JSON file"),
+            ("/settings", "Show current settings (provider, model, mode)"),
         ]
     }
 
@@ -148,7 +154,12 @@ impl CommandDispatcher {
                     return Ok(());
                 }
                 let mut provider = self.provider.lock().await;
-                models::execute_select(&mut *provider, &name).await
+                models::execute_select(&mut *provider, &name).await?;
+                // Auto-save model
+                let mut settings = Settings::load();
+                settings.last_model = provider.current_model();
+                settings.save();
+                Ok(())
             }
             Command::Mode(mode_str) => {
                 if mode_str.is_empty() {
@@ -182,6 +193,10 @@ impl CommandDispatcher {
                     BLUE,
                     RESET
                 );
+                // Auto-save mode
+                let mut settings = Settings::load();
+                settings.preferred_mode = self.current_mode;
+                settings.save();
                 Ok(())
             }
             Command::Context => {
@@ -191,6 +206,10 @@ impl CommandDispatcher {
             Command::Exit => {
                 exit::execute();
                 self.exit_requested = true;
+                Ok(())
+            }
+            Command::Settings => {
+                settings::execute();
                 Ok(())
             }
             Command::Save(path) => {
