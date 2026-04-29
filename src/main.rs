@@ -12,7 +12,9 @@ use crate::{
     agent::run_agent_loop,
     commands::CommandDispatcher,
     mode::AgentMode,
-    provider::{Provider, llama_cpp::LlamaCppProvider, ollama::OllamaProvider},
+    provider::{
+        Provider, llama_cpp::LlamaCppProvider, ollama::OllamaProvider, vllm::VllmProvider,
+    },
     tools::{
         ToolManager, edit::edit_tool_entry, glob::glob_tool_entry, grep::grep_tool_entry,
         ls::ls_tool_entry, read::read_tool_entry, run::run_tool_entry, write::write_tool_entry,
@@ -28,6 +30,8 @@ struct Args {
     ollama: bool,
     #[arg(short, long)]
     llama_cpp: bool,
+    #[arg(short, long)]
+    vllm: bool,
     #[arg(short, long, default_value_t = String::new())]
     url: String,
 }
@@ -38,6 +42,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let default_url = if args.llama_cpp {
         "http://127.0.0.1:8080"
+    } else if args.vllm {
+        "http://127.0.0.1:8000"
     } else {
         "http://127.0.0.1:11434"
     };
@@ -58,13 +64,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
             std::process::exit(1);
         }
         Arc::new(Mutex::new(llama))
+    } else if args.vllm {
+        let vllm = VllmProvider::new(url);
+        if let Err(e) = vllm.health_check().await {
+            eprintln!(
+                "{}Error:{} vLLM health check failed: {}",
+                BOLD, RESET, e
+            );
+            std::process::exit(1);
+        }
+        Arc::new(Mutex::new(vllm))
     } else {
         Arc::new(Mutex::new(OllamaProvider::new(url)))
     };
 
     {
         let mut provider = provider.lock().await;
-        provider.select_model(String::from("gemma4:31b-cloud"));
+        if provider.current_model().is_none() {
+            let models = provider.list_models().await;
+            if let Some(first) = models.first() {
+                eprintln!(
+                    "{}Warning:{} No model selected. Automatically picked first available model: {}{}{}",
+                    BOLD, RESET, BLUE, first, RESET
+                );
+                provider.select_model(first.clone());
+            } else {
+                eprintln!(
+                    "{}Error:{} No models available. Use /model <name> to set one manually.",
+                    BOLD, RESET
+                );
+            }
+        }
     }
 
     let mut tool_manager = ToolManager::new();
