@@ -5,7 +5,7 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, Tool};
+use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
 
 pub fn grep_tool(args: HashMap<String, String>) -> String {
     let pattern = match args.get("pattern") {
@@ -136,7 +136,7 @@ pub fn grep_tool_entry() -> Tool {
 
     Tool {
         name: "grep".to_string(),
-        function: grep_tool,
+        function: sync_to_async(grep_tool),
         tool_info,
     }
 }

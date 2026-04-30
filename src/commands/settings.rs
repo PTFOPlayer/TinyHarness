@@ -29,6 +29,24 @@ pub fn execute() {
         BOLD, RESET, BLUE, settings.preferred_mode, RESET
     );
 
+    match &settings.ollama_api_key {
+        Some(key) => {
+            let masked = if key.len() > 8 {
+                format!("{}...{}", &key[..4], &key[key.len() - 4..])
+            } else {
+                "****".to_string()
+            };
+            println!(
+                "{}│{} API Key:   {}{}{}",
+                BOLD, RESET, BLUE, masked, RESET
+            );
+        }
+        None => println!(
+            "{}│{} API Key:   {}not set{}",
+            BOLD, RESET, ORANGE, RESET
+        ),
+    }
+
     println!("{}╰────────────────────────────────────────────╯{}", BOLD, RESET);
     println!();
 }

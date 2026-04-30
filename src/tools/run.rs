@@ -3,7 +3,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, Tool};
+use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
 
 pub fn run_tool(args: HashMap<String, String>) -> String {
     let command = match args.get("command") {
@@ -152,7 +152,7 @@ pub fn run_tool_entry() -> Tool {
 
     Tool {
         name: "run".to_string(),
-        function: run_tool,
+        function: sync_to_async(run_tool),
         tool_info,
     }
 }

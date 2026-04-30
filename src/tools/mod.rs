@@ -5,6 +5,7 @@ pub mod ls;
 pub mod read;
 pub mod run;
 pub mod tool;
+pub mod web_search;
 pub mod write;
 
 use crate::provider::ToolInfo;
@@ -29,7 +30,7 @@ impl ToolManager {
 
     /// Returns only read-only tools (ls, read, grep, glob) — no write/edit/run.
     pub fn get_readonly_tools(&self) -> Vec<ToolInfo> {
-        let readonly_names = ["ls", "read", "grep", "glob"];
+        let readonly_names = ["ls", "read", "grep", "glob", "web_search", "web_fetch"];
         self.tools
             .iter()
             .filter(|t| readonly_names.contains(&t.name.as_str()))
@@ -37,9 +38,9 @@ impl ToolManager {
             .collect()
     }
 
-    pub fn execute_tool_call(&self, tool_name: &str, arguments: &serde_json::Value) -> String {
+    pub async fn execute_tool_call(&self, tool_name: &str, arguments: &serde_json::Value) -> String {
         if let Some(tool) = self.tools.iter().find(|t| t.name == tool_name) {
-            tool::execute_tool_call(tool, arguments)
+            tool::execute_tool_call(tool, arguments).await
         } else {
             format!("Error: Tool '{}' not found", tool_name)
         }

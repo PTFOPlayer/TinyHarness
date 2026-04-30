@@ -16,7 +16,9 @@ use crate::{
     provider::{Provider, llama_cpp::LlamaCppProvider, ollama::OllamaProvider, vllm::VllmProvider},
     tools::{
         ToolManager, edit::edit_tool_entry, glob::glob_tool_entry, grep::grep_tool_entry,
-        ls::ls_tool_entry, read::read_tool_entry, run::run_tool_entry, write::write_tool_entry,
+        ls::ls_tool_entry, read::read_tool_entry, run::run_tool_entry,
+        web_search::{web_fetch_tool_entry, web_search_tool_entry},
+        write::write_tool_entry,
     },
 };
 use clap::Parser;
@@ -150,6 +152,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tool_manager.register_tool(grep_tool_entry());
     tool_manager.register_tool(run_tool_entry());
     tool_manager.register_tool(glob_tool_entry());
+    tool_manager.register_tool(web_search_tool_entry());
+    tool_manager.register_tool(web_fetch_tool_entry());
 
     let ollama_tools = tool_manager.get_ollama_tools();
 

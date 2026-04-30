@@ -1,3 +1,4 @@
+pub mod apikey;
 pub mod clear;
 pub mod context;
 pub mod exit;
@@ -29,6 +30,7 @@ pub enum Command {
     Save(String),
     Load(String),
     Settings,
+    ApiKey(String),
 }
 
 pub struct CommandDispatcher {
@@ -84,6 +86,10 @@ impl CommandDispatcher {
             "/save" => Some(Command::Save(arg.unwrap_or_default())),
             "/load" => Some(Command::Load(arg.unwrap_or_default())),
             "/settings" => Some(Command::Settings),
+            "/apikey" => {
+                let arg = arg.unwrap_or_default();
+                Some(Command::ApiKey(arg))
+            }
             _ => None,
         }
     }
@@ -104,6 +110,7 @@ impl CommandDispatcher {
             "/save",
             "/load",
             "/settings",
+            "/apikey",
         ]
     }
 
@@ -123,6 +130,7 @@ impl CommandDispatcher {
             ("/save <file>", "Save conversation to a JSON file"),
             ("/load <file>", "Load conversation from a JSON file"),
             ("/settings", "Show current settings (provider, model, mode)"),
+            ("/apikey [key]", "Set or show the Ollama API key for web search. Use /apikey clear to remove it."),
         ]
     }
 
@@ -210,6 +218,16 @@ impl CommandDispatcher {
             }
             Command::Settings => {
                 settings::execute();
+                Ok(())
+            }
+            Command::ApiKey(arg) => {
+                if arg.is_empty() {
+                    apikey::execute_show();
+                } else if arg == "clear" {
+                    apikey::execute_clear();
+                } else {
+                    apikey::execute_set(&arg);
+                }
                 Ok(())
             }
             Command::Save(path) => {

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, Tool};
+use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
 
 pub fn ls_tool(args: HashMap<String, String>) -> String {
     let path = match args.get("path") {
@@ -58,7 +58,7 @@ pub fn ls_tool_entry() -> Tool {
 
     Tool {
         name: "ls".to_string(),
-        function: ls_tool,
+        function: sync_to_async(ls_tool),
         tool_info,
     }
 }

@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, Tool};
+use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
 
 pub fn read_tool(args: HashMap<String, String>) -> String {
     let path = match args.get("path") {
@@ -60,7 +60,7 @@ pub fn read_tool_entry() -> Tool {
 
     Tool {
         name: "read".to_string(),
-        function: read_tool,
+        function: sync_to_async(read_tool),
         tool_info,
     }
 }

@@ -1,12 +1,16 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use schemars::Schema;
 
 use crate::provider::ToolInfo;
 
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
 pub struct Tool {
     pub name: String,
-    pub function: fn(HashMap<String, String>) -> String,
+    pub function: Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync>,
     pub tool_info: ToolInfo,
 }
 
@@ -16,7 +20,14 @@ impl Tool {
     }
 }
 
-pub fn execute_tool_call(tool: &Tool, arguments: &serde_json::Value) -> String {
+/// Wrap a sync function into an async tool function.
+pub fn sync_to_async(
+    f: fn(HashMap<String, String>) -> String,
+) -> Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync> {
+    Box::new(move |args| Box::pin(async move { f(args) }))
+}
+
+pub async fn execute_tool_call(tool: &Tool, arguments: &serde_json::Value) -> String {
     let args: HashMap<String, String> = arguments
         .as_object()
         .map(|obj| {
@@ -25,8 +36,8 @@ pub fn execute_tool_call(tool: &Tool, arguments: &serde_json::Value) -> String {
                 .collect()
         })
         .unwrap_or_default();
-    
-    (tool.function)(args)
+
+    (tool.function)(args).await
 }
 
 /// Build a JSON Schema for a tool that accepts string parameters.

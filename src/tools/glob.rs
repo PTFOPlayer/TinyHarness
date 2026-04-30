@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, Tool};
+use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
 
 pub fn glob_tool(args: HashMap<String, String>) -> String {
     let pattern = match args.get("pattern") {
@@ -66,7 +66,7 @@ pub fn glob_tool_entry() -> Tool {
 
     Tool {
         name: "glob".to_string(),
-        function: glob_tool,
+        function: sync_to_async(glob_tool),
         tool_info,
     }
 }

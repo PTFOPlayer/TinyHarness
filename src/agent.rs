@@ -405,7 +405,7 @@ async fn handle_tool_calls<W: Write>(
 
         stdout.write(format!("  Executing tool: {}\n", call.function.name).as_bytes())?;
         stdout.flush()?;
-        let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments);
+        let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
         stdout.write(
             format!("  Result: {}\n", result.lines().next().unwrap_or(&result)).as_bytes(),
         )?;

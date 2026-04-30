@@ -47,6 +47,7 @@ pub struct Settings {
     pub last_provider: ProviderKind,
     pub last_model: Option<String>,
     pub preferred_mode: AgentMode,
+    pub ollama_api_key: Option<String>,
 }
 
 impl Default for Settings {
@@ -55,6 +56,7 @@ impl Default for Settings {
             last_provider: ProviderKind::Ollama,
             last_model: None,
             preferred_mode: AgentMode::Casual,
+            ollama_api_key: None,
         }
     }
 }
