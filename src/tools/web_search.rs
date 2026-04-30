@@ -162,7 +162,6 @@ pub fn web_search_tool_entry() -> Tool {
     };
 
     Tool {
-        name: "web_search".to_string(),
         function: Box::new(web_search_tool),
         tool_info,
     }
@@ -182,7 +181,6 @@ pub fn web_fetch_tool_entry() -> Tool {
     };
 
     Tool {
-        name: "web_fetch".to_string(),
         function: Box::new(web_fetch_tool),
         tool_info,
     }

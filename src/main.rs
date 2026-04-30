@@ -6,6 +6,7 @@ pub mod mode;
 pub mod provider;
 pub mod style;
 pub mod tools;
+pub mod ui;
 
 use std::{error::Error, sync::Arc};
 
@@ -14,12 +15,7 @@ use crate::{
     commands::CommandDispatcher,
     config::{ProviderKind, Settings},
     provider::{Provider, llama_cpp::LlamaCppProvider, ollama::OllamaProvider, vllm::VllmProvider},
-    tools::{
-        ToolManager, edit::edit_tool_entry, glob::glob_tool_entry, grep::grep_tool_entry,
-        ls::ls_tool_entry, read::read_tool_entry, run::run_tool_entry,
-        web_search::{web_fetch_tool_entry, web_search_tool_entry},
-        write::write_tool_entry,
-    },
+    tools::ToolManager,
 };
 use clap::Parser;
 use style::*;
@@ -145,15 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut tool_manager = ToolManager::new();
-    tool_manager.register_tool(ls_tool_entry());
-    tool_manager.register_tool(read_tool_entry());
-    tool_manager.register_tool(write_tool_entry());
-    tool_manager.register_tool(edit_tool_entry());
-    tool_manager.register_tool(grep_tool_entry());
-    tool_manager.register_tool(run_tool_entry());
-    tool_manager.register_tool(glob_tool_entry());
-    tool_manager.register_tool(web_search_tool_entry());
-    tool_manager.register_tool(web_fetch_tool_entry());
+    tool_manager.register_defaults();
 
     let ollama_tools = tool_manager.get_ollama_tools();
 

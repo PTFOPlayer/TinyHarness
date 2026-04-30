@@ -1,7 +1,9 @@
 pub mod apikey;
 pub mod clear;
+pub mod compact;
 pub mod context;
 pub mod exit;
+pub mod files;
 pub mod help;
 pub mod models;
 pub mod save_load;
@@ -19,6 +21,8 @@ use crate::{
     style::*,
 };
 
+pub use files::FileContext;
+
 pub enum Command {
     Help,
     Clear,
@@ -31,6 +35,12 @@ pub enum Command {
     Load(String),
     Settings,
     ApiKey(String),
+    Compact(String),
+    Add(String),
+    Drop(String),
+    Files,
+    DropAll,
+    Refresh,
 }
 
 pub struct CommandDispatcher {
@@ -38,6 +48,7 @@ pub struct CommandDispatcher {
     pub exit_requested: bool,
     pub current_mode: AgentMode,
     pub workspace_ctx: WorkspaceContext,
+    pub file_context: FileContext,
 }
 
 impl CommandDispatcher {
@@ -50,16 +61,25 @@ impl CommandDispatcher {
             exit_requested: false,
             current_mode: AgentMode::Casual,
             workspace_ctx,
+            file_context: FileContext::new(),
         }
     }
 
-    /// Build the system prompt for the current mode, appending workspace context.
+    /// Build the system prompt for the current mode, appending workspace context
+    /// and pinned file content.
     pub fn build_system_prompt(&self) -> String {
-        format!(
+        let mut prompt = format!(
             "{}\n\n---\n{}",
             self.current_mode.system_prompt(),
             self.workspace_ctx.format()
-        )
+        );
+
+        // Inject pinned file content
+        if !self.file_context.is_empty() {
+            prompt.push_str(&self.file_context.format_for_prompt());
+        }
+
+        prompt
     }
 
     pub fn parse(input: &str) -> Option<Command> {
@@ -80,6 +100,7 @@ impl CommandDispatcher {
             "/mode" => Some(Command::Mode(arg.unwrap_or_default())),
             "/plan" => Some(Command::Mode("planning".to_string())),
             "/agent" => Some(Command::Mode("agent".to_string())),
+            "/research" => Some(Command::Mode("research".to_string())),
             "/casual" => Some(Command::Mode("casual".to_string())),
             "/context" => Some(Command::Context),
             "/exit" | "/quit" => Some(Command::Exit),
@@ -90,6 +111,12 @@ impl CommandDispatcher {
                 let arg = arg.unwrap_or_default();
                 Some(Command::ApiKey(arg))
             }
+            "/compact" => Some(Command::Compact(arg.unwrap_or_default())),
+            "/add" => Some(Command::Add(arg.unwrap_or_default())),
+            "/drop" => Some(Command::Drop(arg.unwrap_or_default())),
+            "/dropall" => Some(Command::DropAll),
+            "/files" => Some(Command::Files),
+            "/refresh" => Some(Command::Refresh),
             _ => None,
         }
     }
@@ -103,6 +130,7 @@ impl CommandDispatcher {
             "/mode",
             "/plan",
             "/agent",
+            "/research",
             "/casual",
             "/context",
             "/exit",
@@ -111,6 +139,12 @@ impl CommandDispatcher {
             "/load",
             "/settings",
             "/apikey",
+            "/compact",
+            "/add",
+            "/drop",
+            "/dropall",
+            "/files",
+            "/refresh",
         ]
     }
 
@@ -120,9 +154,10 @@ impl CommandDispatcher {
             ("/clear", "Clear the terminal screen"),
             ("/models", "List available models"),
             ("/model <name>", "Switch to a different model"),
-            ("/mode [mode]", "Show or switch mode (casual/planning/agent)"),
+            ("/mode [mode]", "Show or switch mode (casual/planning/agent/research)"),
             ("/plan", "Switch to planning mode (alias for /mode planning)"),
             ("/agent", "Switch to agent mode (alias for /mode agent)"),
+            ("/research", "Switch to research mode (alias for /mode research)"),
             ("/casual", "Switch to casual mode (alias for /mode casual)"),
             ("/context", "Show the workspace context available to the agent"),
             ("/exit", "Exit the application"),
@@ -131,6 +166,12 @@ impl CommandDispatcher {
             ("/load <file>", "Load conversation from a JSON file"),
             ("/settings", "Show current settings (provider, model, mode)"),
             ("/apikey [key]", "Set or show the Ollama API key for web search. Use /apikey clear to remove it."),
+            ("/compact [focus]", "Summarize conversation history to free context space. Optionally specify a focus area."),
+            ("/add <path>", "Pin a file into the AI's context so it's always available"),
+            ("/drop <path>", "Remove a pinned file from context"),
+            ("/dropall", "Remove all pinned files from context"),
+            ("/files", "List all pinned files in context"),
+            ("/refresh", "Re-read all pinned files from disk (updates content)"),
         ]
     }
 
@@ -244,6 +285,52 @@ impl CommandDispatcher {
                 *messages = loaded_msgs;
                 self.current_mode = loaded_mode;
                 // Ensure the system prompt matches the loaded mode with context
+                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+                    sys_msg.content = self.build_system_prompt();
+                }
+                Ok(())
+            }
+            Command::Compact(focus) => {
+                let mut provider = self.provider.lock().await;
+                compact::execute_compact(&mut *provider, messages, &focus).await
+            }
+            Command::Add(path) => {
+                if path.is_empty() {
+                    return Err("Usage: /add <file_path> — e.g. /add src/main.rs".to_string());
+                }
+                files::execute_add(&mut self.file_context, &path);
+                // Update the system prompt with the new pinned file
+                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+                    sys_msg.content = self.build_system_prompt();
+                }
+                Ok(())
+            }
+            Command::Drop(path) => {
+                if path.is_empty() {
+                    return Err("Usage: /drop <file_path> — e.g. /drop src/main.rs".to_string());
+                }
+                files::execute_drop(&mut self.file_context, &path);
+                // Update the system prompt to remove the dropped file
+                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+                    sys_msg.content = self.build_system_prompt();
+                }
+                Ok(())
+            }
+            Command::Files => {
+                files::execute_list(&self.file_context);
+                Ok(())
+            }
+            Command::DropAll => {
+                files::execute_clear(&mut self.file_context);
+                // Update the system prompt to remove all pinned files
+                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+                    sys_msg.content = self.build_system_prompt();
+                }
+                Ok(())
+            }
+            Command::Refresh => {
+                files::execute_refresh(&mut self.file_context);
+                // Update the system prompt with refreshed content
                 if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
                     sys_msg.content = self.build_system_prompt();
                 }

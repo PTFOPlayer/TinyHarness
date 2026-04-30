@@ -138,5 +138,3 @@ impl Settings {
         }
     }
 }
-
-pub struct Config {}

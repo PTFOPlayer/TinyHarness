@@ -9,22 +9,14 @@ use crate::provider::ToolInfo;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub struct Tool {
-    pub name: String,
     pub function: Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync>,
     pub tool_info: ToolInfo,
 }
 
 impl Tool {
-    pub fn tool_info(&self) -> &ToolInfo {
-        &self.tool_info
+    pub fn name(&self) -> &str {
+        &self.tool_info.function.name
     }
-}
-
-/// Wrap a sync function into an async tool function.
-pub fn sync_to_async(
-    f: fn(HashMap<String, String>) -> String,
-) -> Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync> {
-    Box::new(move |args| Box::pin(async move { f(args) }))
 }
 
 pub async fn execute_tool_call(tool: &Tool, arguments: &serde_json::Value) -> String {

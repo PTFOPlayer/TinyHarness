@@ -3,22 +3,24 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
+use crate::tools::tool::{build_string_params_schema, BoxFuture, Tool};
 
-pub fn read_tool(args: HashMap<String, String>) -> String {
-    let path = match args.get("path") {
-        Some(p) => p,
-        None => return "Error: 'path' argument is required".to_string(),
-    };
+pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
+    Box::pin(async move {
+        let path = match args.get("path") {
+            Some(p) => p.clone(),
+            None => return "Error: 'path' argument is required".to_string(),
+        };
 
-    // Check if partial reading is requested
-    let from = args.get("from").and_then(|f| f.parse::<usize>().ok());
-    let to = args.get("to").and_then(|t| t.parse::<usize>().ok());
+        // Check if partial reading is requested
+        let from = args.get("from").and_then(|f| f.parse::<usize>().ok());
+        let to = args.get("to").and_then(|t| t.parse::<usize>().ok());
 
-    match (from, to) {
-        (Some(from), Some(to)) => read_partial(path, from, to),
-        _ => fs::read_to_string(path).unwrap_or_else(|e| format!("Error reading file: {}", e)),
-    }
+        match (from, to) {
+            (Some(from), Some(to)) => read_partial(&path, from, to),
+            _ => fs::read_to_string(&path).unwrap_or_else(|e| format!("Error reading file: {}", e)),
+        }
+    })
 }
 
 fn read_partial(path: &str, from: usize, to: usize) -> String {
@@ -59,8 +61,7 @@ pub fn read_tool_entry() -> Tool {
     };
 
     Tool {
-        name: "read".to_string(),
-        function: sync_to_async(read_tool),
+        function: Box::new(read_tool),
         tool_info,
     }
 }

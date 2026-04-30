@@ -5,59 +5,61 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, sync_to_async, Tool};
+use crate::tools::tool::{build_string_params_schema, BoxFuture, Tool};
 
-pub fn grep_tool(args: HashMap<String, String>) -> String {
-    let pattern = match args.get("pattern") {
-        Some(p) => p,
-        None => return "Error: 'pattern' argument is required".to_string(),
-    };
+pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
+    Box::pin(async move {
+        let pattern = match args.get("pattern") {
+            Some(p) => p.clone(),
+            None => return "Error: 'pattern' argument is required".to_string(),
+        };
 
-    let path = match args.get("path") {
-        Some(p) => p,
-        None => ".",
-    };
+        let path = match args.get("path") {
+            Some(p) => p.clone(),
+            None => ".".to_string(),
+        };
 
-    let include_pattern = args.get("include").map(|s| s.as_str());
+        let include_pattern = args.get("include").map(|s| s.as_str());
 
-    let regex = match Regex::new(pattern) {
-        Ok(r) => r,
-        Err(e) => return format!("Error: Invalid regex pattern '{}': {}", pattern, e),
-    };
+        let regex = match Regex::new(&pattern) {
+            Ok(r) => r,
+            Err(e) => return format!("Error: Invalid regex pattern '{}': {}", pattern, e),
+        };
 
-    let root = Path::new(path);
-    if !root.exists() {
-        return format!("Error: Path '{}' does not exist", path);
-    }
-    if !root.is_dir() {
-        return format!("Error: '{}' is not a directory", path);
-    }
-
-    let mut results: Vec<String> = Vec::new();
-    let mut total_matches = 0;
-
-    if let Err(e) = walk_dir(root, &regex, include_pattern, &mut results, &mut total_matches) {
-        return format!("Error: {}", e);
-    }
-
-    if results.is_empty() {
-        return format!("No matches found for pattern '{}'", pattern);
-    }
-
-    // Limit output to avoid huge responses
-    const MAX_LINES: usize = 200;
-    let mut output = String::new();
-
-    for (line_count, line) in results.iter().enumerate() {
-        if line_count >= MAX_LINES {
-            output.push_str(&format!("... and {} more matches (truncated)\n", total_matches - line_count));
-            break;
+        let root = Path::new(&path);
+        if !root.exists() {
+            return format!("Error: Path '{}' does not exist", path);
         }
-        output.push_str(line);
-        output.push('\n');
-    }
+        if !root.is_dir() {
+            return format!("Error: '{}' is not a directory", path);
+        }
 
-    output.trim_end().to_string()
+        let mut results: Vec<String> = Vec::new();
+        let mut total_matches = 0;
+
+        if let Err(e) = walk_dir(root, &regex, include_pattern, &mut results, &mut total_matches) {
+            return format!("Error: {}", e);
+        }
+
+        if results.is_empty() {
+            return format!("No matches found for pattern '{}'", pattern);
+        }
+
+        // Limit output to avoid huge responses
+        const MAX_LINES: usize = 200;
+        let mut output = String::new();
+
+        for (line_count, line) in results.iter().enumerate() {
+            if line_count >= MAX_LINES {
+                output.push_str(&format!("... and {} more matches (truncated)\n", total_matches - line_count));
+                break;
+            }
+            output.push_str(line);
+            output.push('\n');
+        }
+
+        output.trim_end().to_string()
+    })
 }
 
 fn walk_dir(
@@ -135,8 +137,7 @@ pub fn grep_tool_entry() -> Tool {
     };
 
     Tool {
-        name: "grep".to_string(),
-        function: sync_to_async(grep_tool),
+        function: Box::new(grep_tool),
         tool_info,
     }
 }

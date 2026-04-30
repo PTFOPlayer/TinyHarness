@@ -4,11 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use rustyline::{
-    Completer, Editor, Helper, Highlighter, Hinter, completion::Completer, error::ReadlineError,
-    highlight::Highlighter, hint::Hinter, validate::Validator,
-};
-
+use rustyline::Editor;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::style::*;
@@ -17,110 +13,9 @@ use crate::{
     mode::AgentMode,
     provider::{ChatMessageResponse, Message, Provider, Role, ToolCall, ToolInfo},
     tools::ToolManager,
+    ui::confirm::prompt_tool_confirmation,
+    ui::input::CommandHelper,
 };
-
-#[derive(Completer, Helper, Highlighter, Hinter)]
-struct CommandHelper {
-    #[rustyline(Completer)]
-    completer: CommandCompleter,
-    #[rustyline(Hinter)]
-    hinter: CommandHinter,
-    #[rustyline(Highlighter)]
-    highlighter: CommandHighlighter,
-}
-
-impl Validator for CommandHelper {}
-
-struct CommandCompleter;
-
-impl Completer for CommandCompleter {
-    type Candidate = String;
-
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        _ctx: &rustyline::Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-        if !line.starts_with('/') || pos == 0 {
-            return Ok((0, vec![]));
-        }
-
-        let prefix = &line[..pos];
-        let cmd_prefix = prefix.to_lowercase();
-
-        let matches: Vec<String> = CommandDispatcher::command_names()
-            .iter()
-            .filter(|name| name.starts_with(&cmd_prefix))
-            .take(3)
-            .map(|s| s.to_string())
-            .collect();
-
-        if matches.is_empty() {
-            return Ok((0, vec![]));
-        }
-
-        Ok((0, matches))
-    }
-}
-
-struct CommandHinter;
-
-impl Hinter for CommandHinter {
-    type Hint = String;
-
-    fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<Self::Hint> {
-        if !line.starts_with('/') || pos == 0 || line.len() != pos {
-            return None;
-        }
-
-        let prefix = line.to_lowercase();
-        let matches: Vec<&str> = CommandDispatcher::command_names()
-            .iter()
-            .filter(|name| name.starts_with(&prefix))
-            .take(3)
-            .copied()
-            .collect();
-
-        if matches.is_empty() {
-            return None;
-        }
-
-        if matches.len() == 1 {
-            let hint = matches[0][pos..].to_string();
-            if !hint.is_empty() {
-                return Some(hint);
-            }
-        }
-
-        let suggestions = matches.join("  ");
-        Some(format!("  ({})", suggestions))
-    }
-}
-
-struct CommandHighlighter;
-
-impl Highlighter for CommandHighlighter {
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
-        if line.starts_with('/') {
-            std::borrow::Cow::Owned(format!("{}{}{}", BLUE, line, RESET))
-        } else {
-            std::borrow::Cow::Borrowed(line)
-        }
-    }
-
-    fn highlight_hint<'l>(&self, hint: &'l str) -> std::borrow::Cow<'l, str> {
-        std::borrow::Cow::Owned(format!("{}{}{}", GRAY, hint, RESET))
-    }
-
-    fn highlight_candidate<'l>(
-        &self,
-        candidate: &'l str,
-        _completion: rustyline::CompletionType,
-    ) -> std::borrow::Cow<'l, str> {
-        std::borrow::Cow::Owned(format!("{}{}{}", BLUE, candidate, RESET))
-    }
-}
 
 pub async fn run_agent_loop(
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
@@ -144,11 +39,7 @@ pub async fn run_agent_loop(
     )?;
     stdout.flush()?;
 
-    let helper = CommandHelper {
-        completer: CommandCompleter,
-        hinter: CommandHinter,
-        highlighter: CommandHighlighter,
-    };
+    let helper = CommandHelper::new();
     let history_dir = std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".local/share/tinyharness"))
         .unwrap_or_else(|_| std::path::PathBuf::from(".tinyharness_history"));
@@ -160,7 +51,14 @@ pub async fn run_agent_loop(
 
     loop {
         let mode_label = dispatcher.current_mode.to_string();
-        let prompt = format!("{}[{}]{} > {}{}", BOLD, mode_label, RESET, BLUE, RESET);
+        let msg_count = messages.len();
+        let pinned_count = dispatcher.file_context.pinned_file_count();
+        let context_info = if pinned_count > 0 {
+            format!("{} msgs,{}{}{} pinned", msg_count, BLUE, pinned_count, GRAY)
+        } else {
+            format!("{} msgs", msg_count)
+        };
+        let prompt = format!("{}[{}]{} {}{}> {}{}", BOLD, mode_label, RESET, GRAY, context_info, BLUE, RESET);
         let readline = rl.readline(&prompt);
         let user_input = match readline {
             Ok(line) => {
@@ -171,7 +69,7 @@ pub async fn run_agent_loop(
                 rl.add_history_entry(&trimmed)?;
                 trimmed
             }
-            Err(ReadlineError::Interrupted) => {
+            Err(rustyline::error::ReadlineError::Interrupted) => {
                 stdout.write("\n".as_bytes())?;
                 stdout.write(
                     format!(
@@ -183,7 +81,7 @@ pub async fn run_agent_loop(
                 stdout.flush()?;
                 continue;
             }
-            Err(ReadlineError::Eof) => {
+            Err(rustyline::error::ReadlineError::Eof) => {
                 stdout.write("\n".as_bytes())?;
                 break;
             }
@@ -222,6 +120,10 @@ pub async fn run_agent_loop(
         // Drain any leftover messages in the channel
         while let Ok(_) = recv.try_recv() {}
 
+        // auto_accept persists across all agent iterations within this user turn,
+        // so that pressing 'a' once auto-accepts all subsequent tool calls.
+        let mut auto_accept = false;
+
         loop {
             let messages_cloned = messages.clone();
             let send_cloned = send.clone();
@@ -231,6 +133,7 @@ pub async fn run_agent_loop(
                 AgentMode::Agent => ollama_tools.clone(),
                 AgentMode::Planning => tool_manager.get_readonly_tools(),
                 AgentMode::Casual => Vec::new(),
+                AgentMode::Research => tool_manager.get_research_tools(),
             };
             let cloned_user_input = user_input.clone();
             tokio::spawn(async move {
@@ -286,7 +189,9 @@ pub async fn run_agent_loop(
                 &response_content,
                 messages,
                 &tool_manager,
+                dispatcher,
                 &mut stdout,
+                &mut auto_accept,
             )
             .await?
             {
@@ -298,6 +203,16 @@ pub async fn run_agent_loop(
                 content: response_content,
                 tool_calls: vec![],
             });
+
+            // Warn if conversation is getting long
+            if messages.len() > 30 && messages.len() % 10 == 0 {
+                writeln!(
+                    stdout,
+                    "\n{}{}⚠ Context is getting large ({} messages). Consider using {}/compact{} to summarize.{}",
+                    YELLOW, BOLD, messages.len(), BLUE, YELLOW, RESET
+                )?;
+            }
+
             break;
         }
 
@@ -316,20 +231,21 @@ async fn handle_tool_calls<W: Write>(
     response_content: &str,
     messages: &mut Vec<Message>,
     tool_manager: &ToolManager,
+    dispatcher: &mut CommandDispatcher,
     stdout: &mut W,
+    auto_accept: &mut bool,
 ) -> Result<bool, Box<dyn Error>> {
+    use crate::ui::confirm::Confirmation;
+
     if tool_calls.is_empty() {
         return Ok(false);
     }
 
-    stdout.write(
-        format!(
-            "\n{}Tool call(s) detected: {}{}\n\n",
-            BOLD,
-            tool_calls.len(),
-            RESET
-        )
-        .as_bytes(),
+    let tool_count = tool_calls.len();
+    writeln!(
+        stdout,
+        "\n{}  {} tool call(s){}",
+        DIM, tool_count, RESET
     )?;
 
     messages.push(Message {
@@ -338,76 +254,69 @@ async fn handle_tool_calls<W: Write>(
         tool_calls: tool_calls.to_vec(),
     });
 
-    let sensitive_tools = ["run", "write", "edit"];
+    let sensitive_tools = ["run", "write", "edit", "switch_mode"];
 
     for call in tool_calls {
         let needs_confirmation = sensitive_tools.contains(&call.function.name.as_str());
 
-        if needs_confirmation {
-            stdout.write(
-                format!(
-                    "\n{}{}⚠ Tool '{}' requires confirmation{}",
-                    RED, BOLD, call.function.name, RESET
-                )
-                .as_bytes(),
-            )?;
+        if needs_confirmation && (!*auto_accept || call.function.name == "run") {
+            match prompt_tool_confirmation(stdout, call)? {
+                Confirmation::No => {
+                    stdout
+                        .write(format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
+                    stdout.flush()?;
 
-            // Pretty-print arguments in a cleaner format
-            let args_str = match &call.function.arguments {
-                serde_json::Value::Object(map) => {
-                    let mut lines: Vec<String> = Vec::new();
-                    for (key, val) in map {
-                        let val_str = match val {
-                            serde_json::Value::String(s) => {
-                                if s.len() > 80 {
-                                    format!("{}... ({} chars)", &s[..77], s.len())
-                                } else {
-                                    s.clone()
-                                }
-                            }
-                            other => other.to_string(),
-                        };
-                        lines.push(format!("    {}: {}", key, val_str));
-                    }
-                    lines.join("\n")
+                    let args_summary = format_args_summary(&call.function.arguments);
+                    messages.push(Message {
+                        role: Role::System,
+                        content: format!(
+                            "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
+                            call.function.name, args_summary
+                        ),
+                        tool_calls: vec![],
+                    });
+                    continue;
                 }
-                other => format!("  {}", serde_json::to_string_pretty(other).unwrap_or_default()),
-            };
-            stdout.write(format!("{}\n", args_str).as_bytes())?;
-
-            stdout.write(format!("{}Proceed? (y/N):{} ", BOLD, RESET).as_bytes())?;
-            stdout.flush()?;
-
-            let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
-            let input = input.trim().to_lowercase();
-
-            if input != "y" && input != "yes" {
-                stdout
-                    .write(format!("{}  Skipped by user{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
-                stdout.flush()?;
-
-                // Compact argument summary for the system message
-                let args_summary = format_args_summary(&call.function.arguments);
-                messages.push(Message {
-                    role: Role::System,
-                    content: format!(
-                        "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
-                        call.function.name, args_summary
-                    ),
-                    tool_calls: vec![],
-                });
-                continue;
+                Confirmation::AutoAccept => {
+                    *auto_accept = true;
+                    writeln!(
+                        stdout,
+                        "  {}Auto-accept enabled for the rest of this turn{}",
+                        GREEN, RESET
+                    )?;
+                }
+                Confirmation::Yes => {}
             }
+        } else if needs_confirmation && *auto_accept && call.function.name != "run" {
+            // Auto-accepted — show a brief note
+            writeln!(
+                stdout,
+                "  {}{} {}{} (auto-accepted)",
+                DIM, "▶", call.function.name, RESET
+            )?;
         }
 
-        stdout.write(format!("  Executing tool: {}\n", call.function.name).as_bytes())?;
+        // Special handling: switch_mode tool performs an actual mode switch through the dispatcher.
+        if call.function.name == "switch_mode" {
+            handle_switch_mode(call, dispatcher, messages, stdout)?;
+            continue;
+        }
+
+        // Special handling: question tool prompts the user for an answer interactively.
+        if call.function.name == "question" {
+            handle_question(call, messages, stdout)?;
+            continue;
+        }
+
+        stdout.write(format!("  {}▶{} Executing {}...\n", CYAN, RESET, call.function.name).as_bytes())?;
         stdout.flush()?;
         let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
-        stdout.write(
-            format!("  Result: {}\n", result.lines().next().unwrap_or(&result)).as_bytes(),
+        let first_line = result.lines().next().unwrap_or(&result);
+        let trunc_len = 120.min(first_line.len());
+        writeln!(
+            stdout,
+            "  {}✓{} {}",
+            GREEN, RESET, &first_line[..trunc_len]
         )?;
         stdout.flush()?;
         messages.push(Message {
@@ -421,6 +330,204 @@ async fn handle_tool_calls<W: Write>(
     }
 
     Ok(true)
+}
+
+/// Handle the switch_mode tool: parse mode, update dispatcher, and update system prompt.
+fn handle_switch_mode<W: Write>(
+    call: &ToolCall,
+    dispatcher: &mut CommandDispatcher,
+    messages: &mut Vec<Message>,
+    stdout: &mut W,
+) -> Result<(), Box<dyn Error>> {
+    let mode_str = call.function.arguments
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if mode_str.is_empty() {
+        messages.push(Message {
+            role: Role::Tool,
+            content: "Error: 'mode' argument is required for switch_mode. Valid values: casual, planning, agent, research".to_string(),
+            tool_calls: vec![],
+        });
+        return Ok(());
+    }
+
+    match mode_str.parse::<AgentMode>() {
+        Ok(new_mode) => {
+            if new_mode == dispatcher.current_mode {
+                writeln!(
+                    stdout,
+                    "  {}Already in '{}' mode — no change needed.{}",
+                    ORANGE, new_mode, RESET
+                )?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: format!(
+                        "Already in '{}' mode. No change was made.",
+                        new_mode
+                    ),
+                    tool_calls: vec![],
+                });
+                return Ok(());
+            }
+
+            let old_mode = dispatcher.current_mode;
+            dispatcher.current_mode = new_mode;
+
+            // Replace the system prompt (first System message) with context preserved
+            if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+                sys_msg.content = dispatcher.build_system_prompt();
+            }
+
+            // Auto-save mode
+            let mut settings = crate::config::Settings::load();
+            settings.preferred_mode = dispatcher.current_mode;
+            settings.save();
+
+            writeln!(
+                stdout,
+                "\n{}{}🔄 Mode switched: {} → {}{}",
+                BOLD, BLUE, old_mode, new_mode, RESET
+            )?;
+            stdout.flush()?;
+
+            messages.push(Message {
+                role: Role::Tool,
+                content: format!(
+                    "SUCCESS: Mode switched from '{}' to '{}'. The assistant is now in {} mode and will use the appropriate toolset and behavior.",
+                    old_mode, new_mode, new_mode
+                ),
+                tool_calls: vec![],
+            });
+        }
+        Err(e) => {
+            writeln!(stdout, "  {}Error: {}{}", RED, e, RESET)?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: format!("Error: {}. Valid modes: casual, planning, agent, research", e),
+                tool_calls: vec![],
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Handle the question tool: display options and prompt user for a choice.
+fn handle_question<W: Write>(
+    call: &ToolCall,
+    messages: &mut Vec<Message>,
+    stdout: &mut W,
+) -> Result<(), Box<dyn Error>> {
+    let question_text = call.function.arguments
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let answers: Vec<String> = call.function.arguments
+        .get("answers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if question_text.is_empty() {
+        messages.push(Message {
+            role: Role::Tool,
+            content: "Error: 'question' argument is required for the question tool.".to_string(),
+            tool_calls: vec![],
+        });
+        return Ok(());
+    }
+
+    if answers.is_empty() {
+        messages.push(Message {
+            role: Role::Tool,
+            content: "Error: 'answers' argument must contain at least one option for the question tool.".to_string(),
+            tool_calls: vec![],
+        });
+        return Ok(());
+    }
+
+    // Display the question and options
+    writeln!(
+        stdout,
+        "\n{}  ┌─── {}❓ Question {}─────{}",
+        BOLD, CYAN, BOLD, RESET
+    )?;
+    writeln!(
+        stdout,
+        "  │ {}{}{}",
+        BOLD, question_text, RESET
+    )?;
+    writeln!(stdout, "  │")?;
+    for (i, answer) in answers.iter().enumerate() {
+        writeln!(
+            stdout,
+            "  │   {}{}.{}) {} {}{}",
+            GREEN, i + 1, RESET, BOLD, answer, RESET
+        )?;
+    }
+    writeln!(
+        stdout,
+        "  └{}──────────────────────────────{}",
+        BOLD, RESET
+    )?;
+
+    let answer_count = answers.len();
+    write!(
+        stdout,
+        "  {}Your choice (1-{}): {}",
+        BOLD, answer_count, RESET
+    )?;
+    stdout.flush()?;
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
+    let input = input.trim();
+
+    // Parse the user's choice — by number or by text match
+    let selected_answer = if let Ok(num) = input.parse::<usize>() {
+        if num >= 1 && num <= answer_count {
+            answers[num - 1].clone()
+        } else {
+            format!("Invalid choice: {} (valid range: 1-{})", num, answer_count)
+        }
+    } else if !input.is_empty() {
+        // Try to match by text (case-insensitive)
+        let input_lower = input.to_lowercase();
+        match answers.iter().find(|a| a.to_lowercase() == input_lower) {
+            Some(a) => a.clone(),
+            None => input.to_string(), // Allow free-form answer
+        }
+    } else {
+        "No answer provided (empty input)".to_string()
+    };
+
+    writeln!(
+        stdout,
+        "  {}✓{} Selected: {}{}{}",
+        GREEN, RESET, BOLD, selected_answer, RESET
+    )?;
+    stdout.flush()?;
+
+    messages.push(Message {
+        role: Role::Tool,
+        content: format!(
+            "User answered the question '{}' with: '{}'.\n\nUse this answer to continue helping the user.",
+            question_text, selected_answer
+        ),
+        tool_calls: vec![],
+    });
+    Ok(())
 }
 
 /// Format tool call arguments as a compact single-line summary.
