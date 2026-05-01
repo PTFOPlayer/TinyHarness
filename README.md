@@ -26,29 +26,44 @@ TinyHarness is a lightweight AI assistant framework written in Rust, designed to
    cd TinyHarness
    ```
 
-2. Build the project:
+2. Install the binary (builds in release mode and copies to `~/.local/bin`):
    ```bash
-   cargo build --release
+   make install
    ```
+
+   To uninstall:
+   ```bash
+   make uninstall
+   ```
+
+   > **Note:** Make sure `~/.local/bin` is in your `$PATH`. If it's not, add this to your shell config:
+   > ```bash
+   > export PATH="$HOME/.local/bin:$PATH"
+   > ```
+
+Alternatively, you can use Cargo to install:
+```bash
+cargo install --path .
+```
 
 ### Usage
 
 **Ollama** (default):
 ```bash
-cargo run --release
+tinyharness
 ```
 Connects to `http://127.0.0.1:11434` and uses the `gemma4:31b-cloud` model.
 
 **llama.cpp**:
 ```bash
-cargo run --release -- --llama-cpp
+tinyharness --llama-cpp
 ```
 Connects to `http://127.0.0.1:8080` by default. A health check is performed on startup.
 
 **Custom URL** (works with either provider):
 ```bash
-cargo run --release -- --llama-cpp --url http://localhost:2832
-cargo run --release -- --ollama --url http://192.168.1.50:11434
+tinyharness --llama-cpp --url http://localhost:2832
+tinyharness --ollama --url http://192.168.1.50:11434
 ```
 
 ### CLI Arguments

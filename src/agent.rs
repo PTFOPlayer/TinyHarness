@@ -9,9 +9,10 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::style::*;
 use crate::{
-    commands::CommandDispatcher,
+    commands::{CommandDispatcher, CommandResult},
     mode::AgentMode,
     provider::{ChatMessageResponse, Message, Provider, Role, ToolCall, ToolInfo},
+    session::Session,
     tools::ToolManager,
     ui::confirm::prompt_tool_confirmation,
     ui::input::CommandHelper,
@@ -23,6 +24,7 @@ pub async fn run_agent_loop(
     ollama_tools: Vec<ToolInfo>,
     messages: &mut Vec<Message>,
     dispatcher: &mut CommandDispatcher,
+    session: &mut Session,
 ) -> Result<(), Box<dyn Error>> {
     let (send, mut recv) = mpsc::channel::<ChatMessageResponse>(1024);
 
@@ -94,8 +96,44 @@ pub async fn run_agent_loop(
         if user_input.starts_with('/') {
             match CommandDispatcher::parse(&user_input) {
                 Some(cmd) => {
-                    if let Err(e) = dispatcher.dispatch(cmd, messages).await {
-                        eprintln!("{}{}{}", RED, e, RESET);
+                    match dispatcher.dispatch(cmd, messages).await {
+                        Ok(CommandResult::Ok) => {}
+                        Ok(CommandResult::SwitchSession(id_prefix)) => {
+                            match Session::find_by_prefix(&id_prefix) {
+                                Ok(full_id) => {
+                                    // Flush current session before switching
+                                    session.flush();
+                                    match Session::load(&full_id) {
+                                        Ok((new_session, loaded_msgs)) => {
+                                            let meta = new_session.meta();
+                                            eprintln!(
+                                                "{}Switched to session {}{}{} ({} messages, {}){}",
+                                                BOLD, BLUE, &meta.id[..12], RESET,
+                                                meta.message_count, meta.mode, RESET
+                                            );
+                                            *session = new_session;
+                                            *messages = loaded_msgs;
+                                            // Update dispatcher mode and session ID to match loaded session
+                                            dispatcher.current_mode = session.meta().mode;
+                                            dispatcher.session_id = Some(session.id().to_string());
+                                            // Ensure system prompt reflects current context
+                                            if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+                                                sys_msg.content = dispatcher.build_system_prompt();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("{}{}{}", RED, e, RESET);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("{}{}{}", RED, e, RESET);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("{}{}{}", RED, e, RESET);
+                        }
                     }
                     if dispatcher.exit_requested {
                         break;
@@ -116,6 +154,9 @@ pub async fn run_agent_loop(
             content: user_input.clone(),
             tool_calls: vec![],
         });
+
+        // Auto-save: user message
+        session.append_message(messages.last().unwrap());
 
         // Drain any leftover messages in the channel
         while let Ok(_) = recv.try_recv() {}
@@ -192,6 +233,7 @@ pub async fn run_agent_loop(
                 dispatcher,
                 &mut stdout,
                 &mut auto_accept,
+                session,
             )
             .await?
             {
@@ -203,6 +245,7 @@ pub async fn run_agent_loop(
                 content: response_content,
                 tool_calls: vec![],
             });
+            session.append_message(messages.last().unwrap());
 
             // Warn if conversation is getting long
             if messages.len() > 30 && messages.len() % 10 == 0 {
@@ -234,6 +277,7 @@ async fn handle_tool_calls<W: Write>(
     dispatcher: &mut CommandDispatcher,
     stdout: &mut W,
     auto_accept: &mut bool,
+    session: &mut Session,
 ) -> Result<bool, Box<dyn Error>> {
     use crate::ui::confirm::Confirmation;
 
@@ -253,6 +297,7 @@ async fn handle_tool_calls<W: Write>(
         content: response_content.to_string(),
         tool_calls: tool_calls.to_vec(),
     });
+    session.append_message(messages.last().unwrap());
 
     let sensitive_tools = ["run", "write", "edit", "switch_mode"];
 
@@ -275,6 +320,7 @@ async fn handle_tool_calls<W: Write>(
                         ),
                         tool_calls: vec![],
                     });
+                    session.append_message(messages.last().unwrap());
                     continue;
                 }
                 Confirmation::AutoAccept => {
@@ -298,13 +344,13 @@ async fn handle_tool_calls<W: Write>(
 
         // Special handling: switch_mode tool performs an actual mode switch through the dispatcher.
         if call.function.name == "switch_mode" {
-            handle_switch_mode(call, dispatcher, messages, stdout)?;
+            handle_switch_mode(call, dispatcher, messages, session, stdout)?;
             continue;
         }
 
         // Special handling: question tool prompts the user for an answer interactively.
         if call.function.name == "question" {
-            handle_question(call, messages, stdout)?;
+            handle_question(call, messages, session, stdout)?;
             continue;
         }
 
@@ -312,7 +358,7 @@ async fn handle_tool_calls<W: Write>(
         stdout.flush()?;
         let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
         let first_line = result.lines().next().unwrap_or(&result);
-        let trunc_len = 120.min(first_line.len());
+        let trunc_len = first_line.floor_char_boundary(120);
         writeln!(
             stdout,
             "  {}✓{} {}",
@@ -327,6 +373,7 @@ async fn handle_tool_calls<W: Write>(
             ),
             tool_calls: vec![],
         });
+        session.append_message(messages.last().unwrap());
     }
 
     Ok(true)
@@ -337,6 +384,7 @@ fn handle_switch_mode<W: Write>(
     call: &ToolCall,
     dispatcher: &mut CommandDispatcher,
     messages: &mut Vec<Message>,
+    session: &mut Session,
     stdout: &mut W,
 ) -> Result<(), Box<dyn Error>> {
     let mode_str = call.function.arguments
@@ -351,6 +399,7 @@ fn handle_switch_mode<W: Write>(
             content: "Error: 'mode' argument is required for switch_mode. Valid values: casual, planning, agent, research".to_string(),
             tool_calls: vec![],
         });
+        session.append_message(messages.last().unwrap());
         return Ok(());
     }
 
@@ -370,11 +419,13 @@ fn handle_switch_mode<W: Write>(
                     ),
                     tool_calls: vec![],
                 });
+                session.append_message(messages.last().unwrap());
                 return Ok(());
             }
 
             let old_mode = dispatcher.current_mode;
             dispatcher.current_mode = new_mode;
+            session.set_mode(new_mode);
 
             // Replace the system prompt (first System message) with context preserved
             if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
@@ -401,6 +452,7 @@ fn handle_switch_mode<W: Write>(
                 ),
                 tool_calls: vec![],
             });
+            session.append_message(messages.last().unwrap());
         }
         Err(e) => {
             writeln!(stdout, "  {}Error: {}{}", RED, e, RESET)?;
@@ -409,6 +461,7 @@ fn handle_switch_mode<W: Write>(
                 content: format!("Error: {}. Valid modes: casual, planning, agent, research", e),
                 tool_calls: vec![],
             });
+            session.append_message(messages.last().unwrap());
         }
     }
     Ok(())
@@ -418,6 +471,7 @@ fn handle_switch_mode<W: Write>(
 fn handle_question<W: Write>(
     call: &ToolCall,
     messages: &mut Vec<Message>,
+    session: &mut Session,
     stdout: &mut W,
 ) -> Result<(), Box<dyn Error>> {
     let question_text = call.function.arguments
@@ -443,6 +497,7 @@ fn handle_question<W: Write>(
             content: "Error: 'question' argument is required for the question tool.".to_string(),
             tool_calls: vec![],
         });
+        session.append_message(messages.last().unwrap());
         return Ok(());
     }
 
@@ -452,6 +507,7 @@ fn handle_question<W: Write>(
             content: "Error: 'answers' argument must contain at least one option for the question tool.".to_string(),
             tool_calls: vec![],
         });
+        session.append_message(messages.last().unwrap());
         return Ok(());
     }
 
@@ -527,6 +583,7 @@ fn handle_question<W: Write>(
         ),
         tool_calls: vec![],
     });
+    session.append_message(messages.last().unwrap());
     Ok(())
 }
 

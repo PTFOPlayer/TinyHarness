@@ -6,7 +6,7 @@ pub mod exit;
 pub mod files;
 pub mod help;
 pub mod models;
-pub mod save_load;
+pub mod sessions;
 pub mod settings;
 
 use std::sync::Arc;
@@ -31,8 +31,8 @@ pub enum Command {
     Mode(String),
     Context,
     Exit,
-    Save(String),
-    Load(String),
+    Sessions,
+    SessionLoad(String),
     Settings,
     ApiKey(String),
     Compact(String),
@@ -43,12 +43,21 @@ pub enum Command {
     Refresh,
 }
 
+/// Result of dispatching a command.
+pub enum CommandResult {
+    /// Command completed normally.
+    Ok,
+    /// The user wants to switch to a different session.
+    SwitchSession(String),
+}
+
 pub struct CommandDispatcher {
     pub provider: Arc<Mutex<dyn Provider + Send + Sync>>,
     pub exit_requested: bool,
     pub current_mode: AgentMode,
     pub workspace_ctx: WorkspaceContext,
     pub file_context: FileContext,
+    pub session_id: Option<String>,
 }
 
 impl CommandDispatcher {
@@ -62,6 +71,7 @@ impl CommandDispatcher {
             current_mode: AgentMode::Casual,
             workspace_ctx,
             file_context: FileContext::new(),
+            session_id: None,
         }
     }
 
@@ -104,8 +114,8 @@ impl CommandDispatcher {
             "/casual" => Some(Command::Mode("casual".to_string())),
             "/context" => Some(Command::Context),
             "/exit" | "/quit" => Some(Command::Exit),
-            "/save" => Some(Command::Save(arg.unwrap_or_default())),
-            "/load" => Some(Command::Load(arg.unwrap_or_default())),
+            "/sessions" => Some(Command::Sessions),
+            "/session" => Some(Command::SessionLoad(arg.unwrap_or_default())),
             "/settings" => Some(Command::Settings),
             "/apikey" => {
                 let arg = arg.unwrap_or_default();
@@ -135,8 +145,8 @@ impl CommandDispatcher {
             "/context",
             "/exit",
             "/quit",
-            "/save",
-            "/load",
+            "/sessions",
+            "/session",
             "/settings",
             "/apikey",
             "/compact",
@@ -162,8 +172,8 @@ impl CommandDispatcher {
             ("/context", "Show the workspace context available to the agent"),
             ("/exit", "Exit the application"),
             ("/quit", "Exit the application"),
-            ("/save <file>", "Save conversation to a JSON file"),
-            ("/load <file>", "Load conversation from a JSON file"),
+            ("/sessions", "List all saved sessions"),
+            ("/session <id>", "Switch to an existing session (accepts ID prefix)"),
             ("/settings", "Show current settings (provider, model, mode)"),
             ("/apikey [key]", "Set or show the Ollama API key for web search. Use /apikey clear to remove it."),
             ("/compact [focus]", "Summarize conversation history to free context space. Optionally specify a focus area."),
@@ -179,19 +189,20 @@ impl CommandDispatcher {
         &mut self,
         cmd: Command,
         messages: &mut Vec<Message>,
-    ) -> Result<(), String> {
+    ) -> Result<CommandResult, String> {
         match cmd {
             Command::Help => {
                 help::execute();
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Clear => {
                 clear::execute();
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Models => {
                 let provider = self.provider.lock().await;
-                models::execute_list(&*provider).await
+                models::execute_list(&*provider).await?;
+                Ok(CommandResult::Ok)
             }
             Command::Model(name) => {
                 if name.is_empty() {
@@ -200,7 +211,7 @@ impl CommandDispatcher {
                         Some(model) => println!("{}Current model: {}{}{}", BOLD, BLUE, model, RESET),
                         None => println!("{}No model selected.{}", ORANGE, RESET),
                     }
-                    return Ok(());
+                    return Ok(CommandResult::Ok);
                 }
                 let mut provider = self.provider.lock().await;
                 models::execute_select(&mut *provider, &name).await?;
@@ -208,7 +219,7 @@ impl CommandDispatcher {
                 let mut settings = Settings::load();
                 settings.last_model = provider.current_model();
                 settings.save();
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Mode(mode_str) => {
                 if mode_str.is_empty() {
@@ -219,7 +230,7 @@ impl CommandDispatcher {
                         self.current_mode,
                         RESET
                     );
-                    return Ok(());
+                    return Ok(CommandResult::Ok);
                 }
                 let new_mode: AgentMode = mode_str.parse()?;
                 if new_mode == self.current_mode {
@@ -229,7 +240,7 @@ impl CommandDispatcher {
                         new_mode,
                         RESET
                     );
-                    return Ok(());
+                    return Ok(CommandResult::Ok);
                 }
                 self.current_mode = new_mode;
                 // Replace the system prompt (first System message) with context preserved
@@ -246,20 +257,30 @@ impl CommandDispatcher {
                 let mut settings = Settings::load();
                 settings.preferred_mode = self.current_mode;
                 settings.save();
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Context => {
                 context::execute(&self.workspace_ctx);
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Exit => {
                 exit::execute();
                 self.exit_requested = true;
-                Ok(())
+                Ok(CommandResult::Ok)
+            }
+            Command::Sessions => {
+                sessions::execute_list(self.session_id.as_deref());
+                Ok(CommandResult::Ok)
+            }
+            Command::SessionLoad(id_prefix) => {
+                if id_prefix.is_empty() {
+                    return Err("Usage: /session <id> — use /sessions to list available sessions".to_string());
+                }
+                Ok(CommandResult::SwitchSession(id_prefix))
             }
             Command::Settings => {
                 settings::execute();
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::ApiKey(arg) => {
                 if arg.is_empty() {
@@ -269,30 +290,12 @@ impl CommandDispatcher {
                 } else {
                     apikey::execute_set(&arg);
                 }
-                Ok(())
-            }
-            Command::Save(path) => {
-                if path.is_empty() {
-                    return Err("Usage: /save <filename> — e.g. /save conversation.json".to_string());
-                }
-                save_load::execute_save(&path, messages, self.current_mode)
-            }
-            Command::Load(path) => {
-                if path.is_empty() {
-                    return Err("Usage: /load <filename> — e.g. /load conversation.json".to_string());
-                }
-                let (loaded_mode, loaded_msgs) = save_load::execute_load(&path)?;
-                *messages = loaded_msgs;
-                self.current_mode = loaded_mode;
-                // Ensure the system prompt matches the loaded mode with context
-                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                    sys_msg.content = self.build_system_prompt();
-                }
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Compact(focus) => {
                 let mut provider = self.provider.lock().await;
-                compact::execute_compact(&mut *provider, messages, &focus).await
+                compact::execute_compact(&mut *provider, messages, &focus).await?;
+                Ok(CommandResult::Ok)
             }
             Command::Add(path) => {
                 if path.is_empty() {
@@ -303,7 +306,7 @@ impl CommandDispatcher {
                 if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
                     sys_msg.content = self.build_system_prompt();
                 }
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Drop(path) => {
                 if path.is_empty() {
@@ -314,11 +317,11 @@ impl CommandDispatcher {
                 if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
                     sys_msg.content = self.build_system_prompt();
                 }
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Files => {
                 files::execute_list(&self.file_context);
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::DropAll => {
                 files::execute_clear(&mut self.file_context);
@@ -326,7 +329,7 @@ impl CommandDispatcher {
                 if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
                     sys_msg.content = self.build_system_prompt();
                 }
-                Ok(())
+                Ok(CommandResult::Ok)
             }
             Command::Refresh => {
                 files::execute_refresh(&mut self.file_context);
@@ -334,7 +337,7 @@ impl CommandDispatcher {
                 if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
                     sys_msg.content = self.build_system_prompt();
                 }
-                Ok(())
+                Ok(CommandResult::Ok)
             }
         }
     }

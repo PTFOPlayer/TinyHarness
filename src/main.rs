@@ -4,6 +4,7 @@ pub mod config;
 pub mod context;
 pub mod mode;
 pub mod provider;
+pub mod session;
 pub mod style;
 pub mod tools;
 pub mod ui;
@@ -15,6 +16,7 @@ use crate::{
     commands::CommandDispatcher,
     config::{ProviderKind, Settings},
     provider::{Provider, llama_cpp::LlamaCppProvider, ollama::OllamaProvider, vllm::VllmProvider},
+    session::Session,
     tools::ToolManager,
 };
 use clap::Parser;
@@ -31,6 +33,9 @@ struct Args {
     vllm: bool,
     #[arg(short, long, default_value_t = String::new())]
     url: String,
+    /// Continue the most recent session in the current directory.
+    #[arg(short, long)]
+    r#continue: bool,
 }
 
 #[tokio::main]
@@ -148,20 +153,111 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Collect workspace context and build the system prompt with the saved mode
     let workspace_ctx = context::WorkspaceContext::collect();
     let initial_mode = settings.preferred_mode;
-    let system_prompt = format!(
-        "{}\n\n---\n{}",
-        initial_mode.system_prompt(),
-        workspace_ctx.format()
-    );
 
-    let mut messages = vec![crate::provider::Message {
-        role: crate::provider::Role::System,
-        content: system_prompt,
-        tool_calls: vec![],
-    }];
+    // Determine the provider string for session metadata
+    let provider_str = match provider_kind {
+        ProviderKind::Ollama => "ollama",
+        ProviderKind::LlamaCpp => "llama.cpp",
+        ProviderKind::Vllm => "vllm",
+    };
+
+    // Resolve the current model name
+    let current_model = {
+        let p = provider.lock().await;
+        p.current_model()
+    };
+
+    // ── Session persistence ───────────────────────────────────────────────
+    let working_dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+
+    let (mut session, mut messages) = if args.r#continue {
+        // Try to find and resume the most recent session for this directory
+        match Session::find_latest_for_dir(&working_dir) {
+            Some(session_id) => match Session::load(&session_id) {
+                Ok((sess, loaded_msgs)) => {
+                    let meta = sess.meta();
+                    eprintln!(
+                        "{}Resumed session {}{}{} ({} messages, {})",
+                        BOLD, BLUE, &meta.id[..12], RESET,
+                        meta.message_count, meta.mode
+                    );
+                    (sess, loaded_msgs)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{}Warning:{} Failed to resume session: {}. Starting fresh.",
+                        BOLD, RESET, e
+                    );
+                    let sess = Session::new(
+                        &working_dir,
+                        initial_mode,
+                        provider_str,
+                        current_model.clone(),
+                    );
+                    let system_prompt = format!(
+                        "{}\n\n---\n{}",
+                        initial_mode.system_prompt(),
+                        workspace_ctx.format()
+                    );
+                    let msgs = vec![crate::provider::Message {
+                        role: crate::provider::Role::System,
+                        content: system_prompt,
+                        tool_calls: vec![],
+                    }];
+                    (sess, msgs)
+                }
+            },
+            None => {
+                eprintln!(
+                    "{}No previous session found in this directory. Starting fresh.{}",
+                    ORANGE, RESET
+                );
+                let sess = Session::new(
+                    &working_dir,
+                    initial_mode,
+                    provider_str,
+                    current_model.clone(),
+                );
+                let system_prompt = format!(
+                    "{}\n\n---\n{}",
+                    initial_mode.system_prompt(),
+                    workspace_ctx.format()
+                );
+                let msgs = vec![crate::provider::Message {
+                    role: crate::provider::Role::System,
+                    content: system_prompt,
+                    tool_calls: vec![],
+                }];
+                (sess, msgs)
+            }
+        }
+    } else {
+        // Start a new session
+        let sess = Session::new(
+            &working_dir,
+            initial_mode,
+            provider_str,
+            current_model.clone(),
+        );
+        let system_prompt = format!(
+            "{}\n\n---\n{}",
+            initial_mode.system_prompt(),
+            workspace_ctx.format()
+        );
+        let msgs = vec![crate::provider::Message {
+            role: crate::provider::Role::System,
+            content: system_prompt,
+            tool_calls: vec![],
+        }];
+        (sess, msgs)
+    };
 
     let mut dispatcher = CommandDispatcher::new(Arc::clone(&provider), workspace_ctx);
     dispatcher.current_mode = initial_mode;
+    dispatcher.session_id = Some(session.id().to_string());
 
     run_agent_loop(
         provider,
@@ -169,6 +265,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ollama_tools,
         &mut messages,
         &mut dispatcher,
+        &mut session,
     )
     .await
 }
