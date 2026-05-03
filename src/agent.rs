@@ -41,6 +41,12 @@ pub async fn run_agent_loop(
     )?;
     stdout.flush()?;
 
+    // If resuming a session with existing messages, print the conversation history
+    // so the user can see where they left off.
+    if messages.len() > 1 {
+        print_conversation_history(messages, &mut stdout)?;
+    }
+
     let helper = CommandHelper::new();
     let history_dir = std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".local/share/tinyharness"))
@@ -106,9 +112,11 @@ pub async fn run_agent_loop(
                                     match Session::load(&full_id) {
                                         Ok((new_session, loaded_msgs)) => {
                                             let meta = new_session.meta();
+                                            let name = meta.name.as_deref().unwrap_or("unnamed");
                                             eprintln!(
-                                                "{}Switched to session {}{}{} ({} messages, {}){}",
+                                                "{}Switched to session {}{}{} — {}{}{} ({} messages, {}){}",
                                                 BOLD, BLUE, &meta.id[..12], RESET,
+                                                BOLD, name, RESET,
                                                 meta.message_count, meta.mode, RESET
                                             );
                                             *session = new_session;
@@ -117,9 +125,9 @@ pub async fn run_agent_loop(
                                             dispatcher.current_mode = session.meta().mode;
                                             dispatcher.session_id = Some(session.id().to_string());
                                             // Ensure system prompt reflects current context
-                                            if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                                                sys_msg.content = dispatcher.build_system_prompt();
-                                            }
+                                            dispatcher.refresh_system_prompt(messages);
+                                            // Print loaded conversation history
+                                            print_conversation_history(&messages, &mut stdout)?;
                                         }
                                         Err(e) => {
                                             eprintln!("{}{}{}", RED, e, RESET);
@@ -130,6 +138,13 @@ pub async fn run_agent_loop(
                                     eprintln!("{}{}{}", RED, e, RESET);
                                 }
                             }
+                        }
+                        Ok(CommandResult::RenameSession(new_name)) => {
+                            session.set_name(new_name.clone());
+                            eprintln!(
+                                "{}Session renamed to {}{}{}",
+                                BOLD, BLUE, new_name, RESET
+                            );
                         }
                         Err(e) => {
                             eprintln!("{}{}{}", RED, e, RESET);
@@ -279,8 +294,6 @@ async fn handle_tool_calls<W: Write>(
     auto_accept: &mut bool,
     session: &mut Session,
 ) -> Result<bool, Box<dyn Error>> {
-    use crate::ui::confirm::Confirmation;
-
     if tool_calls.is_empty() {
         return Ok(false);
     }
@@ -304,42 +317,20 @@ async fn handle_tool_calls<W: Write>(
     for call in tool_calls {
         let needs_confirmation = sensitive_tools.contains(&call.function.name.as_str());
 
-        if needs_confirmation && (!*auto_accept || call.function.name == "run") {
-            match prompt_tool_confirmation(stdout, call)? {
-                Confirmation::No => {
-                    stdout
-                        .write(format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
-                    stdout.flush()?;
-
-                    let args_summary = format_args_summary(&call.function.arguments);
-                    messages.push(Message {
-                        role: Role::System,
-                        content: format!(
-                            "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
-                            call.function.name, args_summary
-                        ),
-                        tool_calls: vec![],
-                    });
-                    session.append_message(messages.last().unwrap());
-                    continue;
-                }
-                Confirmation::AutoAccept => {
-                    *auto_accept = true;
-                    writeln!(
-                        stdout,
-                        "  {}Auto-accept enabled for the rest of this turn{}",
-                        GREEN, RESET
-                    )?;
-                }
-                Confirmation::Yes => {}
-            }
-        } else if needs_confirmation && *auto_accept && call.function.name != "run" {
-            // Auto-accepted — show a brief note
-            writeln!(
-                stdout,
-                "  {}{} {}{} (auto-accepted)",
-                DIM, "▶", call.function.name, RESET
-            )?;
+        // Confirmation step
+        if !confirm_tool_call(call, needs_confirmation, auto_accept, stdout)? {
+            // User denied — record the denial and skip
+            let args_summary = format_args_summary(&call.function.arguments);
+            messages.push(Message {
+                role: Role::System,
+                content: format!(
+                    "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
+                    call.function.name, args_summary
+                ),
+                tool_calls: vec![],
+            });
+            session.append_message(messages.last().unwrap());
+            continue;
         }
 
         // Special handling: switch_mode tool performs an actual mode switch through the dispatcher.
@@ -354,29 +345,87 @@ async fn handle_tool_calls<W: Write>(
             continue;
         }
 
-        stdout.write(format!("  {}▶{} Executing {}...\n", CYAN, RESET, call.function.name).as_bytes())?;
-        stdout.flush()?;
-        let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
-        let first_line = result.lines().next().unwrap_or(&result);
-        let trunc_len = first_line.floor_char_boundary(120);
-        writeln!(
-            stdout,
-            "  {}✓{} {}",
-            GREEN, RESET, &first_line[..trunc_len]
-        )?;
-        stdout.flush()?;
-        messages.push(Message {
-            role: Role::Tool,
-            content: format!(
-                "Tool '{}' result:\n{}\n\nUse this result to continue helping the user.",
-                call.function.name, result
-            ),
-            tool_calls: vec![],
-        });
-        session.append_message(messages.last().unwrap());
+        // Generic tool execution
+        execute_generic_tool(call, tool_manager, messages, session, stdout).await;
     }
 
     Ok(true)
+}
+
+/// Determine whether a tool call is allowed to proceed.
+/// Returns `true` if the call is approved (either by the user or auto-accept).
+/// Returns `false` if the user denied the call.
+fn confirm_tool_call<W: Write>(
+    call: &ToolCall,
+    needs_confirmation: bool,
+    auto_accept: &mut bool,
+    stdout: &mut W,
+) -> Result<bool, Box<dyn Error>> {
+    use crate::ui::confirm::Confirmation;
+
+    if !needs_confirmation {
+        return Ok(true);
+    }
+
+    // "run" always requires confirmation even in auto-accept mode
+    if *auto_accept && call.function.name != "run" {
+        writeln!(
+            stdout,
+            "  {}{} {}{} (auto-accepted)",
+            DIM, "▶", call.function.name, RESET
+        )?;
+        return Ok(true);
+    }
+
+    match prompt_tool_confirmation(stdout, call)? {
+        Confirmation::No => {
+            stdout
+                .write(format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
+            stdout.flush()?;
+            Ok(false)
+        }
+        Confirmation::AutoAccept => {
+            *auto_accept = true;
+            writeln!(
+                stdout,
+                "  {}Auto-accept enabled for the rest of this turn{}",
+                GREEN, RESET
+            )?;
+            Ok(true)
+        }
+        Confirmation::Yes => Ok(true),
+    }
+}
+
+/// Execute a generic tool call, display the result summary, and record the
+/// tool result as a message in the conversation.
+async fn execute_generic_tool<W: Write>(
+    call: &ToolCall,
+    tool_manager: &ToolManager,
+    messages: &mut Vec<Message>,
+    session: &mut Session,
+    stdout: &mut W,
+) {
+    stdout.write(format!("  {}▶{} Executing {}...\n", CYAN, RESET, call.function.name).as_bytes()).unwrap();
+    stdout.flush().unwrap();
+    let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
+    let first_line = result.lines().next().unwrap_or(&result);
+    let trunc_len = first_line.floor_char_boundary(120);
+    writeln!(
+        stdout,
+        "  {}✓{} {}",
+        GREEN, RESET, &first_line[..trunc_len]
+    ).unwrap();
+    stdout.flush().unwrap();
+    messages.push(Message {
+        role: Role::Tool,
+        content: format!(
+            "Tool '{}' result:\n{}\n\nUse this result to continue helping the user.",
+            call.function.name, result
+        ),
+        tool_calls: vec![],
+    });
+    session.append_message(messages.last().unwrap());
 }
 
 /// Handle the switch_mode tool: parse mode, update dispatcher, and update system prompt.
@@ -405,54 +454,45 @@ fn handle_switch_mode<W: Write>(
 
     match mode_str.parse::<AgentMode>() {
         Ok(new_mode) => {
-            if new_mode == dispatcher.current_mode {
-                writeln!(
-                    stdout,
-                    "  {}Already in '{}' mode — no change needed.{}",
-                    ORANGE, new_mode, RESET
-                )?;
-                messages.push(Message {
-                    role: Role::Tool,
-                    content: format!(
-                        "Already in '{}' mode. No change was made.",
-                        new_mode
-                    ),
-                    tool_calls: vec![],
-                });
-                session.append_message(messages.last().unwrap());
-                return Ok(());
-            }
-
             let old_mode = dispatcher.current_mode;
-            dispatcher.current_mode = new_mode;
-            session.set_mode(new_mode);
+            match dispatcher.switch_mode(new_mode, messages) {
+                Ok(()) => {
+                    session.set_mode(new_mode);
 
-            // Replace the system prompt (first System message) with context preserved
-            if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                sys_msg.content = dispatcher.build_system_prompt();
+                    writeln!(
+                        stdout,
+                        "\n{}{}🔄 Mode switched: {} → {}{}",
+                        BOLD, BLUE, old_mode, new_mode, RESET
+                    )?;
+                    stdout.flush()?;
+
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: format!(
+                            "SUCCESS: Mode switched from '{}' to '{}'. The assistant is now in {} mode and will use the appropriate toolset and behavior.",
+                            old_mode, new_mode, new_mode
+                        ),
+                        tool_calls: vec![],
+                    });
+                    session.append_message(messages.last().unwrap());
+                }
+                Err(msg) => {
+                    writeln!(
+                        stdout,
+                        "  {}{}{}",
+                        ORANGE, msg, RESET
+                    )?;
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: format!(
+                            "Already in '{}' mode. No change was made.",
+                            new_mode
+                        ),
+                        tool_calls: vec![],
+                    });
+                    session.append_message(messages.last().unwrap());
+                }
             }
-
-            // Auto-save mode
-            let mut settings = crate::config::Settings::load();
-            settings.preferred_mode = dispatcher.current_mode;
-            settings.save();
-
-            writeln!(
-                stdout,
-                "\n{}{}🔄 Mode switched: {} → {}{}",
-                BOLD, BLUE, old_mode, new_mode, RESET
-            )?;
-            stdout.flush()?;
-
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!(
-                    "SUCCESS: Mode switched from '{}' to '{}'. The assistant is now in {} mode and will use the appropriate toolset and behavior.",
-                    old_mode, new_mode, new_mode
-                ),
-                tool_calls: vec![],
-            });
-            session.append_message(messages.last().unwrap());
         }
         Err(e) => {
             writeln!(stdout, "  {}Error: {}{}", RED, e, RESET)?;
@@ -584,6 +624,70 @@ fn handle_question<W: Write>(
         tool_calls: vec![],
     });
     session.append_message(messages.last().unwrap());
+    Ok(())
+}
+
+/// Print the conversation history from loaded messages so the user can see
+/// what was discussed in the resumed session. The format mimics the live
+/// conversation experience so it feels like you're picking up where you left off.
+fn print_conversation_history<W: Write>(
+    messages: &[Message],
+    stdout: &mut W,
+) -> Result<(), Box<dyn Error>> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+
+    for msg in messages {
+        match msg.role {
+            Role::System => {
+                // System prompt is internal — skip it in the replay.
+            }
+            Role::User => {
+                writeln!(stdout, "{}> {}{}", BLUE, msg.content, RESET)?;
+            }
+            Role::Assistant => {
+                if !msg.content.is_empty() {
+                    write!(stdout, "{}", ORANGE)?;
+                    stdout.write(msg.content.as_bytes())?;
+                    writeln!(stdout, "{}", RESET)?;
+                }
+                if !msg.tool_calls.is_empty() {
+                    for tc in &msg.tool_calls {
+                        writeln!(
+                            stdout,
+                            "{}  {}▶{} {}",
+                            DIM, CYAN, RESET, tc.function.name
+                        )?;
+                    }
+                }
+                writeln!(stdout)?;
+            }
+            Role::Tool => {
+                // Tool results are shown inline during live use as
+                //   ▶ Executing <name>...
+                //   ✓ <first line>
+                // Find the tool name embedded in the content (format: "Tool '<name>' result:\n...")
+                let tool_name = msg.content.split('\'').nth(1).unwrap_or("tool");
+                let result_body = msg.content
+                    .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
+                    .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
+                    .unwrap_or(&msg.content);
+
+                // Show the first meaningful line of the result
+                let first_line = result_body.lines().next().unwrap_or("");
+                let display = if first_line.len() > 120 {
+                    let end = first_line.floor_char_boundary(117);
+                    format!("{}...", &first_line[..end])
+                } else {
+                    first_line.to_string()
+                };
+                writeln!(stdout, "{}  ✓{} {}", GREEN, RESET, display)?;
+            }
+        }
+    }
+
+    stdout.flush()?;
     Ok(())
 }
 

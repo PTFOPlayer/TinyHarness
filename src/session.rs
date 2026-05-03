@@ -80,6 +80,13 @@ impl Session {
     pub fn new(working_dir: &str, mode: AgentMode, provider: &str, model: Option<String>) -> Self {
         let id = Uuid::new_v4().to_string();
         let now = now_timestamp();
+        // Auto-generate a session name from the working directory basename
+        let auto_name = std::path::Path::new(working_dir)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("session")
+            .to_string();
+
         let meta = SessionMeta {
             id,
             working_dir: working_dir.to_string(),
@@ -88,7 +95,7 @@ impl Session {
             mode,
             provider: provider.to_string(),
             model,
-            name: None,
+            name: Some(auto_name),
             message_count: 0,
         };
 
@@ -421,31 +428,26 @@ pub fn format_session_list(sessions: &[SessionMeta], current_id: Option<&str>) -
         };
 
         let age = format_age(now_timestamp().saturating_sub(meta.updated_at));
-        let name_str = match &meta.name {
-            Some(n) => format!(" {}{}{}{}", BOLD, n, RESET, ""),
-            None => String::new(),
-        };
+        let name_str = meta.name.as_deref().unwrap_or("unnamed");
 
         // Truncate working_dir for display
         let dir_display = if meta.working_dir.len() > 40 {
-            format!("...{}", &meta.working_dir[meta.working_dir.len()-37..])
+            let end = meta.working_dir.len().saturating_sub(37);
+            let start = meta.working_dir.floor_char_boundary(end);
+            format!("...{}", &meta.working_dir[start..])
         } else {
             meta.working_dir.clone()
         };
 
         output.push_str(&format!(
-            "{} {}{}{} {}({} msgs, {}{}){}\n",
+            "{} {}{}{} — {}{}{}\n",
             marker,
             BLUE, &meta.id[..12], RESET,
-            name_str,
-            meta.message_count,
-            age,
-            meta.mode,
-            RESET,
+            BOLD, name_str, RESET,
         ));
         output.push_str(&format!(
-            "  {}  {}{}\n",
-            marker, GRAY, dir_display,
+            "  {}  {}{} msgs, {}{}{}  {}{}\n",
+            marker, GRAY, meta.message_count, ITALIC, age, RESET, GRAY, dir_display,
         ));
     }
 

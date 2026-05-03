@@ -18,7 +18,16 @@ pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 
         match (from, to) {
             (Some(from), Some(to)) => read_partial(&path, from, to),
-            _ => fs::read_to_string(&path).unwrap_or_else(|e| format!("Error reading file: {}", e)),
+            _ => match fs::read_to_string(&path) {
+                Ok(content) => {
+                    let line_count = content.lines().count();
+                    format!(
+                        "Read '{}' ({} lines)\n{}",
+                        path, line_count, content
+                    )
+                }
+                Err(e) => format!("Error reading file: {}", e),
+            },
         }
     })
 }
@@ -31,17 +40,25 @@ fn read_partial(path: &str, from: usize, to: usize) -> String {
 
     let reader = BufReader::new(file);
 
-    reader
-        .lines()
-        .skip(from)
-        .take(to)
-        .fold(String::new(), |mut acc, line| {
-            if let Ok(line) = line {
-                acc.push_str(&line);
-                acc.push('\n');
-            }
-            acc
-        })
+    let mut content = String::new();
+    let mut lines_read = 0usize;
+
+    for line in reader.lines().skip(from).take(to) {
+        if let Ok(line) = line {
+            content.push_str(&line);
+            content.push('\n');
+            lines_read += 1;
+        }
+    }
+
+    if content.is_empty() {
+        format!("Error: No lines to read in '{}' at offset {}", path, from)
+    } else {
+        format!(
+            "Read '{}' ({} lines, starting at line {})\n{}",
+            path, lines_read, from, content
+        )
+    }
 }
 
 pub fn read_tool_entry() -> Tool {

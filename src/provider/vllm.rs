@@ -4,7 +4,8 @@ use tokio::sync::mpsc::Sender;
 use crate::provider::{ChatMessageResponse, Message, Provider, ToolInfo};
 
 use super::openai_compat::{
-    stream_chat_completions, to_openai_message, to_openai_tool, ChatRequest, ModelListResponse,
+    health_check, stream_chat_completions, to_openai_message, to_openai_tool, ChatRequest,
+    ModelListResponse,
 };
 
 pub struct VllmProvider {
@@ -24,16 +25,7 @@ impl VllmProvider {
     }
 
     pub async fn health_check(&self) -> Result<(), String> {
-        let url = format!("{}/health", self.base_url.trim_end_matches('/'));
-        match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => Ok(()),
-            Ok(resp) => Err(format!(
-                "Server returned {}: {}",
-                resp.status().as_u16(),
-                resp.text().await.unwrap_or_default()
-            )),
-            Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
-        }
+        health_check(&self.client, &self.base_url).await
     }
 }
 

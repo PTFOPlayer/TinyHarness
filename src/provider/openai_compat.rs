@@ -1,8 +1,23 @@
 use std::collections::HashMap;
 
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
+
+/// Perform a health check against an OpenAI-compatible server's /health endpoint.
+pub async fn health_check(client: &Client, base_url: &str) -> Result<(), String> {
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) => Err(format!(
+            "Server returned {}: {}",
+            resp.status().as_u16(),
+            resp.text().await.unwrap_or_default()
+        )),
+        Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
+    }
+}
 
 use crate::provider::{ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolInfo};
 

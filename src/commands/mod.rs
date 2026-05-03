@@ -33,6 +33,7 @@ pub enum Command {
     Exit,
     Sessions,
     SessionLoad(String),
+    Rename(String),
     Settings,
     ApiKey(String),
     Compact(String),
@@ -49,6 +50,8 @@ pub enum CommandResult {
     Ok,
     /// The user wants to switch to a different session.
     SwitchSession(String),
+    /// The user wants to rename the current session.
+    RenameSession(String),
 }
 
 pub struct CommandDispatcher {
@@ -73,6 +76,38 @@ impl CommandDispatcher {
             file_context: FileContext::new(),
             session_id: None,
         }
+    }
+
+    /// Update the system prompt message in the conversation to reflect the current
+    /// mode, workspace context, and pinned files. Call this after any change that
+    /// affects the system prompt content (mode switch, add/drop/refresh files, etc.).
+    pub fn refresh_system_prompt(&self, messages: &mut Vec<Message>) {
+        if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
+            sys_msg.content = self.build_system_prompt();
+        }
+    }
+
+    /// Switch the current mode to `new_mode`. Updates the system prompt in the
+    /// conversation and auto-saves the new mode to settings.
+    /// Returns `Ok(())` on success or an error string if the mode is unchanged/invalid.
+    pub fn switch_mode(
+        &mut self,
+        new_mode: AgentMode,
+        messages: &mut Vec<Message>,
+    ) -> Result<(), String> {
+        if new_mode == self.current_mode {
+            return Err(format!("Already in '{}' mode", new_mode));
+        }
+
+        self.current_mode = new_mode;
+        self.refresh_system_prompt(messages);
+
+        // Auto-save mode
+        let mut settings = Settings::load();
+        settings.preferred_mode = self.current_mode;
+        settings.save();
+
+        Ok(())
     }
 
     /// Build the system prompt for the current mode, appending workspace context
@@ -116,6 +151,7 @@ impl CommandDispatcher {
             "/exit" | "/quit" => Some(Command::Exit),
             "/sessions" => Some(Command::Sessions),
             "/session" => Some(Command::SessionLoad(arg.unwrap_or_default())),
+            "/rename" => Some(Command::Rename(arg.unwrap_or_default())),
             "/settings" => Some(Command::Settings),
             "/apikey" => {
                 let arg = arg.unwrap_or_default();
@@ -147,6 +183,7 @@ impl CommandDispatcher {
             "/quit",
             "/sessions",
             "/session",
+            "/rename",
             "/settings",
             "/apikey",
             "/compact",
@@ -174,6 +211,7 @@ impl CommandDispatcher {
             ("/quit", "Exit the application"),
             ("/sessions", "List all saved sessions"),
             ("/session <id>", "Switch to an existing session (accepts ID prefix)"),
+            ("/rename <name>", "Rename the current session"),
             ("/settings", "Show current settings (provider, model, mode)"),
             ("/apikey [key]", "Set or show the Ollama API key for web search. Use /apikey clear to remove it."),
             ("/compact [focus]", "Summarize conversation history to free context space. Optionally specify a focus area."),
@@ -233,30 +271,24 @@ impl CommandDispatcher {
                     return Ok(CommandResult::Ok);
                 }
                 let new_mode: AgentMode = mode_str.parse()?;
-                if new_mode == self.current_mode {
-                    println!(
-                        "{}Already in {} mode.{}",
-                        ORANGE,
-                        new_mode,
-                        RESET
-                    );
-                    return Ok(CommandResult::Ok);
+                match self.switch_mode(new_mode, messages) {
+                    Ok(()) => {
+                        println!(
+                            "{}Switched to {} mode.{}",
+                            BOLD,
+                            BLUE,
+                            RESET
+                        );
+                    }
+                    Err(msg) => {
+                        println!(
+                            "{}{}{}",
+                            ORANGE,
+                            msg,
+                            RESET
+                        );
+                    }
                 }
-                self.current_mode = new_mode;
-                // Replace the system prompt (first System message) with context preserved
-                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                    sys_msg.content = self.build_system_prompt();
-                }
-                println!(
-                    "{}Switched to {} mode.{}",
-                    BOLD,
-                    BLUE,
-                    RESET
-                );
-                // Auto-save mode
-                let mut settings = Settings::load();
-                settings.preferred_mode = self.current_mode;
-                settings.save();
                 Ok(CommandResult::Ok)
             }
             Command::Context => {
@@ -277,6 +309,12 @@ impl CommandDispatcher {
                     return Err("Usage: /session <id> — use /sessions to list available sessions".to_string());
                 }
                 Ok(CommandResult::SwitchSession(id_prefix))
+            }
+            Command::Rename(name) => {
+                if name.is_empty() {
+                    return Err("Usage: /rename <name> — give the current session a descriptive name".to_string());
+                }
+                Ok(CommandResult::RenameSession(name))
             }
             Command::Settings => {
                 settings::execute();
@@ -302,10 +340,7 @@ impl CommandDispatcher {
                     return Err("Usage: /add <file_path> — e.g. /add src/main.rs".to_string());
                 }
                 files::execute_add(&mut self.file_context, &path);
-                // Update the system prompt with the new pinned file
-                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                    sys_msg.content = self.build_system_prompt();
-                }
+                self.refresh_system_prompt(messages);
                 Ok(CommandResult::Ok)
             }
             Command::Drop(path) => {
@@ -313,10 +348,7 @@ impl CommandDispatcher {
                     return Err("Usage: /drop <file_path> — e.g. /drop src/main.rs".to_string());
                 }
                 files::execute_drop(&mut self.file_context, &path);
-                // Update the system prompt to remove the dropped file
-                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                    sys_msg.content = self.build_system_prompt();
-                }
+                self.refresh_system_prompt(messages);
                 Ok(CommandResult::Ok)
             }
             Command::Files => {
@@ -325,18 +357,12 @@ impl CommandDispatcher {
             }
             Command::DropAll => {
                 files::execute_clear(&mut self.file_context);
-                // Update the system prompt to remove all pinned files
-                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                    sys_msg.content = self.build_system_prompt();
-                }
+                self.refresh_system_prompt(messages);
                 Ok(CommandResult::Ok)
             }
             Command::Refresh => {
                 files::execute_refresh(&mut self.file_context);
-                // Update the system prompt with refreshed content
-                if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
-                    sys_msg.content = self.build_system_prompt();
-                }
+                self.refresh_system_prompt(messages);
                 Ok(CommandResult::Ok)
             }
         }
