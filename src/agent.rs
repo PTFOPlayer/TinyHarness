@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::style::*;
 use crate::{
-    commands::{CommandDispatcher, CommandResult},
+    commands::{CommandDispatcher, CommandResult, init},
     mode::AgentMode,
     provider::{ChatMessageResponse, Message, Provider, Role, ToolCall, ToolInfo},
     session::Session,
@@ -145,6 +145,22 @@ pub async fn run_agent_loop(
                                 "{}Session renamed to {}{}{}",
                                 BOLD, BLUE, new_name, RESET
                             );
+                        }
+                        Ok(CommandResult::Init(result)) => {
+                            match &result {
+                                init::InitResult::Created { path } => {
+                                    eprintln!(
+                                        "{}  Created {}{}{} — workspace context refreshed.{}",
+                                        GREEN, BLUE, path.display(), GREEN, RESET
+                                    );
+                                }
+                                init::InitResult::Updated { path } => {
+                                    eprintln!(
+                                        "{}  Updated {}{}{} — workspace context refreshed.{}",
+                                        GREEN, BLUE, path.display(), GREEN, RESET
+                                    );
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("{}{}{}", RED, e, RESET);
@@ -409,13 +425,42 @@ async fn execute_generic_tool<W: Write>(
     stdout.write(format!("  {}▶{} Executing {}...\n", CYAN, RESET, call.function.name).as_bytes()).unwrap();
     stdout.flush().unwrap();
     let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
-    let first_line = result.lines().next().unwrap_or(&result);
-    let trunc_len = first_line.floor_char_boundary(120);
-    writeln!(
-        stdout,
-        "  {}✓{} {}",
-        GREEN, RESET, &first_line[..trunc_len]
-    ).unwrap();
+
+    // Display the full result, multiline, with lines wrapped at word boundaries
+    let max_line_width = 120;
+    for line in result.lines() {
+        if line.is_empty() {
+            writeln!(stdout).unwrap();
+            continue;
+        }
+        if line.len() <= max_line_width {
+            writeln!(stdout, "    {}", line).unwrap();
+        } else {
+            // Word-wrap long lines
+            let mut remaining = line;
+            let mut first = true;
+            while !remaining.is_empty() {
+                let indent = if first { "    " } else { "      " };
+                if remaining.len() <= max_line_width - indent.len() {
+                    writeln!(stdout, "{}{}", indent, remaining).unwrap();
+                    break;
+                }
+                // Find the last space within the width limit
+                let chunk_end = remaining.floor_char_boundary(max_line_width - indent.len());
+                let chunk = &remaining[..chunk_end];
+                let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
+                if split_at == 0 {
+                    // No space found at all — just break at the width limit
+                    writeln!(stdout, "{}{}", indent, &remaining[..chunk_end]).unwrap();
+                    remaining = remaining[chunk_end..].trim_start();
+                } else {
+                    writeln!(stdout, "{}{}", indent, &chunk[..split_at]).unwrap();
+                    remaining = remaining[chunk[..split_at].len()..].trim_start();
+                }
+                first = false;
+            }
+        }
+    }
     stdout.flush().unwrap();
     messages.push(Message {
         role: Role::Tool,
@@ -666,7 +711,7 @@ fn print_conversation_history<W: Write>(
             Role::Tool => {
                 // Tool results are shown inline during live use as
                 //   ▶ Executing <name>...
-                //   ✓ <first line>
+                //   multiline output
                 // Find the tool name embedded in the content (format: "Tool '<name>' result:\n...")
                 let tool_name = msg.content.split('\'').nth(1).unwrap_or("tool");
                 let result_body = msg.content
@@ -674,15 +719,40 @@ fn print_conversation_history<W: Write>(
                     .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
                     .unwrap_or(&msg.content);
 
-                // Show the first meaningful line of the result
-                let first_line = result_body.lines().next().unwrap_or("");
-                let display = if first_line.len() > 120 {
-                    let end = first_line.floor_char_boundary(117);
-                    format!("{}...", &first_line[..end])
-                } else {
-                    first_line.to_string()
-                };
-                writeln!(stdout, "{}  ✓{} {}", GREEN, RESET, display)?;
+                // Display full result, multiline with word-wrap
+                let max_line_width = 120;
+                for line in result_body.lines() {
+                    if line.is_empty() {
+                        writeln!(stdout, "    ")?;
+                        continue;
+                    }
+                    if line.len() <= max_line_width - 4 {
+                        writeln!(stdout, "    {}", line)?;
+                    } else {
+                        // Word-wrap long lines
+                        let mut remaining = line;
+                        let mut first = true;
+                        while !remaining.is_empty() {
+                            let indent = if first { "    " } else { "      " };
+                            let avail = max_line_width - indent.len();
+                            if remaining.len() <= avail {
+                                writeln!(stdout, "{}{}", indent, remaining)?;
+                                break;
+                            }
+                            let chunk_end = remaining.floor_char_boundary(avail);
+                            let chunk = &remaining[..chunk_end];
+                            let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
+                            if split_at == 0 {
+                                writeln!(stdout, "{}{}", indent, &remaining[..chunk_end])?;
+                                remaining = remaining[chunk_end..].trim_start();
+                            } else {
+                                writeln!(stdout, "{}{}", indent, &chunk[..split_at])?;
+                                remaining = remaining[chunk[..split_at].len()..].trim_start();
+                            }
+                            first = false;
+                        }
+                    }
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ pub mod context;
 pub mod exit;
 pub mod files;
 pub mod help;
+pub mod init;
 pub mod models;
 pub mod sessions;
 pub mod settings;
@@ -22,6 +23,7 @@ use crate::{
 };
 
 pub use files::FileContext;
+pub use init::InitResult;
 
 pub enum Command {
     Help,
@@ -42,6 +44,7 @@ pub enum Command {
     Files,
     DropAll,
     Refresh,
+    Init,
 }
 
 /// Result of dispatching a command.
@@ -52,6 +55,8 @@ pub enum CommandResult {
     SwitchSession(String),
     /// The user wants to rename the current session.
     RenameSession(String),
+    /// The /init command was run — workspace context should be refreshed.
+    Init(InitResult),
 }
 
 pub struct CommandDispatcher {
@@ -163,6 +168,7 @@ impl CommandDispatcher {
             "/dropall" => Some(Command::DropAll),
             "/files" => Some(Command::Files),
             "/refresh" => Some(Command::Refresh),
+            "/init" => Some(Command::Init),
             _ => None,
         }
     }
@@ -192,6 +198,7 @@ impl CommandDispatcher {
             "/dropall",
             "/files",
             "/refresh",
+            "/init",
         ]
     }
 
@@ -220,6 +227,7 @@ impl CommandDispatcher {
             ("/dropall", "Remove all pinned files from context"),
             ("/files", "List all pinned files in context"),
             ("/refresh", "Re-read all pinned files from disk (updates content)"),
+            ("/init", "Generate or update TINYHARNESS.md project instructions"),
         ]
     }
 
@@ -364,6 +372,14 @@ impl CommandDispatcher {
                 files::execute_refresh(&mut self.file_context);
                 self.refresh_system_prompt(messages);
                 Ok(CommandResult::Ok)
+            }
+            Command::Init => {
+                let mut provider = self.provider.lock().await;
+                let result = init::execute_init(&mut *provider, &self.workspace_ctx, messages).await?;
+                // Refresh workspace context since the project instruction file may have changed
+                self.workspace_ctx = WorkspaceContext::collect();
+                self.refresh_system_prompt(messages);
+                Ok(CommandResult::Init(result))
             }
         }
     }
