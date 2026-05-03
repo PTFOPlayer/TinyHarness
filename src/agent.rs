@@ -426,38 +426,46 @@ async fn execute_generic_tool<W: Write>(
     stdout.flush().unwrap();
     let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
 
-    // Display the full result, multiline, with lines wrapped at word boundaries
-    let max_line_width = 120;
-    for line in result.lines() {
-        if line.is_empty() {
-            writeln!(stdout).unwrap();
-            continue;
-        }
-        if line.len() <= max_line_width {
-            writeln!(stdout, "    {}", line).unwrap();
-        } else {
-            // Word-wrap long lines
-            let mut remaining = line;
-            let mut first = true;
-            while !remaining.is_empty() {
-                let indent = if first { "    " } else { "      " };
-                if remaining.len() <= max_line_width - indent.len() {
-                    writeln!(stdout, "{}{}", indent, remaining).unwrap();
-                    break;
+    // For the "read" tool, only display the summary line (first line) to avoid
+    // dumping large file contents to the terminal. The full content is still
+    // sent to the LLM in the message below.
+    if call.function.name == "read" {
+        let summary = result.lines().next().unwrap_or("(empty result)");
+        writeln!(stdout, "    {}", summary).unwrap();
+    } else {
+        // Display the full result, multiline, with lines wrapped at word boundaries
+        let max_line_width = 120;
+        for line in result.lines() {
+            if line.is_empty() {
+                writeln!(stdout).unwrap();
+                continue;
+            }
+            if line.len() <= max_line_width {
+                writeln!(stdout, "    {}", line).unwrap();
+            } else {
+                // Word-wrap long lines
+                let mut remaining = line;
+                let mut first = true;
+                while !remaining.is_empty() {
+                    let indent = if first { "    " } else { "      " };
+                    if remaining.len() <= max_line_width - indent.len() {
+                        writeln!(stdout, "{}{}", indent, remaining).unwrap();
+                        break;
+                    }
+                    // Find the last space within the width limit
+                    let chunk_end = remaining.floor_char_boundary(max_line_width - indent.len());
+                    let chunk = &remaining[..chunk_end];
+                    let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
+                    if split_at == 0 {
+                        // No space found at all — just break at the width limit
+                        writeln!(stdout, "{}{}", indent, &remaining[..chunk_end]).unwrap();
+                        remaining = remaining[chunk_end..].trim_start();
+                    } else {
+                        writeln!(stdout, "{}{}", indent, &chunk[..split_at]).unwrap();
+                        remaining = remaining[chunk[..split_at].len()..].trim_start();
+                    }
+                    first = false;
                 }
-                // Find the last space within the width limit
-                let chunk_end = remaining.floor_char_boundary(max_line_width - indent.len());
-                let chunk = &remaining[..chunk_end];
-                let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
-                if split_at == 0 {
-                    // No space found at all — just break at the width limit
-                    writeln!(stdout, "{}{}", indent, &remaining[..chunk_end]).unwrap();
-                    remaining = remaining[chunk_end..].trim_start();
-                } else {
-                    writeln!(stdout, "{}{}", indent, &chunk[..split_at]).unwrap();
-                    remaining = remaining[chunk[..split_at].len()..].trim_start();
-                }
-                first = false;
             }
         }
     }
@@ -714,42 +722,57 @@ fn print_conversation_history<W: Write>(
                 //   multiline output
                 // Find the tool name embedded in the content (format: "Tool '<name>' result:\n...")
                 let tool_name = msg.content.split('\'').nth(1).unwrap_or("tool");
-                let result_body = msg.content
-                    .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                    .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
-                    .unwrap_or(&msg.content);
 
-                // Display full result, multiline with word-wrap
-                let max_line_width = 120;
-                for line in result_body.lines() {
-                    if line.is_empty() {
-                        writeln!(stdout, "    ")?;
-                        continue;
-                    }
-                    if line.len() <= max_line_width - 4 {
-                        writeln!(stdout, "    {}", line)?;
-                    } else {
-                        // Word-wrap long lines
-                        let mut remaining = line;
-                        let mut first = true;
-                        while !remaining.is_empty() {
-                            let indent = if first { "    " } else { "      " };
-                            let avail = max_line_width - indent.len();
-                            if remaining.len() <= avail {
-                                writeln!(stdout, "{}{}", indent, remaining)?;
-                                break;
+                // For the "read" tool, only display the summary line to avoid
+                // dumping large file contents during conversation replay.
+                if tool_name == "read" {
+                    // The read tool result format is:
+                    //   Tool 'read' result:\nRead 'path' (N lines)\n<full content>
+                    // We want just the "Read 'path' (N lines)" summary.
+                    let result_body = msg.content
+                        .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
+                        .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
+                        .unwrap_or(&msg.content);
+                    let summary = result_body.lines().next().unwrap_or("(empty result)");
+                    writeln!(stdout, "    {}", summary)?;
+                } else {
+                    let result_body = msg.content
+                        .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
+                        .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
+                        .unwrap_or(&msg.content);
+
+                    // Display full result, multiline with word-wrap
+                    let max_line_width = 120;
+                    for line in result_body.lines() {
+                        if line.is_empty() {
+                            writeln!(stdout, "    ")?;
+                            continue;
+                        }
+                        if line.len() <= max_line_width - 4 {
+                            writeln!(stdout, "    {}", line)?;
+                        } else {
+                            // Word-wrap long lines
+                            let mut remaining = line;
+                            let mut first = true;
+                            while !remaining.is_empty() {
+                                let indent = if first { "    " } else { "      " };
+                                let avail = max_line_width - indent.len();
+                                if remaining.len() <= avail {
+                                    writeln!(stdout, "{}{}", indent, remaining)?;
+                                    break;
+                                }
+                                let chunk_end = remaining.floor_char_boundary(avail);
+                                let chunk = &remaining[..chunk_end];
+                                let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
+                                if split_at == 0 {
+                                    writeln!(stdout, "{}{}", indent, &remaining[..chunk_end])?;
+                                    remaining = remaining[chunk_end..].trim_start();
+                                } else {
+                                    writeln!(stdout, "{}{}", indent, &chunk[..split_at])?;
+                                    remaining = remaining[chunk[..split_at].len()..].trim_start();
+                                }
+                                first = false;
                             }
-                            let chunk_end = remaining.floor_char_boundary(avail);
-                            let chunk = &remaining[..chunk_end];
-                            let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
-                            if split_at == 0 {
-                                writeln!(stdout, "{}{}", indent, &remaining[..chunk_end])?;
-                                remaining = remaining[chunk_end..].trim_start();
-                            } else {
-                                writeln!(stdout, "{}{}", indent, &chunk[..split_at])?;
-                                remaining = remaining[chunk[..split_at].len()..].trim_start();
-                            }
-                            first = false;
                         }
                     }
                 }
