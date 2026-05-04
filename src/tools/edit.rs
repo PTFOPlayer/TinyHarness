@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, BoxFuture, Tool};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
 
 pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {

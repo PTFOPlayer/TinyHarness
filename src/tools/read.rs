@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, BoxFuture, Tool};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
 
 pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -21,10 +21,7 @@ pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
             _ => match fs::read_to_string(&path) {
                 Ok(content) => {
                     let line_count = content.lines().count();
-                    format!(
-                        "Read '{}' ({} lines)\n{}",
-                        path, line_count, content
-                    )
+                    format!("Read '{}' ({} lines)\n{}", path, line_count, content)
                 }
                 Err(e) => format!("Error reading file: {}", e),
             },

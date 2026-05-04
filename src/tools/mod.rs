@@ -60,7 +60,14 @@ impl ToolManager {
     /// Also includes switch_mode so planning mode can escalate to agent mode.
     pub fn get_readonly_tools(&self) -> Vec<ToolInfo> {
         let readonly_names = [
-            "ls", "read", "grep", "glob", "web_search", "web_fetch", "switch_mode", "question",
+            "ls",
+            "read",
+            "grep",
+            "glob",
+            "web_search",
+            "web_fetch",
+            "switch_mode",
+            "question",
         ];
         self.tools
             .iter()
@@ -73,9 +80,14 @@ impl ToolManager {
     /// Also includes switch_mode so research mode can escalate to agent mode.
     pub fn get_research_tools(&self) -> Vec<ToolInfo> {
         let research_names = [
-            "web_search", "web_fetch",
-            "ls", "read", "grep", "glob",
-            "switch_mode", "question",
+            "web_search",
+            "web_fetch",
+            "ls",
+            "read",
+            "grep",
+            "glob",
+            "switch_mode",
+            "question",
         ];
         self.tools
             .iter()
@@ -84,7 +96,11 @@ impl ToolManager {
             .collect()
     }
 
-    pub async fn execute_tool_call(&self, tool_name: &str, arguments: &serde_json::Value) -> String {
+    pub async fn execute_tool_call(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> String {
         if let Some(tool) = self.tools.iter().find(|t| t.name() == tool_name) {
             tool::execute_tool_call(tool, arguments).await
         } else {

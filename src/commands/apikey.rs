@@ -5,10 +5,7 @@ pub fn execute_set(key: &str) {
     let mut settings = Settings::load();
     settings.ollama_api_key = Some(key.to_string());
     settings.save();
-    println!(
-        "{}Ollama API key saved.{}",
-        BOLD, RESET
-    );
+    println!("{}Ollama API key saved.{}", BOLD, RESET);
 }
 
 pub fn execute_show() {
@@ -20,10 +17,7 @@ pub fn execute_show() {
             } else {
                 "****".to_string()
             };
-            println!(
-                "{}Ollama API key:{} {}",
-                BOLD, RESET, masked
-            );
+            println!("{}Ollama API key:{} {}", BOLD, RESET, masked);
         }
         None => println!(
             "{}No Ollama API key set.{} Use {}/apikey <key>{} to set one.",
@@ -36,8 +30,5 @@ pub fn execute_clear() {
     let mut settings = Settings::load();
     settings.ollama_api_key = None;
     settings.save();
-    println!(
-        "{}Ollama API key cleared.{}",
-        BOLD, RESET
-    );
+    println!("{}Ollama API key cleared.{}", BOLD, RESET);
 }

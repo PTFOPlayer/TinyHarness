@@ -208,26 +208,56 @@ impl CommandDispatcher {
             ("/clear", "Clear the terminal screen"),
             ("/models", "List available models"),
             ("/model <name>", "Switch to a different model"),
-            ("/mode [mode]", "Show or switch mode (casual/planning/agent/research)"),
-            ("/plan", "Switch to planning mode (alias for /mode planning)"),
+            (
+                "/mode [mode]",
+                "Show or switch mode (casual/planning/agent/research)",
+            ),
+            (
+                "/plan",
+                "Switch to planning mode (alias for /mode planning)",
+            ),
             ("/agent", "Switch to agent mode (alias for /mode agent)"),
-            ("/research", "Switch to research mode (alias for /mode research)"),
+            (
+                "/research",
+                "Switch to research mode (alias for /mode research)",
+            ),
             ("/casual", "Switch to casual mode (alias for /mode casual)"),
-            ("/context", "Show the workspace context available to the agent"),
+            (
+                "/context",
+                "Show the workspace context available to the agent",
+            ),
             ("/exit", "Exit the application"),
             ("/quit", "Exit the application"),
             ("/sessions", "List all saved sessions"),
-            ("/session <id>", "Switch to an existing session (accepts ID prefix)"),
+            (
+                "/session <id>",
+                "Switch to an existing session (accepts ID prefix)",
+            ),
             ("/rename <name>", "Rename the current session"),
             ("/settings", "Show current settings (provider, model, mode)"),
-            ("/apikey [key]", "Set or show the Ollama API key for web search. Use /apikey clear to remove it."),
-            ("/compact [focus]", "Summarize conversation history to free context space. Optionally specify a focus area."),
-            ("/add <path>", "Pin a file into the AI's context so it's always available"),
+            (
+                "/apikey [key]",
+                "Set or show the Ollama API key for web search. Use /apikey clear to remove it.",
+            ),
+            (
+                "/compact [focus]",
+                "Summarize conversation history to free context space. Optionally specify a focus area.",
+            ),
+            (
+                "/add <path>",
+                "Pin a file into the AI's context so it's always available",
+            ),
             ("/drop <path>", "Remove a pinned file from context"),
             ("/dropall", "Remove all pinned files from context"),
             ("/files", "List all pinned files in context"),
-            ("/refresh", "Re-read all pinned files from disk (updates content)"),
-            ("/init", "Generate or update TINYHARNESS.md project instructions"),
+            (
+                "/refresh",
+                "Re-read all pinned files from disk (updates content)",
+            ),
+            (
+                "/init",
+                "Generate or update TINYHARNESS.md project instructions",
+            ),
         ]
     }
 
@@ -254,7 +284,9 @@ impl CommandDispatcher {
                 if name.is_empty() {
                     let provider = self.provider.lock().await;
                     match provider.current_model() {
-                        Some(model) => println!("{}Current model: {}{}{}", BOLD, BLUE, model, RESET),
+                        Some(model) => {
+                            println!("{}Current model: {}{}{}", BOLD, BLUE, model, RESET)
+                        }
                         None => println!("{}No model selected.{}", ORANGE, RESET),
                     }
                     return Ok(CommandResult::Ok);
@@ -271,30 +303,17 @@ impl CommandDispatcher {
                 if mode_str.is_empty() {
                     println!(
                         "{}Current mode: {}{}{}",
-                        BOLD,
-                        BLUE,
-                        self.current_mode,
-                        RESET
+                        BOLD, BLUE, self.current_mode, RESET
                     );
                     return Ok(CommandResult::Ok);
                 }
                 let new_mode: AgentMode = mode_str.parse()?;
                 match self.switch_mode(new_mode, messages) {
                     Ok(()) => {
-                        println!(
-                            "{}Switched to {} mode.{}",
-                            BOLD,
-                            BLUE,
-                            RESET
-                        );
+                        println!("{}Switched to {} mode.{}", BOLD, BLUE, RESET);
                     }
                     Err(msg) => {
-                        println!(
-                            "{}{}{}",
-                            ORANGE,
-                            msg,
-                            RESET
-                        );
+                        println!("{}{}{}", ORANGE, msg, RESET);
                     }
                 }
                 Ok(CommandResult::Ok)
@@ -314,13 +333,19 @@ impl CommandDispatcher {
             }
             Command::SessionLoad(id_prefix) => {
                 if id_prefix.is_empty() {
-                    return Err("Usage: /session <id> — use /sessions to list available sessions".to_string());
+                    return Err(
+                        "Usage: /session <id> — use /sessions to list available sessions"
+                            .to_string(),
+                    );
                 }
                 Ok(CommandResult::SwitchSession(id_prefix))
             }
             Command::Rename(name) => {
                 if name.is_empty() {
-                    return Err("Usage: /rename <name> — give the current session a descriptive name".to_string());
+                    return Err(
+                        "Usage: /rename <name> — give the current session a descriptive name"
+                            .to_string(),
+                    );
                 }
                 Ok(CommandResult::RenameSession(name))
             }
@@ -375,7 +400,8 @@ impl CommandDispatcher {
             }
             Command::Init => {
                 let mut provider = self.provider.lock().await;
-                let result = init::execute_init(&mut *provider, &self.workspace_ctx, messages).await?;
+                let result =
+                    init::execute_init(&mut *provider, &self.workspace_ctx, messages).await?;
                 // Refresh workspace context since the project instruction file may have changed
                 self.workspace_ctx = WorkspaceContext::collect();
                 self.refresh_system_prompt(messages);

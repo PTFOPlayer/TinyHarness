@@ -3,7 +3,10 @@ use crate::style::*;
 
 pub fn execute(ctx: &WorkspaceContext) {
     println!("\n{}Workspace Context:{}", BOLD, RESET);
-    println!("  {}Project:{}{} {} ({})", GRAY, RESET, BOLD, ctx.project_name, ctx.project_type);
+    println!(
+        "  {}Project:{}{} {} ({})",
+        GRAY, RESET, BOLD, ctx.project_name, ctx.project_type
+    );
     println!("  {}Root:{}{} {}", GRAY, RESET, BOLD, ctx.root.display());
     println!(
         "  {}Git repo:{}{} {}",

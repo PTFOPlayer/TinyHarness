@@ -4,8 +4,8 @@ use tokio::sync::mpsc::Sender;
 use crate::provider::{ChatMessageResponse, Message, Provider, ToolInfo};
 
 use super::openai_compat::{
-    health_check, stream_chat_completions, to_openai_message, to_openai_tool, ChatRequest,
-    ModelListResponse,
+    ChatRequest, ModelListResponse, health_check, stream_chat_completions, to_openai_message,
+    to_openai_tool,
 };
 
 pub struct VllmProvider {
@@ -60,7 +60,10 @@ impl Provider for VllmProvider {
         tools: Vec<ToolInfo>,
     ) {
         let model = self.model.clone().unwrap_or_default();
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
 
         let openai_messages = messages.into_iter().map(to_openai_message).collect();
         let openai_tools = tools.into_iter().map(to_openai_tool).collect();

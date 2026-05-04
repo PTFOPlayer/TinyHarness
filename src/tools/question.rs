@@ -8,7 +8,8 @@ use crate::tools::tool::{BoxFuture, Tool};
 /// It exists only to satisfy the Tool struct's function field requirement.
 fn question_tool_stub(_args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        "Error: question tool should be handled by the agent loop, not executed directly.".to_string()
+        "Error: question tool should be handled by the agent loop, not executed directly."
+            .to_string()
     })
 }
 
@@ -35,9 +36,8 @@ fn build_question_schema() -> schemars::Schema {
         "additionalProperties": false
     });
 
-    serde_json::from_value(schema_value).unwrap_or_else(|_| {
-        serde_json::from_value(serde_json::json!(true)).unwrap()
-    })
+    serde_json::from_value(schema_value)
+        .unwrap_or_else(|_| serde_json::from_value(serde_json::json!(true)).unwrap())
 }
 
 pub fn question_tool_entry() -> Tool {

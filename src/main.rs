@@ -15,7 +15,10 @@ use crate::{
     agent::run_agent_loop,
     commands::CommandDispatcher,
     config::{ProviderKind, Settings},
-    provider::{Message, Provider, Role, llama_cpp::LlamaCppProvider, ollama::OllamaProvider, vllm::VllmProvider},
+    provider::{
+        Message, Provider, Role, llama_cpp::LlamaCppProvider, ollama::OllamaProvider,
+        vllm::VllmProvider,
+    },
     session::Session,
     tools::ToolManager,
 };
@@ -65,12 +68,18 @@ fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
 
 /// Create the provider backend, run health checks for non-Ollama providers,
 /// and return it wrapped in Arc<Mutex>.
-async fn create_provider(kind: ProviderKind, url: String) -> Arc<Mutex<dyn Provider + Send + Sync>> {
+async fn create_provider(
+    kind: ProviderKind,
+    url: String,
+) -> Arc<Mutex<dyn Provider + Send + Sync>> {
     match kind {
         ProviderKind::LlamaCpp => {
             let llama = LlamaCppProvider::new(url);
             if let Err(e) = llama.health_check().await {
-                eprintln!("{}Error:{} LlamaCpp health check failed: {}", BOLD, RESET, e);
+                eprintln!(
+                    "{}Error:{} LlamaCpp health check failed: {}",
+                    BOLD, RESET, e
+                );
                 std::process::exit(1);
             }
             Arc::new(Mutex::new(llama)) as Arc<Mutex<dyn Provider + Send + Sync>>
@@ -217,9 +226,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let name = meta.name.as_deref().unwrap_or("unnamed");
                     eprintln!(
                         "{}Resumed session {}{}{} — {}{}{} ({} messages, {})",
-                        BOLD, BLUE, &meta.id[..12], RESET,
-                        BOLD, name, RESET,
-                        meta.message_count, meta.mode
+                        BOLD,
+                        BLUE,
+                        &meta.id[..12],
+                        RESET,
+                        BOLD,
+                        name,
+                        RESET,
+                        meta.message_count,
+                        meta.mode
                     );
                     (sess, loaded_msgs)
                 }
@@ -228,7 +243,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         "{}Warning:{} Failed to resume session: {}. Starting fresh.",
                         BOLD, RESET, e
                     );
-                    create_initial_session(&working_dir, initial_mode, &provider_str, current_model.clone(), &workspace_ctx)
+                    create_initial_session(
+                        &working_dir,
+                        initial_mode,
+                        &provider_str,
+                        current_model.clone(),
+                        &workspace_ctx,
+                    )
                 }
             },
             None => {
@@ -236,11 +257,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     "{}No previous session found in this directory. Starting fresh.{}",
                     ORANGE, RESET
                 );
-                create_initial_session(&working_dir, initial_mode, &provider_str, current_model.clone(), &workspace_ctx)
+                create_initial_session(
+                    &working_dir,
+                    initial_mode,
+                    &provider_str,
+                    current_model.clone(),
+                    &workspace_ctx,
+                )
             }
         }
     } else {
-        create_initial_session(&working_dir, initial_mode, &provider_str, current_model.clone(), &workspace_ctx)
+        create_initial_session(
+            &working_dir,
+            initial_mode,
+            &provider_str,
+            current_model.clone(),
+            &workspace_ctx,
+        )
     };
 
     let mut dispatcher = CommandDispatcher::new(Arc::clone(&provider), workspace_ctx);

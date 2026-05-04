@@ -66,7 +66,10 @@ pub async fn run_agent_loop(
         } else {
             format!("{} msgs", msg_count)
         };
-        let prompt = format!("{}[{}]{} {}{}> {}{}", BOLD, mode_label, RESET, GRAY, context_info, BLUE, RESET);
+        let prompt = format!(
+            "{}[{}]{} {}{}> {}{}",
+            BOLD, mode_label, RESET, GRAY, context_info, BLUE, RESET
+        );
         let readline = rl.readline(&prompt);
         let user_input = match readline {
             Ok(line) => {
@@ -115,9 +118,16 @@ pub async fn run_agent_loop(
                                             let name = meta.name.as_deref().unwrap_or("unnamed");
                                             eprintln!(
                                                 "{}Switched to session {}{}{} — {}{}{} ({} messages, {}){}",
-                                                BOLD, BLUE, &meta.id[..12], RESET,
-                                                BOLD, name, RESET,
-                                                meta.message_count, meta.mode, RESET
+                                                BOLD,
+                                                BLUE,
+                                                &meta.id[..12],
+                                                RESET,
+                                                BOLD,
+                                                name,
+                                                RESET,
+                                                meta.message_count,
+                                                meta.mode,
+                                                RESET
                                             );
                                             *session = new_session;
                                             *messages = loaded_msgs;
@@ -141,27 +151,30 @@ pub async fn run_agent_loop(
                         }
                         Ok(CommandResult::RenameSession(new_name)) => {
                             session.set_name(new_name.clone());
-                            eprintln!(
-                                "{}Session renamed to {}{}{}",
-                                BOLD, BLUE, new_name, RESET
-                            );
+                            eprintln!("{}Session renamed to {}{}{}", BOLD, BLUE, new_name, RESET);
                         }
-                        Ok(CommandResult::Init(result)) => {
-                            match &result {
-                                init::InitResult::Created { path } => {
-                                    eprintln!(
-                                        "{}  Created {}{}{} — workspace context refreshed.{}",
-                                        GREEN, BLUE, path.display(), GREEN, RESET
-                                    );
-                                }
-                                init::InitResult::Updated { path } => {
-                                    eprintln!(
-                                        "{}  Updated {}{}{} — workspace context refreshed.{}",
-                                        GREEN, BLUE, path.display(), GREEN, RESET
-                                    );
-                                }
+                        Ok(CommandResult::Init(result)) => match &result {
+                            init::InitResult::Created { path } => {
+                                eprintln!(
+                                    "{}  Created {}{}{} — workspace context refreshed.{}",
+                                    GREEN,
+                                    BLUE,
+                                    path.display(),
+                                    GREEN,
+                                    RESET
+                                );
                             }
-                        }
+                            init::InitResult::Updated { path } => {
+                                eprintln!(
+                                    "{}  Updated {}{}{} — workspace context refreshed.{}",
+                                    GREEN,
+                                    BLUE,
+                                    path.display(),
+                                    GREEN,
+                                    RESET
+                                );
+                            }
+                        },
                         Err(e) => {
                             eprintln!("{}{}{}", RED, e, RESET);
                         }
@@ -283,7 +296,12 @@ pub async fn run_agent_loop(
                 writeln!(
                     stdout,
                     "\n{}{}⚠ Context is getting large ({} messages). Consider using {}/compact{} to summarize.{}",
-                    YELLOW, BOLD, messages.len(), BLUE, YELLOW, RESET
+                    YELLOW,
+                    BOLD,
+                    messages.len(),
+                    BLUE,
+                    YELLOW,
+                    RESET
                 )?;
             }
 
@@ -315,11 +333,7 @@ async fn handle_tool_calls<W: Write>(
     }
 
     let tool_count = tool_calls.len();
-    writeln!(
-        stdout,
-        "\n{}  {} tool call(s){}",
-        DIM, tool_count, RESET
-    )?;
+    writeln!(stdout, "\n{}  {} tool call(s){}", DIM, tool_count, RESET)?;
 
     messages.push(Message {
         role: Role::Assistant,
@@ -395,8 +409,7 @@ fn confirm_tool_call<W: Write>(
 
     match prompt_tool_confirmation(stdout, call)? {
         Confirmation::No => {
-            stdout
-                .write(format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
+            stdout.write(format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
             stdout.flush()?;
             Ok(false)
         }
@@ -422,9 +435,13 @@ async fn execute_generic_tool<W: Write>(
     session: &mut Session,
     stdout: &mut W,
 ) {
-    stdout.write(format!("  {}▶{} Executing {}...\n", CYAN, RESET, call.function.name).as_bytes()).unwrap();
+    stdout
+        .write(format!("  {}▶{} Executing {}...\n", CYAN, RESET, call.function.name).as_bytes())
+        .unwrap();
     stdout.flush().unwrap();
-    let result = tool_manager.execute_tool_call(&call.function.name, &call.function.arguments).await;
+    let result = tool_manager
+        .execute_tool_call(&call.function.name, &call.function.arguments)
+        .await;
 
     // For the "read" tool, only display the summary line (first line) to avoid
     // dumping large file contents to the terminal. The full content is still
@@ -489,7 +506,9 @@ fn handle_switch_mode<W: Write>(
     session: &mut Session,
     stdout: &mut W,
 ) -> Result<(), Box<dyn Error>> {
-    let mode_str = call.function.arguments
+    let mode_str = call
+        .function
+        .arguments
         .get("mode")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -530,17 +549,10 @@ fn handle_switch_mode<W: Write>(
                     session.append_message(messages.last().unwrap());
                 }
                 Err(msg) => {
-                    writeln!(
-                        stdout,
-                        "  {}{}{}",
-                        ORANGE, msg, RESET
-                    )?;
+                    writeln!(stdout, "  {}{}{}", ORANGE, msg, RESET)?;
                     messages.push(Message {
                         role: Role::Tool,
-                        content: format!(
-                            "Already in '{}' mode. No change was made.",
-                            new_mode
-                        ),
+                        content: format!("Already in '{}' mode. No change was made.", new_mode),
                         tool_calls: vec![],
                     });
                     session.append_message(messages.last().unwrap());
@@ -551,7 +563,10 @@ fn handle_switch_mode<W: Write>(
             writeln!(stdout, "  {}Error: {}{}", RED, e, RESET)?;
             messages.push(Message {
                 role: Role::Tool,
-                content: format!("Error: {}. Valid modes: casual, planning, agent, research", e),
+                content: format!(
+                    "Error: {}. Valid modes: casual, planning, agent, research",
+                    e
+                ),
                 tool_calls: vec![],
             });
             session.append_message(messages.last().unwrap());
@@ -567,14 +582,18 @@ fn handle_question<W: Write>(
     session: &mut Session,
     stdout: &mut W,
 ) -> Result<(), Box<dyn Error>> {
-    let question_text = call.function.arguments
+    let question_text = call
+        .function
+        .arguments
         .get("question")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_string();
 
-    let answers: Vec<String> = call.function.arguments
+    let answers: Vec<String> = call
+        .function
+        .arguments
         .get("answers")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -597,7 +616,9 @@ fn handle_question<W: Write>(
     if answers.is_empty() {
         messages.push(Message {
             role: Role::Tool,
-            content: "Error: 'answers' argument must contain at least one option for the question tool.".to_string(),
+            content:
+                "Error: 'answers' argument must contain at least one option for the question tool."
+                    .to_string(),
             tool_calls: vec![],
         });
         session.append_message(messages.last().unwrap());
@@ -610,24 +631,21 @@ fn handle_question<W: Write>(
         "\n{}  ┌─── {}❓ Question {}─────{}",
         BOLD, CYAN, BOLD, RESET
     )?;
-    writeln!(
-        stdout,
-        "  │ {}{}{}",
-        BOLD, question_text, RESET
-    )?;
+    writeln!(stdout, "  │ {}{}{}", BOLD, question_text, RESET)?;
     writeln!(stdout, "  │")?;
     for (i, answer) in answers.iter().enumerate() {
         writeln!(
             stdout,
             "  │   {}{}.{}) {} {}{}",
-            GREEN, i + 1, RESET, BOLD, answer, RESET
+            GREEN,
+            i + 1,
+            RESET,
+            BOLD,
+            answer,
+            RESET
         )?;
     }
-    writeln!(
-        stdout,
-        "  └{}──────────────────────────────{}",
-        BOLD, RESET
-    )?;
+    writeln!(stdout, "  └{}──────────────────────────────{}", BOLD, RESET)?;
 
     let answer_count = answers.len();
     write!(
@@ -707,11 +725,7 @@ fn print_conversation_history<W: Write>(
                 }
                 if !msg.tool_calls.is_empty() {
                     for tc in &msg.tool_calls {
-                        writeln!(
-                            stdout,
-                            "{}  {}▶{} {}",
-                            DIM, CYAN, RESET, tc.function.name
-                        )?;
+                        writeln!(stdout, "{}  {}▶{} {}", DIM, CYAN, RESET, tc.function.name)?;
                     }
                 }
                 writeln!(stdout)?;
@@ -729,16 +743,24 @@ fn print_conversation_history<W: Write>(
                     // The read tool result format is:
                     //   Tool 'read' result:\nRead 'path' (N lines)\n<full content>
                     // We want just the "Read 'path' (N lines)" summary.
-                    let result_body = msg.content
+                    let result_body = msg
+                        .content
                         .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
+                        .or_else(|| {
+                            msg.content
+                                .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
+                        })
                         .unwrap_or(&msg.content);
                     let summary = result_body.lines().next().unwrap_or("(empty result)");
                     writeln!(stdout, "    {}", summary)?;
                 } else {
-                    let result_body = msg.content
+                    let result_body = msg
+                        .content
                         .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        .or_else(|| msg.content.strip_prefix(&format!("Tool '{}' result:\n", tool_name)))
+                        .or_else(|| {
+                            msg.content
+                                .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
+                        })
                         .unwrap_or(&msg.content);
 
                     // Display full result, multiline with word-wrap

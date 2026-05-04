@@ -92,11 +92,17 @@ impl WorkspaceContext {
         }
 
         lines.push("\nUse the available tools (ls, read, write, edit, grep, run, glob) to explore and modify files.".to_string());
-        lines.push("Always read a file before editing it. Prefer the glob tool over 'find' or 'ls -R'.".to_string());
+        lines.push(
+            "Always read a file before editing it. Prefer the glob tool over 'find' or 'ls -R'."
+                .to_string(),
+        );
 
         // Inject project instruction file content
         if let Some((filename, content)) = &self.project_md {
-            lines.push(format!("\n---\n# Project Instructions (from {})\n", filename));
+            lines.push(format!(
+                "\n---\n# Project Instructions (from {})\n",
+                filename
+            ));
             lines.push(content.clone());
         }
 
@@ -201,11 +207,7 @@ fn list_top_level(root: &Path) -> Vec<String> {
                     let child_list = children.join(", ");
                     entries.push(format!("{}/  ({})", name, child_list));
                 } else {
-                    entries.push(format!(
-                        "{}/  ({} entries)",
-                        name,
-                        children.len()
-                    ));
+                    entries.push(format!("{}/  ({} entries)", name, children.len()));
                 }
             } else {
                 entries.push(name);
@@ -440,7 +442,10 @@ mod tests {
             is_git_repo: false,
             build_command: "cargo build".to_string(),
             test_command: "cargo test".to_string(),
-            project_md: Some(("TINYHARNESS.md".to_string(), "# My Rules\nAlways use Rust.".to_string())),
+            project_md: Some((
+                "TINYHARNESS.md".to_string(),
+                "# My Rules\nAlways use Rust.".to_string(),
+            )),
         };
 
         let formatted = ctx.format();

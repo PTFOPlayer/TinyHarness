@@ -5,7 +5,7 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, BoxFuture, Tool};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
 
 pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -37,7 +37,13 @@ pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         let mut results: Vec<String> = Vec::new();
         let mut total_matches = 0;
 
-        if let Err(e) = walk_dir(root, &regex, include_pattern, &mut results, &mut total_matches) {
+        if let Err(e) = walk_dir(
+            root,
+            &regex,
+            include_pattern,
+            &mut results,
+            &mut total_matches,
+        ) {
             return format!("Error: {}", e);
         }
 
@@ -51,7 +57,10 @@ pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 
         for (line_count, line) in results.iter().enumerate() {
             if line_count >= MAX_LINES {
-                output.push_str(&format!("... and {} more matches (truncated)\n", total_matches - line_count));
+                output.push_str(&format!(
+                    "... and {} more matches (truncated)\n",
+                    total_matches - line_count
+                ));
                 break;
             }
             output.push_str(line);
@@ -71,7 +80,13 @@ fn walk_dir(
 ) -> Result<(), String> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) => return Err(format!("Failed to read directory '{}': {}", dir.display(), e)),
+        Err(e) => {
+            return Err(format!(
+                "Failed to read directory '{}': {}",
+                dir.display(),
+                e
+            ));
+        }
     };
 
     for entry in entries.flatten() {
@@ -79,8 +94,9 @@ fn walk_dir(
 
         if path.is_dir() {
             // Skip hidden directories and common non-code directories
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) 
-                && (name.starts_with('.') || name == "node_modules" || name == "target") {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && (name.starts_with('.') || name == "node_modules" || name == "target")
+            {
                 continue;
             }
             walk_dir(&path, regex, include_pattern, results, total_matches)?;

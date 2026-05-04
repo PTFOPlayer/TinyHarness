@@ -50,13 +50,18 @@ impl FileContext {
                 .map(|f| f.to_string_lossy().to_string());
 
             if let Some(basename) = path_basename {
-                if let Some(idx) = self
-                    .pinned_files
-                    .iter()
-                    .position(|(p, _)| std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()) == Some(basename.clone()))
-                {
+                if let Some(idx) = self.pinned_files.iter().position(|(p, _)| {
+                    std::path::Path::new(p)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        == Some(basename.clone())
+                }) {
                     self.pinned_files.remove(idx);
-                    return Ok(format!("Unpinned '{}' (matched by basename). Total pinned files: {}", path, self.pinned_files.len()));
+                    return Ok(format!(
+                        "Unpinned '{}' (matched by basename). Total pinned files: {}",
+                        path,
+                        self.pinned_files.len()
+                    ));
                 }
             }
 
@@ -87,7 +92,11 @@ impl FileContext {
         }
 
         let mut result = String::new();
-        result.push_str(&format!("{}Pinned files ({}):\n", BOLD, self.pinned_files.len()));
+        result.push_str(&format!(
+            "{}Pinned files ({}):\n",
+            BOLD,
+            self.pinned_files.len()
+        ));
         for (path, content) in &self.pinned_files {
             let lines = content.lines().count();
             let size = content.len();
@@ -128,7 +137,10 @@ impl FileContext {
 
         let mut result = format!(
             "{}Refreshed {}/{} pinned files.{}",
-            GREEN, refreshed, self.pinned_files.len(), RESET
+            GREEN,
+            refreshed,
+            self.pinned_files.len(),
+            RESET
         );
         if !errors.is_empty() {
             result.push_str(&format!("\n{}Errors:\n{}{}", RED, errors.join("\n"), RESET));
@@ -149,7 +161,10 @@ impl FileContext {
 
         for (path, content) in &self.pinned_files {
             let line_count = content.lines().count();
-            sections.push(format!("\n--- {} ({} lines) ---\n{}", path, line_count, content));
+            sections.push(format!(
+                "\n--- {} ({} lines) ---\n{}",
+                path, line_count, content
+            ));
         }
 
         sections.push("\n--- End of pinned files ---\nUse these files as reference when answering questions. You don't need to read them again.".to_string());
@@ -201,7 +216,10 @@ pub fn inject_into_system_prompt(messages: &mut Vec<Message>, file_context: &Fil
     // Find and update the system message
     if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == Role::System) {
         // Check if we already have pinned content and replace it, or append
-        if let Some(start_idx) = sys_msg.content.find("\nThe following files are pinned in context") {
+        if let Some(start_idx) = sys_msg
+            .content
+            .find("\nThe following files are pinned in context")
+        {
             // Replace existing pinned content
             sys_msg.content.truncate(start_idx);
             sys_msg.content.push_str(&pinned_content);

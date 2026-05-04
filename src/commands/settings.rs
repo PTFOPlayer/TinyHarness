@@ -5,7 +5,10 @@ pub fn execute() {
     let settings = Settings::load();
 
     println!();
-    println!("{}╭─ Settings ─────────────────────────────────╮{}", BOLD, RESET);
+    println!(
+        "{}╭─ Settings ─────────────────────────────────╮{}",
+        BOLD, RESET
+    );
 
     let provider_str = format!("{}", settings.last_provider);
     println!(
@@ -14,14 +17,8 @@ pub fn execute() {
     );
 
     match &settings.last_model {
-        Some(model) => println!(
-            "{}│{} Model:     {}{}{}",
-            BOLD, RESET, BLUE, model, RESET
-        ),
-        None => println!(
-            "{}│{} Model:     {}none{}",
-            BOLD, RESET, ORANGE, RESET
-        ),
+        Some(model) => println!("{}│{} Model:     {}{}{}", BOLD, RESET, BLUE, model, RESET),
+        None => println!("{}│{} Model:     {}none{}", BOLD, RESET, ORANGE, RESET),
     }
 
     println!(
@@ -36,17 +33,14 @@ pub fn execute() {
             } else {
                 "****".to_string()
             };
-            println!(
-                "{}│{} API Key:   {}{}{}",
-                BOLD, RESET, BLUE, masked, RESET
-            );
+            println!("{}│{} API Key:   {}{}{}", BOLD, RESET, BLUE, masked, RESET);
         }
-        None => println!(
-            "{}│{} API Key:   {}not set{}",
-            BOLD, RESET, ORANGE, RESET
-        ),
+        None => println!("{}│{} API Key:   {}not set{}", BOLD, RESET, ORANGE, RESET),
     }
 
-    println!("{}╰────────────────────────────────────────────╯{}", BOLD, RESET);
+    println!(
+        "{}╰────────────────────────────────────────────╯{}",
+        BOLD, RESET
+    );
     println!();
 }

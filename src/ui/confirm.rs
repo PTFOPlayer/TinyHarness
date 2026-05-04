@@ -3,9 +3,9 @@ use std::{
     io::{self, Write},
 };
 
-use crate::style::*;
-use crate::provider::ToolCall;
 use super::diff::{show_edit_diff, show_write_preview};
+use crate::provider::ToolCall;
+use crate::style::*;
 
 /// Result of a tool confirmation prompt.
 pub enum Confirmation {
@@ -74,11 +74,7 @@ pub fn prompt_tool_confirmation<W: Write>(
             } else if name == "run" {
                 let cmd = map.get("command").and_then(|v| v.as_str()).unwrap_or("");
                 if !cmd.is_empty() {
-                    writeln!(
-                        stdout,
-                        "  │ {}{}$ {}{}",
-                        BOLD, CYAN, cmd, RESET
-                    )?;
+                    writeln!(stdout, "  │ {}{}$ {}{}", BOLD, CYAN, cmd, RESET)?;
                 }
             }
         }
@@ -101,11 +97,7 @@ pub fn prompt_tool_confirmation<W: Write>(
         "  └{}───────────────────────────────{}",
         BOLD, RESET
     )?;
-    write!(
-        stdout,
-        "  {}Allow? {}/n/a{}: {}",
-        BOLD, GREEN, RESET, RESET
-    )?;
+    write!(stdout, "  {}Allow? {}/n/a{}: {}", BOLD, GREEN, RESET, RESET)?;
     stdout.flush()?;
 
     let mut input = String::new();

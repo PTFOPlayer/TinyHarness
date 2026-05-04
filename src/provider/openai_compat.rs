@@ -19,7 +19,9 @@ pub async fn health_check(client: &Client, base_url: &str) -> Result<(), String>
     }
 }
 
-use crate::provider::{ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolInfo};
+use crate::provider::{
+    ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolInfo,
+};
 
 // ── OpenAI-compatible request/response types ──
 
@@ -239,14 +241,14 @@ pub async fn stream_chat_completions(
 
                                 if let Some(tool_calls) = &choice.delta.tool_calls {
                                     for tc in tool_calls {
-                                        let entry = acc_tool_calls
-                                            .entry(tc.index)
-                                            .or_insert(OpenAIToolCall {
+                                        let entry = acc_tool_calls.entry(tc.index).or_insert(
+                                            OpenAIToolCall {
                                                 index: tc.index,
                                                 id: String::new(),
                                                 call_type: "function".to_string(),
                                                 function: OpenAIToolCallFunction::default(),
-                                            });
+                                            },
+                                        );
 
                                         if !tc.id.is_empty() {
                                             entry.id = tc.id.clone();

@@ -1,5 +1,5 @@
-use crate::style::*;
 use super::CommandDispatcher;
+use crate::style::*;
 
 pub fn execute() {
     println!("\n{}Available commands:{}", BOLD, RESET);

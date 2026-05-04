@@ -68,15 +68,18 @@ fn now_timestamp() -> u64 {
 pub struct Session {
     meta: SessionMeta,
     path: PathBuf,
-    dirty: bool, // whether we need to rewrite the meta line
+    dirty: bool,                // whether we need to rewrite the meta line
     messages_since_save: usize, // counter for auto-save threshold
+    created: bool,              // is on disk
 }
 
 /// Auto-save threshold: flush metadata every N messages appended.
 const AUTO_SAVE_INTERVAL: usize = 5;
 
 impl Session {
-    /// Create a brand-new session.
+    /// Create a brand-new session. The session file is NOT written to disk
+    /// until the first message is appended (lazy creation), so that
+    /// command-only sessions don't leave empty files behind.
     pub fn new(working_dir: &str, mode: AgentMode, provider: &str, model: Option<String>) -> Self {
         let id = Uuid::new_v4().to_string();
         let now = now_timestamp();
@@ -104,16 +107,13 @@ impl Session {
 
         let path = dir.join(format!("{}.jsonl", meta.id));
 
-        let session = Session {
+        Session {
             meta,
             path,
             dirty: true,
             messages_since_save: 0,
-        };
-
-        // Write the meta entry as the first line
-        session.write_entry(&SessionEntry::Meta(session.meta.clone()));
-        session
+            created: false,
+        }
     }
 
     /// Resume an existing session from its JSONL file.
@@ -158,6 +158,7 @@ impl Session {
             path,
             dirty: false,
             messages_since_save: 0,
+            created: true,
         };
 
         Ok((session, messages))
@@ -187,7 +188,9 @@ impl Session {
                 continue;
             }
 
-            if let Ok(SessionEntry::Meta(meta)) = serde_json::from_str::<SessionEntry>(first_line.trim()) {
+            if let Ok(SessionEntry::Meta(meta)) =
+                serde_json::from_str::<SessionEntry>(first_line.trim())
+            {
                 if meta.working_dir == working_dir {
                     match &mut best {
                         Some((best_time, best_id)) => {
@@ -217,8 +220,15 @@ impl Session {
             0 => Err(format!("No session found matching '{}'", prefix)),
             1 => Ok(matches[0].id.clone()),
             _ => {
-                let ids: Vec<&str> = matches.iter().map(|m| &m.id[..12.min(m.id.len())]).collect();
-                Err(format!("Multiple sessions match '{}': {}", prefix, ids.join(", ")))
+                let ids: Vec<&str> = matches
+                    .iter()
+                    .map(|m| &m.id[..12.min(m.id.len())])
+                    .collect();
+                Err(format!(
+                    "Multiple sessions match '{}': {}",
+                    prefix,
+                    ids.join(", ")
+                ))
             }
         }
     }
@@ -250,7 +260,9 @@ impl Session {
                     continue;
                 }
 
-                if let Ok(SessionEntry::Meta(meta)) = serde_json::from_str::<SessionEntry>(first_line.trim()) {
+                if let Ok(SessionEntry::Meta(meta)) =
+                    serde_json::from_str::<SessionEntry>(first_line.trim())
+                {
                     sessions.push(meta);
                 }
             }
@@ -265,7 +277,9 @@ impl Session {
 
     /// Append a message to the session file and update metadata.
     /// Triggers an auto-save (flush) every [`AUTO_SAVE_INTERVAL`] messages.
+    /// On the first call, materializes the session file on disk.
     pub fn append_message(&mut self, message: &Message) {
+        self.ensure_created();
         self.write_entry(&SessionEntry::Message(message.clone()));
         self.meta.message_count += 1;
         self.meta.updated_at = now_timestamp();
@@ -299,10 +313,13 @@ impl Session {
     }
 
     /// Flush any metadata changes back to the file (rewrite the first line).
+    /// If the session file hasn't been created yet, materializes it first.
     pub fn flush(&mut self) {
         if !self.dirty {
             return;
         }
+
+        self.ensure_created();
 
         // Rewrite the file: read all lines, replace the first line with updated meta,
         // write everything back atomically.
@@ -373,6 +390,16 @@ impl Session {
 
     // ── Internal ────────────────────────────────────────────────────────
 
+    /// Materialize the session file on disk if it hasn't been created yet.
+    /// Writes the meta entry as the first line.
+    fn ensure_created(&mut self) {
+        if self.created {
+            return;
+        }
+        self.write_entry(&SessionEntry::Meta(self.meta.clone()));
+        self.created = true;
+    }
+
     fn write_entry(&self, entry: &SessionEntry) {
         let line = match serde_json::to_string(entry) {
             Ok(l) => l,
@@ -401,7 +428,11 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.flush();
+        // Only flush if the file was actually created — don't materialize
+        // a lazy session just because it was dropped.
+        if self.created {
+            self.flush();
+        }
     }
 }
 
@@ -412,12 +443,14 @@ pub fn format_session_list(sessions: &[SessionMeta], current_id: Option<&str>) -
     let mut output = String::new();
 
     if sessions.is_empty() {
-        output.push_str(&format!("{}No sessions found.{}",
-            ORANGE, RESET));
+        output.push_str(&format!("{}No sessions found.{}", ORANGE, RESET));
         return output;
     }
 
-    output.push_str(&format!("{}Available sessions (most recent first):{}\n\n", BOLD, RESET));
+    output.push_str(&format!(
+        "{}Available sessions (most recent first):{}\n\n",
+        BOLD, RESET
+    ));
 
     for meta in sessions {
         let is_current = current_id == Some(meta.id.as_str());
@@ -442,8 +475,12 @@ pub fn format_session_list(sessions: &[SessionMeta], current_id: Option<&str>) -
         output.push_str(&format!(
             "{} {}{}{} — {}{}{}\n",
             marker,
-            BLUE, &meta.id[..12], RESET,
-            BOLD, name_str, RESET,
+            BLUE,
+            &meta.id[..12],
+            RESET,
+            BOLD,
+            name_str,
+            RESET,
         ));
         output.push_str(&format!(
             "  {}  {}{} msgs, {}{}{}  {}{}\n",

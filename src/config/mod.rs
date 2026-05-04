@@ -1,10 +1,4 @@
-use std::{
-    fmt,
-    fs,
-    io::Write,
-    path::PathBuf,
-    str::FromStr,
-};
+use std::{fmt, fs, io::Write, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
@@ -62,8 +56,7 @@ impl Default for Settings {
 }
 
 fn settings_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".config/tinyharness")
 }
 
@@ -79,14 +72,18 @@ impl Settings {
             return Settings::default();
         }
         match fs::read_to_string(&path) {
-            Ok(content) => {
-                serde_json::from_str(&content).unwrap_or_else(|e| {
-                    eprintln!("Warning: Failed to parse settings file: {}. Using defaults.", e);
-                    Settings::default()
-                })
-            }
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: Failed to parse settings file: {}. Using defaults.",
+                    e
+                );
+                Settings::default()
+            }),
             Err(e) => {
-                eprintln!("Warning: Failed to read settings file: {}. Using defaults.", e);
+                eprintln!(
+                    "Warning: Failed to read settings file: {}. Using defaults.",
+                    e
+                );
                 Settings::default()
             }
         }

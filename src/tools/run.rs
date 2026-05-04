@@ -4,7 +4,7 @@ use std::time::Instant;
 use tokio::io::AsyncReadExt;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, Tool};
+use crate::tools::tool::{Tool, build_string_params_schema};
 
 /// Execute a shell command asynchronously with a timeout.
 /// Returns stdout, stderr, exit code, and duration.
@@ -51,11 +51,8 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
     let start = Instant::now();
 
     // Wait for the command with a timeout
-    let wait_result = tokio::time::timeout(
-        tokio::time::Duration::from_millis(timeout_ms),
-        child.wait(),
-    )
-    .await;
+    let wait_result =
+        tokio::time::timeout(tokio::time::Duration::from_millis(timeout_ms), child.wait()).await;
 
     let elapsed = start.elapsed();
 

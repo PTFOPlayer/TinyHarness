@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{build_string_params_schema, BoxFuture, Tool};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
 
 pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -15,7 +15,10 @@ pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
             .and_then(|m| m.parse().ok())
             .unwrap_or(100);
 
-        let glob_pattern = if pattern.starts_with('/') || pattern.starts_with("./") || pattern.starts_with("../") {
+        let glob_pattern = if pattern.starts_with('/')
+            || pattern.starts_with("./")
+            || pattern.starts_with("../")
+        {
             pattern.clone()
         } else {
             // If it's a bare pattern like "**/*.rs", prepend "./"
@@ -44,7 +47,10 @@ pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         if results.len() > max_results {
             let total = results.len();
             results.truncate(max_results);
-            results.push(format!("... and {} more files (truncated)", total - max_results));
+            results.push(format!(
+                "... and {} more files (truncated)",
+                total - max_results
+            ));
         }
 
         results.join("\n")

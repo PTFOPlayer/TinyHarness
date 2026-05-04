@@ -53,7 +53,11 @@ pub async fn execute_compact(
         };
         // Truncate very long messages
         let content = if msg.content.len() > 2000 {
-            format!("{}... [truncated, {} chars total]", &msg.content[..2000], msg.content.len())
+            format!(
+                "{}... [truncated, {} chars total]",
+                &msg.content[..2000],
+                msg.content.len()
+            )
         } else {
             msg.content.clone()
         };
@@ -63,7 +67,10 @@ pub async fn execute_compact(
     let focus_instruction = if focus.is_empty() {
         String::new()
     } else {
-        format!("\n\nPay special attention to preserving information about: {}", focus)
+        format!(
+            "\n\nPay special attention to preserving information about: {}",
+            focus
+        )
     };
 
     let summarization_prompt = format!(
@@ -104,7 +111,12 @@ pub async fn execute_compact(
     let tools = vec![];
 
     provider
-        .chat(summarization_messages, "Summarize the conversation".to_string(), send, tools)
+        .chat(
+            summarization_messages,
+            "Summarize the conversation".to_string(),
+            send,
+            tools,
+        )
         .await;
 
     // Collect the summary
@@ -121,7 +133,10 @@ pub async fn execute_compact(
     }
 
     if !done || summary_content.is_empty() {
-        return Err("Failed to generate conversation summary. The conversation was not modified.".to_string());
+        return Err(
+            "Failed to generate conversation summary. The conversation was not modified."
+                .to_string(),
+        );
     }
 
     // Reconstruct the messages

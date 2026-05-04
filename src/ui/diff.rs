@@ -1,7 +1,4 @@
-use std::{
-    error::Error,
-    io::Write,
-};
+use std::{error::Error, io::Write};
 
 use crate::style::*;
 
@@ -20,56 +17,30 @@ pub fn show_write_preview<W: Write>(
         Ok(content) => content.lines().collect(),
         Err(_) => {
             // File doesn't exist — show a green preview
-            writeln!(
-                stdout,
-                "\n{}  ── New file: {} ──{}",
-                BOLD, path, RESET
-            )?;
-            writeln!(
-                stdout,
-                "{}  {} {} {}",
-                DIM,
-                "    ",
-                "┄".repeat(60),
-                RESET
-            )?;
+            writeln!(stdout, "\n{}  ── New file: {} ──{}", BOLD, path, RESET)?;
+            writeln!(stdout, "{}  {} {} {}", DIM, "    ", "┄".repeat(60), RESET)?;
             for line in new_content.lines() {
                 writeln!(stdout, "{}  {}{}{}", GREEN, "+ ", RESET, line)?;
             }
-            writeln!(
-                stdout,
-                "{}  {} {} {}",
-                DIM,
-                "    ",
-                "┄".repeat(60),
-                RESET
-            )?;
+            writeln!(stdout, "{}  {} {} {}", DIM, "    ", "┄".repeat(60), RESET)?;
             return Ok(());
         }
     };
 
     let new_lines: Vec<&str> = new_content.lines().collect();
 
-    writeln!(
-        stdout,
-        "\n{}  ── Diff for {} ──{}",
-        BOLD, path, RESET
-    )?;
-    writeln!(
-        stdout,
-        "{}  {} {} {}",
-        DIM,
-        "    ",
-        "┄".repeat(60),
-        RESET
-    )?;
+    writeln!(stdout, "\n{}  ── Diff for {} ──{}", BOLD, path, RESET)?;
+    writeln!(stdout, "{}  {} {} {}", DIM, "    ", "┄".repeat(60), RESET)?;
 
     // Simple line-by-line diff using LCS-like approach
     let mut old_idx = 0;
     let mut new_idx = 0;
 
     while old_idx < old_lines.len() || new_idx < new_lines.len() {
-        if old_idx < old_lines.len() && new_idx < new_lines.len() && old_lines[old_idx] == new_lines[new_idx] {
+        if old_idx < old_lines.len()
+            && new_idx < new_lines.len()
+            && old_lines[old_idx] == new_lines[new_idx]
+        {
             // Unchanged line (dim)
             writeln!(stdout, "  {} {}", DIM, old_lines[old_idx])?;
             old_idx += 1;
@@ -121,14 +92,7 @@ pub fn show_write_preview<W: Write>(
         }
     }
 
-    writeln!(
-        stdout,
-        "{}  {} {} {}",
-        DIM,
-        "    ",
-        "┄".repeat(60),
-        RESET
-    )?;
+    writeln!(stdout, "{}  {} {} {}", DIM, "    ", "┄".repeat(60), RESET)?;
 
     Ok(())
 }
@@ -142,14 +106,18 @@ pub fn show_edit_diff<W: Write>(
     old_str: &str,
     new_str: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
     // Find the byte offset of old_str in the content
     let offset = match content.find(old_str) {
         Some(o) => o,
         None => {
-            writeln!(stdout, "  {}[diff error: 'old_str' not found in file]{}", RED, RESET)?;
+            writeln!(
+                stdout,
+                "  {}[diff error: 'old_str' not found in file]{}",
+                RED, RESET
+            )?;
             return Ok(());
         }
     };
@@ -169,11 +137,7 @@ pub fn show_edit_diff<W: Write>(
     let end_line = (line_number + old_lines.len() + after_ctx).min(lines.len());
     let line_num_width = (end_line + 1).to_string().len().max(2);
 
-    writeln!(
-        stdout,
-        "\n{}  ── Diff for {} ──{}",
-        BOLD, path, RESET
-    )?;
+    writeln!(stdout, "\n{}  ── Diff for {} ──{}", BOLD, path, RESET)?;
 
     // Separator line
     writeln!(
@@ -199,12 +163,30 @@ pub fn show_edit_diff<W: Write>(
 
     // Removed lines (old_str) – shown in red with '-'
     for line in old_lines.iter() {
-        writeln!(stdout, "{}  {:<width$} {}{} {}", RED, "-", RESET, RED, line, width = line_num_width)?;
+        writeln!(
+            stdout,
+            "{}  {:<width$} {}{} {}",
+            RED,
+            "-",
+            RESET,
+            RED,
+            line,
+            width = line_num_width
+        )?;
     }
 
     // Added lines (new_str) – shown in green with '+'
     for line in new_lines.iter() {
-        writeln!(stdout, "{}  {:<width$} {}{} {}", GREEN, "+", RESET, GREEN, line, width = line_num_width)?;
+        writeln!(
+            stdout,
+            "{}  {:<width$} {}{} {}",
+            GREEN,
+            "+",
+            RESET,
+            GREEN,
+            line,
+            width = line_num_width
+        )?;
     }
 
     // Lines after the change

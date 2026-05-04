@@ -1,8 +1,10 @@
-
 use ollama_rs::{
     IntoUrlSealed, Ollama,
     generation::{
-        chat::{ChatMessage as OllamaChatMessage, ChatMessageResponse as OllamaChatMessageResponse, request::ChatMessageRequest},
+        chat::{
+            ChatMessage as OllamaChatMessage, ChatMessageResponse as OllamaChatMessageResponse,
+            request::ChatMessageRequest,
+        },
         parameters::ThinkType,
     },
 };
@@ -118,18 +120,14 @@ impl Provider for OllamaProvider {
         let ollama_tools: Vec<ollama_rs::generation::tools::ToolInfo> =
             tools.into_iter().map(to_ollama_tool_info).collect();
 
-        let mut request = ChatMessageRequest::new(model, chat_messages)
-            .think(ThinkType::Medium);
+        let mut request = ChatMessageRequest::new(model, chat_messages).think(ThinkType::Medium);
 
         if !ollama_tools.is_empty() {
             request = request.tools(ollama_tools);
             request.think = None;
         }
 
-        let stream = self
-            .client
-            .send_chat_messages_stream(request)
-            .await;
+        let stream = self.client.send_chat_messages_stream(request).await;
 
         let mut stream = match stream {
             Ok(s) => s,

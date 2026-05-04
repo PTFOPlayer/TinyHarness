@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::context::{WorkspaceContext, PROJECT_MD_FILE_NAMES};
+use crate::context::{PROJECT_MD_FILE_NAMES, WorkspaceContext};
 use crate::provider::{Message, Role};
 use crate::style::*;
 
@@ -34,15 +34,17 @@ pub async fn execute_init(
                 .map_err(|e| format!("Failed to read {}: {}", filename, e))?;
             println!(
                 "{}  Found existing {}{}{} ({} bytes). Updating...{}",
-                BOLD, BLUE, filename, RESET, content.len(), RESET
+                BOLD,
+                BLUE,
+                filename,
+                RESET,
+                content.len(),
+                RESET
             );
             ("Updating", Some(content))
         }
         None => {
-            println!(
-                "{}  Generating project instruction file...{}",
-                BOLD, RESET
-            );
+            println!("{}  Generating project instruction file...{}", BOLD, RESET);
             ("Creating", None)
         }
     };
@@ -68,17 +70,19 @@ pub async fn execute_init(
         },
     ];
 
-    println!(
-        "{}  {} — analyzing project...{}",
-        CYAN, action_label, RESET
-    );
+    println!("{}  {} — analyzing project...{}", CYAN, action_label, RESET);
 
     // Call the provider to generate the content
     let (send, mut recv) = tokio::sync::mpsc::channel::<crate::provider::ChatMessageResponse>(1024);
     let tools = vec![]; // No tools needed for generation
 
     provider
-        .chat(init_messages, "Generate project instruction file".to_string(), send, tools)
+        .chat(
+            init_messages,
+            "Generate project instruction file".to_string(),
+            send,
+            tools,
+        )
         .await;
 
     // Collect the response
@@ -95,7 +99,9 @@ pub async fn execute_init(
     }
 
     if !done || generated_content.is_empty() {
-        return Err("Failed to generate project instruction file. The LLM did not respond.".to_string());
+        return Err(
+            "Failed to generate project instruction file. The LLM did not respond.".to_string(),
+        );
     }
 
     // Strip markdown code fences if the LLM wrapped them
@@ -117,13 +123,23 @@ pub async fn execute_init(
         "Creating" => {
             println!(
                 "\n{}  ✦ Created {}{}{} ({} lines){}",
-                GREEN, BLUE, path.display(), GREEN, line_count, RESET
+                GREEN,
+                BLUE,
+                path.display(),
+                GREEN,
+                line_count,
+                RESET
             );
         }
         "Updating" => {
             println!(
                 "\n{}  ✦ Updated {}{}{} ({} lines){}",
-                GREEN, BLUE, path.display(), GREEN, line_count, RESET
+                GREEN,
+                BLUE,
+                path.display(),
+                GREEN,
+                line_count,
+                RESET
             );
         }
         _ => {}
@@ -166,7 +182,9 @@ fn find_existing_project_md(root: &std::path::Path) -> Option<(String, PathBuf)>
 fn build_init_prompt(ctx: &WorkspaceContext, existing_content: Option<&str>) -> String {
     let mut prompt = String::new();
 
-    prompt.push_str("Analyze this project and generate a project instruction file (TINYHARNESS.md format).\n\n");
+    prompt.push_str(
+        "Analyze this project and generate a project instruction file (TINYHARNESS.md format).\n\n",
+    );
 
     // Project metadata
     prompt.push_str(&format!("Project name: {}\n", ctx.project_name));
@@ -191,11 +209,15 @@ fn build_init_prompt(ctx: &WorkspaceContext, existing_content: Option<&str>) -> 
     // If there's existing content, ask the LLM to update it
     if let Some(content) = existing_content {
         prompt.push_str("\n---\n");
-        prompt.push_str("The project already has an instruction file. Here is the current content:\n\n");
+        prompt.push_str(
+            "The project already has an instruction file. Here is the current content:\n\n",
+        );
         prompt.push_str(content);
         prompt.push_str("\n---\n\n");
-        prompt.push_str("Please UPDATE this file. Keep what's still accurate, remove what's outdated, \
-                          and add anything missing. Focus on:\n");
+        prompt.push_str(
+            "Please UPDATE this file. Keep what's still accurate, remove what's outdated, \
+                          and add anything missing. Focus on:\n",
+        );
         prompt.push_str("1. Build/test/lint commands that are specific and correct\n");
         prompt.push_str("2. Code conventions that differ from defaults\n");
         prompt.push_str("3. Architecture overview (key directories, module relationships)\n");
@@ -205,9 +227,13 @@ fn build_init_prompt(ctx: &WorkspaceContext, existing_content: Option<&str>) -> 
     } else {
         prompt.push_str("\nPlease generate a new project instruction file. Include:\n");
         prompt.push_str("1. Project overview (one-line description + tech stack)\n");
-        prompt.push_str("2. Commands section (build, test, lint, run — specific commands, not vague)\n");
+        prompt.push_str(
+            "2. Commands section (build, test, lint, run — specific commands, not vague)\n",
+        );
         prompt.push_str("3. Code Conventions section (rules that differ from language defaults)\n");
-        prompt.push_str("4. Architecture section (key directories, module relationships, how things connect)\n");
+        prompt.push_str(
+            "4. Architecture section (key directories, module relationships, how things connect)\n",
+        );
         prompt.push_str("5. Testing section (framework, patterns, how to run specific tests)\n");
         prompt.push_str("6. Known Gotchas section (things that trip up newcomers)\n");
         prompt.push_str("7. Important Rules section (hard constraints the AI must follow)\n\n");
