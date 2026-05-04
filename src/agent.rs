@@ -451,40 +451,14 @@ async fn execute_generic_tool<W: Write>(
         writeln!(stdout, "    {}", summary).unwrap();
     } else {
         // Display the full result, multiline, with lines wrapped at word boundaries
-        let max_line_width = 120;
-        for line in result.lines() {
-            if line.is_empty() {
-                writeln!(stdout).unwrap();
-                continue;
-            }
-            if line.len() <= max_line_width {
-                writeln!(stdout, "    {}", line).unwrap();
-            } else {
-                // Word-wrap long lines
-                let mut remaining = line;
-                let mut first = true;
-                while !remaining.is_empty() {
-                    let indent = if first { "    " } else { "      " };
-                    if remaining.len() <= max_line_width - indent.len() {
-                        writeln!(stdout, "{}{}", indent, remaining).unwrap();
-                        break;
-                    }
-                    // Find the last space within the width limit
-                    let chunk_end = remaining.floor_char_boundary(max_line_width - indent.len());
-                    let chunk = &remaining[..chunk_end];
-                    let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
-                    if split_at == 0 {
-                        // No space found at all — just break at the width limit
-                        writeln!(stdout, "{}{}", indent, &remaining[..chunk_end]).unwrap();
-                        remaining = remaining[chunk_end..].trim_start();
-                    } else {
-                        writeln!(stdout, "{}{}", indent, &chunk[..split_at]).unwrap();
-                        remaining = remaining[chunk[..split_at].len()..].trim_start();
-                    }
-                    first = false;
-                }
-            }
-        }
+        crate::ui::wrap::write_wrapped_lines(
+            stdout,
+            &result,
+            "    ",
+            "      ",
+            crate::ui::wrap::MAX_LINE_WIDTH,
+        )
+        .unwrap();
     }
     stdout.flush().unwrap();
     messages.push(Message {
@@ -764,39 +738,13 @@ fn print_conversation_history<W: Write>(
                         .unwrap_or(&msg.content);
 
                     // Display full result, multiline with word-wrap
-                    let max_line_width = 120;
-                    for line in result_body.lines() {
-                        if line.is_empty() {
-                            writeln!(stdout, "    ")?;
-                            continue;
-                        }
-                        if line.len() <= max_line_width - 4 {
-                            writeln!(stdout, "    {}", line)?;
-                        } else {
-                            // Word-wrap long lines
-                            let mut remaining = line;
-                            let mut first = true;
-                            while !remaining.is_empty() {
-                                let indent = if first { "    " } else { "      " };
-                                let avail = max_line_width - indent.len();
-                                if remaining.len() <= avail {
-                                    writeln!(stdout, "{}{}", indent, remaining)?;
-                                    break;
-                                }
-                                let chunk_end = remaining.floor_char_boundary(avail);
-                                let chunk = &remaining[..chunk_end];
-                                let split_at = chunk.rfind(' ').unwrap_or(chunk_end);
-                                if split_at == 0 {
-                                    writeln!(stdout, "{}{}", indent, &remaining[..chunk_end])?;
-                                    remaining = remaining[chunk_end..].trim_start();
-                                } else {
-                                    writeln!(stdout, "{}{}", indent, &chunk[..split_at])?;
-                                    remaining = remaining[chunk[..split_at].len()..].trim_start();
-                                }
-                                first = false;
-                            }
-                        }
-                    }
+                    crate::ui::wrap::write_wrapped_lines(
+                        stdout,
+                        result_body,
+                        "    ",
+                        "      ",
+                        crate::ui::wrap::MAX_LINE_WIDTH,
+                    )?;
                 }
             }
         }

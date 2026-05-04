@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
 
 pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let pattern = match args.get("pattern") {
-            Some(p) => p.clone(),
-            None => return "Error: 'pattern' argument is required".to_string(),
+        let pattern = match require_arg(&args, "pattern") {
+            Ok(p) => p,
+            Err(e) => return e,
         };
 
         let max_results: usize = args
@@ -58,22 +57,20 @@ pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 }
 
 pub fn glob_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "glob".to_string(),
-            description: "Find files by glob pattern. Supports patterns like '**/*.rs', 'src/**/*.toml', '**/Cargo.toml'. Returns sorted results. Use 'max_results' to limit output (default 100).".to_string(),
-            parameters: build_string_params_schema(
-                &[("pattern", "The glob pattern to search for (e.g. '**/*.rs', '**/Cargo.toml')")],
-                &[
-                    ("max_results", "Maximum number of results to return (default: 100)", "100"),
-                ],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(glob_tool),
-        tool_info,
-    }
+    make_tool(
+        "glob",
+        "Find files by glob pattern. Supports patterns like '**/*.rs', 'src/**/*.toml', '**/Cargo.toml'. Returns sorted results. Use 'max_results' to limit output (default 100).",
+        build_string_params_schema(
+            &[(
+                "pattern",
+                "The glob pattern to search for (e.g. '**/*.rs', '**/Cargo.toml')",
+            )],
+            &[(
+                "max_results",
+                "Maximum number of results to return (default: 100)",
+                "100",
+            )],
+        ),
+        glob_tool,
+    )
 }

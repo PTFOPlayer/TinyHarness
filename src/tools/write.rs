@@ -2,19 +2,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
 
 pub fn write_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let path = match args.get("path") {
-            Some(p) => p.clone(),
-            None => return "Error: 'path' argument is required".to_string(),
+        let path = match require_arg(&args, "path") {
+            Ok(p) => p,
+            Err(e) => return e,
         };
 
-        let content = match args.get("content") {
-            Some(c) => c.clone(),
-            None => return "Error: 'content' argument is required".to_string(),
+        let content = match require_arg(&args, "content") {
+            Ok(c) => c,
+            Err(e) => return e,
         };
 
         // Create parent directories if they don't exist
@@ -33,23 +32,16 @@ pub fn write_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 }
 
 pub fn write_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "write".to_string(),
-            description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories automatically.".to_string(),
-            parameters: build_string_params_schema(
-                &[
-                    ("path", "The absolute path to the file to write"),
-                    ("content", "The text content to write to the file"),
-                ],
-                &[],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(write_tool),
-        tool_info,
-    }
+    make_tool(
+        "write",
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories automatically.",
+        build_string_params_schema(
+            &[
+                ("path", "The absolute path to the file to write"),
+                ("content", "The text content to write to the file"),
+            ],
+            &[],
+        ),
+        write_tool,
+    )
 }

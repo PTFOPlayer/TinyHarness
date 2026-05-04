@@ -236,20 +236,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         meta.message_count,
                         meta.mode
                     );
-                    (sess, loaded_msgs)
+                    Some((sess, loaded_msgs))
                 }
                 Err(e) => {
                     eprintln!(
                         "{}Warning:{} Failed to resume session: {}. Starting fresh.",
                         BOLD, RESET, e
                     );
-                    create_initial_session(
-                        &working_dir,
-                        initial_mode,
-                        &provider_str,
-                        current_model.clone(),
-                        &workspace_ctx,
-                    )
+                    None
                 }
             },
             None => {
@@ -257,16 +251,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     "{}No previous session found in this directory. Starting fresh.{}",
                     ORANGE, RESET
                 );
-                create_initial_session(
-                    &working_dir,
-                    initial_mode,
-                    &provider_str,
-                    current_model.clone(),
-                    &workspace_ctx,
-                )
+                None
             }
         }
     } else {
+        None
+    }
+    .unwrap_or_else(|| {
         create_initial_session(
             &working_dir,
             initial_mode,
@@ -274,7 +265,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             current_model.clone(),
             &workspace_ctx,
         )
-    };
+    });
 
     let mut dispatcher = CommandDispatcher::new(Arc::clone(&provider), workspace_ctx);
     dispatcher.current_mode = initial_mode;

@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
 
 pub fn ls_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let path = match args.get("path") {
-            Some(p) => p.clone(),
-            None => return "Error: 'path' argument is required".to_string(),
+        let path = match require_arg(&args, "path") {
+            Ok(p) => p,
+            Err(e) => return e,
         };
 
         let dir_path = Path::new(&path);
@@ -46,20 +45,10 @@ pub fn ls_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 }
 
 pub fn ls_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "ls".to_string(),
-            description: "List directory contents. Returns a newline-separated list of files and directories in the specified path.".to_string(),
-            parameters: build_string_params_schema(
-                &[("path", "The directory path to list")],
-                &[],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(ls_tool),
-        tool_info,
-    }
+    make_tool(
+        "ls",
+        "List directory contents. Returns a newline-separated list of files and directories in the specified path.",
+        build_string_params_schema(&[("path", "The directory path to list")], &[]),
+        ls_tool,
+    )
 }

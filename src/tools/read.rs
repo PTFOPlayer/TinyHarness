@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
 
 pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let path = match args.get("path") {
-            Some(p) => p.clone(),
-            None => return "Error: 'path' argument is required".to_string(),
+        let path = match require_arg(&args, "path") {
+            Ok(p) => p,
+            Err(e) => return e,
         };
 
         // Check if partial reading is requested
@@ -59,23 +58,20 @@ fn read_partial(path: &str, from: usize, to: usize) -> String {
 }
 
 pub fn read_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "read".to_string(),
-            description: "Read file content. Returns the entire file or a specific line range if from/to are provided.".to_string(),
-            parameters: build_string_params_schema(
-                &[("path", "The absolute path to the file to read")],
-                &[
-                    ("from", "Starting line number (0-based, optional)", "0"),
-                    ("to", "Number of lines to read (optional, reads entire file if omitted)", ""),
-                ],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(read_tool),
-        tool_info,
-    }
+    make_tool(
+        "read",
+        "Read file content. Returns the entire file or a specific line range if from/to are provided.",
+        build_string_params_schema(
+            &[("path", "The absolute path to the file to read")],
+            &[
+                ("from", "Starting line number (0-based, optional)", "0"),
+                (
+                    "to",
+                    "Number of lines to read (optional, reads entire file if omitted)",
+                    "",
+                ),
+            ],
+        ),
+        read_tool,
+    )
 }

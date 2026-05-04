@@ -3,15 +3,14 @@ use std::time::Instant;
 
 use tokio::io::AsyncReadExt;
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{Tool, build_string_params_schema};
+use crate::tools::tool::{Tool, build_string_params_schema, make_tool, require_arg};
 
 /// Execute a shell command asynchronously with a timeout.
 /// Returns stdout, stderr, exit code, and duration.
 pub async fn run_tool(args: HashMap<String, String>) -> String {
-    let command = match args.get("command") {
-        Some(c) => c,
-        None => return "Error: 'command' argument is required".to_string(),
+    let command = match require_arg(&args, "command") {
+        Ok(c) => c,
+        Err(e) => return e,
     };
 
     let timeout_ms: u64 = args
@@ -25,12 +24,12 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/C");
-        c.arg(command);
+        c.arg(&command);
         c
     } else {
         let mut c = tokio::process::Command::new("sh");
         c.arg("-c");
-        c.arg(command);
+        c.arg(&command);
         c
     };
 
@@ -140,23 +139,24 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
 }
 
 pub fn run_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "run".to_string(),
-            description: "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.".to_string(),
-            parameters: build_string_params_schema(
-                &[("command", "The shell command to execute")],
-                &[
-                    ("timeout", "Timeout in milliseconds (default: 30000)", "30000"),
-                    ("cwd", "Working directory for the command (default: project root)", ""),
-                ],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(move |args| Box::pin(run_tool(args))),
-        tool_info,
-    }
+    make_tool(
+        "run",
+        "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.",
+        build_string_params_schema(
+            &[("command", "The shell command to execute")],
+            &[
+                (
+                    "timeout",
+                    "Timeout in milliseconds (default: 30000)",
+                    "30000",
+                ),
+                (
+                    "cwd",
+                    "Working directory for the command (default: project root)",
+                    "",
+                ),
+            ],
+        ),
+        move |args| Box::pin(run_tool(args)),
+    )
 }

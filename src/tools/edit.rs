@@ -1,24 +1,23 @@
 use std::collections::HashMap;
 use std::fs;
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
 
 pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let path = match args.get("path") {
-            Some(p) => p.clone(),
-            None => return "Error: 'path' argument is required".to_string(),
+        let path = match require_arg(&args, "path") {
+            Ok(p) => p,
+            Err(e) => return e,
         };
 
-        let old_str = match args.get("old_str") {
-            Some(s) => s.clone(),
-            None => return "Error: 'old_str' argument is required".to_string(),
+        let old_str = match require_arg(&args, "old_str") {
+            Ok(s) => s,
+            Err(e) => return e,
         };
 
-        let new_str = match args.get("new_str") {
-            Some(s) => s.clone(),
-            None => return "Error: 'new_str' argument is required".to_string(),
+        let new_str = match require_arg(&args, "new_str") {
+            Ok(s) => s,
+            Err(e) => return e,
         };
 
         // Read the file
@@ -60,24 +59,20 @@ pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 }
 
 pub fn edit_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "edit".to_string(),
-            description: "Edit a file by finding an exact string and replacing it with new text. The old_str must appear exactly once in the file. Use this for targeted edits instead of rewriting the entire file.".to_string(),
-            parameters: build_string_params_schema(
-                &[
-                    ("path", "The absolute path to the file to edit"),
-                    ("old_str", "The exact string to find in the file (must appear exactly once)"),
-                    ("new_str", "The replacement string"),
-                ],
-                &[],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(edit_tool),
-        tool_info,
-    }
+    make_tool(
+        "edit",
+        "Edit a file by finding an exact string and replacing it with new text. The old_str must appear exactly once in the file. Use this for targeted edits instead of rewriting the entire file.",
+        build_string_params_schema(
+            &[
+                ("path", "The absolute path to the file to edit"),
+                (
+                    "old_str",
+                    "The exact string to find in the file (must appear exactly once)",
+                ),
+                ("new_str", "The replacement string"),
+            ],
+            &[],
+        ),
+        edit_tool,
+    )
 }

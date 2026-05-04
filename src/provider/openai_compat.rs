@@ -5,23 +5,96 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
 
-/// Perform a health check against an OpenAI-compatible server's /health endpoint.
-pub async fn health_check(client: &Client, base_url: &str) -> Result<(), String> {
-    let url = format!("{}/health", base_url.trim_end_matches('/'));
-    match client.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => Ok(()),
-        Ok(resp) => Err(format!(
-            "Server returned {}: {}",
-            resp.status().as_u16(),
-            resp.text().await.unwrap_or_default()
-        )),
-        Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
-    }
-}
-
 use crate::provider::{
     ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolInfo,
 };
+
+/// Shared inner state for OpenAI-compatible providers (llama.cpp, vLLM, etc.).
+///
+/// Encapsulates the common `{client, base_url, model}` fields and all shared
+/// logic so that provider implementations only need to differ in `list_models()`.
+pub struct OpenAiCompatInner {
+    pub client: Client,
+    pub base_url: String,
+    pub model: Option<String>,
+}
+
+impl OpenAiCompatInner {
+    pub fn new(base_url: String) -> Self {
+        OpenAiCompatInner {
+            client: Client::new(),
+            base_url,
+            model: None,
+        }
+    }
+
+    /// Perform a health check against the server's `/health` endpoint.
+    pub async fn health_check(&self) -> Result<(), String> {
+        let url = format!("{}/health", self.base_url.trim_end_matches('/'));
+        match self.client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => Ok(()),
+            Ok(resp) => Err(format!(
+                "Server returned {}: {}",
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default()
+            )),
+            Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
+        }
+    }
+
+    pub fn select_model(&mut self, name: String) {
+        self.model = Some(name);
+    }
+
+    pub fn current_model(&self) -> Option<String> {
+        self.model.clone()
+    }
+
+    /// Return the `/v1/chat/completions` URL for this server.
+    pub fn chat_url(&self) -> String {
+        format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        )
+    }
+
+    /// Fetch the model list from the server's `/v1/models` endpoint.
+    /// Returns the list of model IDs, or an empty vec on failure.
+    pub async fn fetch_model_list(&self) -> Vec<String> {
+        let url = format!("{}/v1/models", self.base_url.trim_end_matches('/'));
+        match self.client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<ModelListResponse>().await {
+                    Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
+                    Err(_) => self.model.clone().into_iter().collect(),
+                }
+            }
+            _ => self.model.clone().into_iter().collect(),
+        }
+    }
+
+    /// Stream chat completions using the OpenAI-compatible API.
+    pub async fn chat(
+        &self,
+        messages: Vec<Message>,
+        _prompt: String,
+        send: Sender<ChatMessageResponse>,
+        tools: Vec<ToolInfo>,
+    ) {
+        let model = self.model.clone().unwrap_or_default();
+        let openai_messages = messages.into_iter().map(to_openai_message).collect();
+        let openai_tools = tools.into_iter().map(to_openai_tool).collect();
+
+        let body = ChatRequest {
+            model,
+            messages: openai_messages,
+            stream: true,
+            tools: openai_tools,
+        };
+
+        stream_chat_completions(&self.client, &self.chat_url(), &body, &send).await;
+    }
+}
 
 // ── OpenAI-compatible request/response types ──
 

@@ -1,22 +1,26 @@
 use std::collections::HashMap;
 
 use crate::config::Settings;
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema};
+use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
+
+/// Load the Ollama API key from settings, returning an error string if not set.
+fn get_api_key() -> Result<String, String> {
+    let settings = Settings::load();
+    settings
+        .ollama_api_key
+        .ok_or_else(|| "Error: No Ollama API key set. Use /apikey <key> to set one.".to_string())
+}
 
 fn web_search_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let query = match args.get("query") {
-            Some(q) => q.clone(),
-            None => return "Error: 'query' argument is required".to_string(),
+        let query = match require_arg(&args, "query") {
+            Ok(q) => q,
+            Err(e) => return e,
         };
 
-        let settings = Settings::load();
-        let api_key = match settings.ollama_api_key {
-            Some(k) => k,
-            None => {
-                return "Error: No Ollama API key set. Use /apikey <key> to set one.".to_string();
-            }
+        let api_key = match get_api_key() {
+            Ok(k) => k,
+            Err(e) => return e,
         };
 
         let max_results = args
@@ -86,17 +90,14 @@ fn web_search_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> 
 
 fn web_fetch_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let url = match args.get("url") {
-            Some(u) => u.clone(),
-            None => return "Error: 'url' argument is required".to_string(),
+        let url = match require_arg(&args, "url") {
+            Ok(u) => u,
+            Err(e) => return e,
         };
 
-        let settings = Settings::load();
-        let api_key = match settings.ollama_api_key {
-            Some(k) => k,
-            None => {
-                return "Error: No Ollama API key set. Use /apikey <key> to set one.".to_string();
-            }
+        let api_key = match get_api_key() {
+            Ok(k) => k,
+            Err(e) => return e,
         };
 
         let client = reqwest::Client::new();
@@ -149,39 +150,26 @@ fn web_fetch_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 }
 
 pub fn web_search_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "web_search".to_string(),
-            description: "Search the web using Ollama's web search API. Returns relevant search results with titles, URLs, and content snippets. Use this to get up-to-date information from the internet.".to_string(),
-            parameters: build_string_params_schema(
-                &[("query", "The search query string")],
-                &[("max_results", "Maximum number of results to return (default 5, max 10)", "5")],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(web_search_tool),
-        tool_info,
-    }
+    make_tool(
+        "web_search",
+        "Search the web using Ollama's web search API. Returns relevant search results with titles, URLs, and content snippets. Use this to get up-to-date information from the internet.",
+        build_string_params_schema(
+            &[("query", "The search query string")],
+            &[(
+                "max_results",
+                "Maximum number of results to return (default 5, max 10)",
+                "5",
+            )],
+        ),
+        web_search_tool,
+    )
 }
 
 pub fn web_fetch_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "web_fetch".to_string(),
-            description: "Fetch the content of a specific web page by URL using Ollama's web fetch API. Returns the page title, main content, and links found on the page.".to_string(),
-            parameters: build_string_params_schema(
-                &[("url", "The URL to fetch")],
-                &[],
-            ),
-        },
-    };
-
-    Tool {
-        function: Box::new(web_fetch_tool),
-        tool_info,
-    }
+    make_tool(
+        "web_fetch",
+        "Fetch the content of a specific web page by URL using Ollama's web fetch API. Returns the page title, main content, and links found on the page.",
+        build_string_params_schema(&[("url", "The URL to fetch")], &[]),
+        web_fetch_tool,
+    )
 }

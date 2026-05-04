@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use crate::provider::{ToolFunctionInfo, ToolInfo, ToolType};
-use crate::tools::tool::{BoxFuture, Tool};
+use crate::tools::tool::{BoxFuture, Tool, make_tool};
 
 /// Stub function — the question tool is handled specially in the agent loop
 /// (similar to switch_mode), so this function is never actually called.
@@ -41,17 +40,10 @@ fn build_question_schema() -> schemars::Schema {
 }
 
 pub fn question_tool_entry() -> Tool {
-    let tool_info = ToolInfo {
-        tool_type: ToolType::Function,
-        function: ToolFunctionInfo {
-            name: "question".to_string(),
-            description: "Ask the user a question with a list of possible answers. Use this when you need clarification about implementation details, design decisions, or any choice that affects how you should proceed. The tool will present the question and options to the user, and return their selected answer.".to_string(),
-            parameters: build_question_schema(),
-        },
-    };
-
-    Tool {
-        function: Box::new(question_tool_stub),
-        tool_info,
-    }
+    make_tool(
+        "question",
+        "Ask the user a question with a list of possible answers. Use this when you need clarification about implementation details, design decisions, or any choice that affects how you should proceed. The tool will present the question and options to the user, and return their selected answer.",
+        build_question_schema(),
+        question_tool_stub,
+    )
 }
