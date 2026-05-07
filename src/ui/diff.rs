@@ -17,8 +17,19 @@ pub fn show_write_preview<W: Write>(
         Ok(content) => content.lines().collect(),
         Err(_) => {
             // File doesn't exist — show a green preview
-            writeln!(stdout, "\n{}  ── New file: {} ──{}", BOLD, path, RESET)?;
-            writeln!(stdout, "{}     {} {}", DIM, "┄".repeat(60), RESET)?;
+            writeln!(
+                stdout,
+                "\n{}  ── {}New file: {}{} ──{}",
+                BOLD, BOX_COLOR, path, BOLD, RESET
+            )?;
+            writeln!(
+                stdout,
+                "{}     {}{} {}",
+                DIM,
+                BOX_COLOR,
+                "┄".repeat(60),
+                RESET
+            )?;
             for line in new_content.lines() {
                 writeln!(stdout, "{}  + {}{}", GREEN, RESET, line)?;
             }
@@ -29,8 +40,19 @@ pub fn show_write_preview<W: Write>(
 
     let new_lines: Vec<&str> = new_content.lines().collect();
 
-    writeln!(stdout, "\n{}  ── Diff for {} ──{}", BOLD, path, RESET)?;
-    writeln!(stdout, "{}     {} {}", DIM, "┄".repeat(60), RESET)?;
+    writeln!(
+        stdout,
+        "\n{}  ── {}Diff for {}{} ──{}",
+        BOLD, BOX_COLOR, path, BOLD, RESET
+    )?;
+    writeln!(
+        stdout,
+        "{}     {}{} {}",
+        DIM,
+        BOX_COLOR,
+        "┄".repeat(60),
+        RESET
+    )?;
 
     // Simple line-by-line diff using LCS-like approach
     let mut old_idx = 0;
@@ -137,13 +159,18 @@ pub fn show_edit_diff<W: Write>(
     let end_line = (line_number + old_lines.len() + after_ctx).min(lines.len());
     let line_num_width = (end_line + 1).to_string().len().max(2);
 
-    writeln!(stdout, "\n{}  ── Diff for {} ──{}", BOLD, path, RESET)?;
+    writeln!(
+        stdout,
+        "\n{}  ── {}Diff for {}{} ──{}",
+        BOLD, BOX_COLOR, path, BOLD, RESET
+    )?;
 
     // Separator line
     writeln!(
         stdout,
-        "{}  {} {} {}",
+        "{}  {}{} {} {}",
         DIM,
+        BOX_COLOR,
         " ".repeat(line_num_width),
         "┄".repeat(60),
         RESET
@@ -207,8 +234,9 @@ pub fn show_edit_diff<W: Write>(
     // Ending separator
     writeln!(
         stdout,
-        "{}  {} {} {}",
+        "{}  {}{} {} {}",
         DIM,
+        BOX_COLOR,
         " ".repeat(line_num_width),
         "┄".repeat(60),
         RESET

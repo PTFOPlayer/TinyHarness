@@ -106,7 +106,7 @@ pub struct CommandHighlighter;
 impl Highlighter for CommandHighlighter {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
         if line.starts_with('/') {
-            std::borrow::Cow::Owned(format!("{}{}{}", BLUE, line, RESET))
+            std::borrow::Cow::Owned(format!("{}{}{}", TITLE_COLOR, line, RESET))
         } else {
             std::borrow::Cow::Borrowed(line)
         }
@@ -121,6 +121,6 @@ impl Highlighter for CommandHighlighter {
         candidate: &'l str,
         _completion: rustyline::CompletionType,
     ) -> std::borrow::Cow<'l, str> {
-        std::borrow::Cow::Owned(format!("{}{}{}", BLUE, candidate, RESET))
+        std::borrow::Cow::Owned(format!("{}{}{}", TITLE_COLOR, candidate, RESET))
     }
 }

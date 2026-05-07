@@ -19,5 +19,11 @@ pub const CYAN: &str = "\x1b[36m";
 pub const GRAY: &str = "\x1b[90m";
 pub const ORANGE: &str = "\x1b[38;5;208m";
 
+// UI styling presets
+pub const TITLE_COLOR: &str = CYAN; // For titles and headers
+pub const BOX_COLOR: &str = BLUE; // For box borders and frames
+pub const WARNING_COLOR: &str = YELLOW; // For warnings and alerts
+pub const ACCENT_COLOR: &str = MAGENTA; // For highlights and emphasis
+
 // Special escape sequences
 pub const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";

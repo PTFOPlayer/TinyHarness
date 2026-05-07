@@ -1,4 +1,6 @@
+pub mod auto_compact;
 pub mod edit;
+pub mod git;
 pub mod glob;
 pub mod grep;
 pub mod ls;
@@ -45,6 +47,7 @@ impl ToolManager {
     pub fn register_defaults(&mut self) {
         register_tools!(
             self,
+            crate::tools::auto_compact::auto_compact_tool_entry,
             crate::tools::ls::ls_tool_entry,
             crate::tools::read::read_tool_entry,
             crate::tools::write::write_tool_entry,
@@ -52,6 +55,8 @@ impl ToolManager {
             crate::tools::grep::grep_tool_entry,
             crate::tools::run::run_tool_entry,
             crate::tools::glob::glob_tool_entry,
+            crate::tools::git::git_status_tool_entry,
+            crate::tools::git::git_diff_tool_entry,
             crate::tools::web_search::web_search_tool_entry,
             crate::tools::web_search::web_fetch_tool_entry,
             crate::tools::switch_mode::switch_mode_tool_entry,
@@ -75,10 +80,13 @@ impl ToolManager {
             "read",
             "grep",
             "glob",
+            "git_status",
+            "git_diff",
             "web_search",
             "web_fetch",
             "switch_mode",
             "question",
+            "auto_compact",
         ];
         self.tools
             .iter()
@@ -97,8 +105,11 @@ impl ToolManager {
             "read",
             "grep",
             "glob",
+            "git_status",
+            "git_diff",
             "switch_mode",
             "question",
+            "auto_compact",
         ];
         self.tools
             .iter()

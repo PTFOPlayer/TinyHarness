@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::style::*;
 use crate::{
-    commands::{CommandDispatcher, CommandResult, init},
+    commands::{CommandDispatcher, CommandResult, compact::execute_compact, init},
     mode::AgentMode,
     provider::{ChatMessageResponse, Message, Provider, Role, ToolCall, ToolInfo},
     session::Session,
@@ -29,10 +29,10 @@ pub async fn run_agent_loop(
     let (send, mut recv) = mpsc::channel::<ChatMessageResponse>(1024);
 
     let mut stdout = io::stdout();
-    stdout.write_all("╔════════════════════════════════════════════════════════╗\n".as_bytes())?;
-    stdout.write_all("║           TinyHarness AI Assistant                     ║\n".as_bytes())?;
+    stdout.write_all(format!("{}╔════════════════════════════════════════════════════════╗{}\n", BOX_COLOR, RESET).as_bytes())?;
+    stdout.write_all(format!("{}║{}           {}TinyHarness AI Assistant{}                     {}║{}\n", BOX_COLOR, RESET, BOLD, TITLE_COLOR, BOX_COLOR, RESET).as_bytes())?;
     stdout
-        .write_all("╚════════════════════════════════════════════════════════╝\n\n".as_bytes())?;
+        .write_all(format!("{}╚════════════════════════════════════════════════════════╝{}\n\n", BOX_COLOR, RESET).as_bytes())?;
     stdout.write_all(
         format!(
             "{}Tip:{} Type {} to see available commands\n\n",
@@ -317,6 +317,7 @@ pub async fn run_agent_loop(
                 &mut stdout,
                 &mut auto_accept,
                 session,
+                Arc::clone(&provider),
             )
             .await?
             {
@@ -331,7 +332,7 @@ pub async fn run_agent_loop(
             session.append_message(messages.last().unwrap());
 
             // Warn if conversation is getting long
-            if messages.len() > 30 && messages.len().is_multiple_of(10) {
+            if messages.len() > 30 {
                 writeln!(
                     stdout,
                     "\n{}{}⚠ Context is getting large ({} messages). Consider using {}/compact{} to summarize.{}",
@@ -367,6 +368,7 @@ async fn handle_tool_calls<W: Write>(
     stdout: &mut W,
     auto_accept: &mut bool,
     session: &mut Session,
+    provider: Arc<Mutex<dyn Provider + Send + Sync>>,
 ) -> Result<bool, Box<dyn Error>> {
     if tool_calls.is_empty() {
         return Ok(false);
@@ -412,6 +414,20 @@ async fn handle_tool_calls<W: Write>(
         // Special handling: question tool prompts the user for an answer interactively.
         if call.function.name == "question" {
             handle_question(call, messages, session, stdout)?;
+            continue;
+        }
+
+        // Special handling: auto_compact tool triggers conversation compaction.
+        if call.function.name == "auto_compact" {
+            handle_auto_compact(
+                call,
+                dispatcher,
+                messages,
+                session,
+                stdout,
+                Arc::clone(&provider),
+            )
+            .await?;
             continue;
         }
 
@@ -497,7 +513,7 @@ async fn execute_generic_tool<W: Write>(
             let summary = result.lines().next().unwrap_or("(empty result)");
             writeln!(stdout, "    {}", summary).unwrap();
         }
-        "ls" | "grep" | "glob" => {
+        "ls" | "grep" | "glob" | "git_status" | "git_diff" => {
             let summary = summarize_listing_result(&result, &call.function.name);
             writeln!(stdout, "    {}", summary).unwrap();
         }
@@ -725,6 +741,66 @@ fn handle_question<W: Write>(
     Ok(())
 }
 
+/// Handle the auto_compact tool: trigger conversation compaction.
+async fn handle_auto_compact<W: Write>(
+    call: &ToolCall,
+    _dispatcher: &mut CommandDispatcher,
+    messages: &mut Vec<Message>,
+    session: &mut Session,
+    stdout: &mut W,
+    provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+) -> Result<(), Box<dyn Error>> {
+    let focus = call
+        .function
+        .arguments
+        .get("focus")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    writeln!(
+        stdout,
+        "\n{}  {}▶ auto_compact{} Compacting conversation history...",
+        DIM, CYAN, RESET
+    )?;
+    stdout.flush()?;
+
+    // Lock the provider and perform compaction
+    let mut provider_guard = provider.lock().await;
+
+    match execute_compact(&mut *provider_guard, messages, &focus).await {
+        Ok(()) => {
+            // Compaction successful
+            messages.push(Message {
+                role: Role::Tool,
+                content: format!(
+                    "Conversation compacted successfully. Focus: '{}'.",
+                    if focus.is_empty() {
+                        "general summary"
+                    } else {
+                        &focus
+                    }
+                ),
+                tool_calls: vec![],
+            });
+            session.append_message(messages.last().unwrap());
+        }
+        Err(e) => {
+            messages.push(Message {
+                role: Role::Tool,
+                content: format!(
+                    "Auto-compact failed: {}. The conversation was not modified.",
+                    e
+                ),
+                tool_calls: vec![],
+            });
+            session.append_message(messages.last().unwrap());
+        }
+    }
+
+    Ok(())
+}
+
 /// Print the conversation history from loaded messages so the user can see
 /// what was discussed in the resumed session. The format mimics the live
 /// conversation experience so it feels like you're picking up where you left off.
@@ -780,7 +856,12 @@ fn print_conversation_history<W: Write>(
                         .unwrap_or(&msg.content);
                     let summary = result_body.lines().next().unwrap_or("(empty result)");
                     writeln!(stdout, "    {}", summary)?;
-                } else if tool_name == "ls" || tool_name == "grep" || tool_name == "glob" {
+                } else if tool_name == "ls"
+                    || tool_name == "grep"
+                    || tool_name == "glob"
+                    || tool_name == "git_status"
+                    || tool_name == "git_diff"
+                {
                     let result_body = msg
                         .content
                         .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
@@ -834,6 +915,8 @@ fn summarize_listing_result(result: &str, tool_name: &str) -> String {
         "ls" => "entries",
         "grep" => "matches",
         "glob" => "files",
+        "git_status" => "status lines",
+        "git_diff" => "diff lines",
         _ => "results",
     };
 

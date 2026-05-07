@@ -21,8 +21,8 @@ const CMD_CONT_AVAIL: usize = MAX_LINE_WIDTH - 6;
 /// First line: `  │ $ cmd...`
 /// Continuation: `  │ > rest...`
 fn write_command_lines<W: Write>(stdout: &mut W, cmd: &str) -> Result<(), Box<dyn Error>> {
-    let prefix_first = format!("  │ {}{}$ {}", BOLD, CYAN, RESET);
-    let prefix_cont = format!("  │ {}> {}{}", DIM, CYAN, RESET);
+    let prefix_first = format!("  │ {}{}$ {}", BOLD, TITLE_COLOR, RESET);
+    let prefix_cont = format!("  │ {}> {}{}", DIM, TITLE_COLOR, RESET);
 
     // Split at spaces for word-wrapping
     let mut remaining = cmd;
@@ -98,8 +98,8 @@ pub fn prompt_tool_confirmation<W: Write>(
     // ── Header ──
     writeln!(
         stdout,
-        "\n{}  ┌─── {}⚠ {}{} ───{}",
-        BOLD, RED, name, BOLD, RESET
+        "\n{}  ┌{}─── {}⚠ {}{}{} ───{}",
+        BOLD, BOX_COLOR, WARNING_COLOR, name, BOLD, BOX_COLOR, RESET
     )?;
 
     // ── Arguments (skip large fields already shown in diff/preview) ──
@@ -164,7 +164,7 @@ pub fn prompt_tool_confirmation<W: Write>(
     writeln!(
         stdout,
         "  └{}───────────────────────────────{}",
-        BOLD, RESET
+        BOX_COLOR, RESET
     )?;
     write!(stdout, "  {}Allow? {}/n/a{}: {}", BOLD, GREEN, RESET, RESET)?;
     stdout.flush()?;
