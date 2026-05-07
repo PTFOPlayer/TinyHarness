@@ -4,20 +4,15 @@ use std::path::Path;
 
 use regex::Regex;
 
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
+use crate::define_tool;
+use crate::extract_args;
+use crate::tools::tool::BoxFuture;
 
 pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let pattern = match require_arg(&args, "pattern") {
-            Ok(p) => p,
-            Err(e) => return e,
-        };
+        extract_args!(args, pattern);
 
-        let path = match args.get("path") {
-            Some(p) => p.clone(),
-            None => ".".to_string(),
-        };
-
+        let path = args.get("path").cloned().unwrap_or_else(|| ".".to_string());
         let include_pattern = args.get("include").map(|s| s.as_str());
 
         let regex = match Regex::new(&pattern) {
@@ -160,25 +155,13 @@ fn walk_dir(
     Ok(())
 }
 
-pub fn grep_tool_entry() -> Tool {
-    make_tool(
-        "grep",
-        "Search for a regex pattern across files in a directory. Returns matching lines with file paths and line numbers. Use 'include' to filter by file extension (e.g. '.rs' for Rust files). Skips hidden directories, node_modules, target, and binary files.",
-        build_string_params_schema(
-            &[("pattern", "The regex pattern to search for")],
-            &[
-                (
-                    "path",
-                    "The directory to search in (defaults to current directory)",
-                    ".",
-                ),
-                (
-                    "include",
-                    "Only search files whose path contains this string (e.g. '.rs' for Rust files)",
-                    "",
-                ),
-            ],
-        ),
-        grep_tool,
-    )
-}
+define_tool!(
+    grep_tool_entry, "grep",
+    "Search for a regex pattern across files in a directory. Returns matching lines with file paths and line numbers. Use 'include' to filter by file extension (e.g. '.rs' for Rust files). Skips hidden directories, node_modules, target, and binary files.",
+    required: [("pattern", "The regex pattern to search for")],
+    optional: [
+        ("path", "The directory to search in (defaults to current directory)", "."),
+        ("include", "Only search files whose path contains this string (e.g. '.rs' for Rust files)", ""),
+    ],
+    handler: grep_tool
+);

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::config::Settings;
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
+use crate::define_tool;
+use crate::extract_args;
+use crate::tools::tool::BoxFuture;
 
 /// Load the Ollama API key from settings, returning an error string if not set.
 fn get_api_key() -> Result<String, String> {
@@ -13,10 +15,7 @@ fn get_api_key() -> Result<String, String> {
 
 fn web_search_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let query = match require_arg(&args, "query") {
-            Ok(q) => q,
-            Err(e) => return e,
-        };
+        extract_args!(args, query);
 
         let api_key = match get_api_key() {
             Ok(k) => k,
@@ -90,10 +89,7 @@ fn web_search_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> 
 
 fn web_fetch_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let url = match require_arg(&args, "url") {
-            Ok(u) => u,
-            Err(e) => return e,
-        };
+        extract_args!(args, url);
 
         let api_key = match get_api_key() {
             Ok(k) => k,
@@ -149,27 +145,17 @@ fn web_fetch_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     })
 }
 
-pub fn web_search_tool_entry() -> Tool {
-    make_tool(
-        "web_search",
-        "Search the web using Ollama's web search API. Returns relevant search results with titles, URLs, and content snippets. Use this to get up-to-date information from the internet.",
-        build_string_params_schema(
-            &[("query", "The search query string")],
-            &[(
-                "max_results",
-                "Maximum number of results to return (default 5, max 10)",
-                "5",
-            )],
-        ),
-        web_search_tool,
-    )
-}
+define_tool!(
+    web_search_tool_entry, "web_search",
+    "Search the web using Ollama's web search API. Returns relevant search results with titles, URLs, and content snippets. Use this to get up-to-date information from the internet.",
+    required: [("query", "The search query string")],
+    optional: [("max_results", "Maximum number of results to return (default 5, max 10)", "5")],
+    handler: web_search_tool
+);
 
-pub fn web_fetch_tool_entry() -> Tool {
-    make_tool(
-        "web_fetch",
-        "Fetch the content of a specific web page by URL using Ollama's web fetch API. Returns the page title, main content, and links found on the page.",
-        build_string_params_schema(&[("url", "The URL to fetch")], &[]),
-        web_fetch_tool,
-    )
-}
+define_tool!(
+    web_fetch_tool_entry, "web_fetch",
+    "Fetch the content of a specific web page by URL using Ollama's web fetch API. Returns the page title, main content, and links found on the page.",
+    required: [("url", "The URL to fetch")],
+    handler: web_fetch_tool
+);

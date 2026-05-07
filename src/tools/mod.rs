@@ -13,6 +13,24 @@ pub mod write;
 use crate::provider::ToolInfo;
 use crate::tools::tool::Tool;
 
+/// Register multiple tools at once.
+///
+/// # Example
+/// ```
+/// register_tools!(self,
+///     crate::tools::ls::ls_tool_entry,
+///     crate::tools::read::read_tool_entry,
+/// );
+/// ```
+#[macro_export]
+macro_rules! register_tools {
+    ($manager:expr, $($entry:path),* $(,)?) => {
+        $(
+            $manager.register_tool($entry());
+        )*
+    };
+}
+
 #[derive(Default)]
 pub struct ToolManager {
     tools: Vec<Tool>,
@@ -25,28 +43,20 @@ impl ToolManager {
 
     /// Register all built-in tools.
     pub fn register_defaults(&mut self) {
-        use edit::edit_tool_entry;
-        use glob::glob_tool_entry;
-        use grep::grep_tool_entry;
-        use ls::ls_tool_entry;
-        use question::question_tool_entry;
-        use read::read_tool_entry;
-        use run::run_tool_entry;
-        use switch_mode::switch_mode_tool_entry;
-        use web_search::{web_fetch_tool_entry, web_search_tool_entry};
-        use write::write_tool_entry;
-
-        self.register_tool(ls_tool_entry());
-        self.register_tool(read_tool_entry());
-        self.register_tool(write_tool_entry());
-        self.register_tool(edit_tool_entry());
-        self.register_tool(grep_tool_entry());
-        self.register_tool(run_tool_entry());
-        self.register_tool(glob_tool_entry());
-        self.register_tool(web_search_tool_entry());
-        self.register_tool(web_fetch_tool_entry());
-        self.register_tool(switch_mode_tool_entry());
-        self.register_tool(question_tool_entry());
+        register_tools!(
+            self,
+            crate::tools::ls::ls_tool_entry,
+            crate::tools::read::read_tool_entry,
+            crate::tools::write::write_tool_entry,
+            crate::tools::edit::edit_tool_entry,
+            crate::tools::grep::grep_tool_entry,
+            crate::tools::run::run_tool_entry,
+            crate::tools::glob::glob_tool_entry,
+            crate::tools::web_search::web_search_tool_entry,
+            crate::tools::web_search::web_fetch_tool_entry,
+            crate::tools::switch_mode::switch_mode_tool_entry,
+            crate::tools::question::question_tool_entry,
+        );
     }
 
     pub fn register_tool(&mut self, tool: Tool) {

@@ -3,15 +3,13 @@ use std::time::Instant;
 
 use tokio::io::AsyncReadExt;
 
-use crate::tools::tool::{Tool, build_string_params_schema, make_tool, require_arg};
+use crate::define_tool;
+use crate::extract_args;
 
 /// Execute a shell command asynchronously with a timeout.
 /// Returns stdout, stderr, exit code, and duration.
 pub async fn run_tool(args: HashMap<String, String>) -> String {
-    let command = match require_arg(&args, "command") {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
+    extract_args!(args, command);
 
     let timeout_ms: u64 = args
         .get("timeout")
@@ -138,25 +136,13 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
     }
 }
 
-pub fn run_tool_entry() -> Tool {
-    make_tool(
-        "run",
-        "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.",
-        build_string_params_schema(
-            &[("command", "The shell command to execute")],
-            &[
-                (
-                    "timeout",
-                    "Timeout in milliseconds (default: 30000)",
-                    "30000",
-                ),
-                (
-                    "cwd",
-                    "Working directory for the command (default: project root)",
-                    "",
-                ),
-            ],
-        ),
-        move |args| Box::pin(run_tool(args)),
-    )
-}
+define_tool!(
+    run_tool_entry, "run",
+    "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.",
+    required: [("command", "The shell command to execute")],
+    optional: [
+        ("timeout", "Timeout in milliseconds (default: 30000)", "30000"),
+        ("cwd", "Working directory for the command (default: project root)", ""),
+    ],
+    handler: move |args| Box::pin(run_tool(args))
+);

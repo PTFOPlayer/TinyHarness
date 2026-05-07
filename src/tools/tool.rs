@@ -6,6 +6,80 @@ use schemars::Schema;
 
 use crate::provider::ToolInfo;
 
+/// Extract required string arguments from the tool arguments map.
+///
+/// Creates `let` bindings for each named argument, with early return on missing args.
+///
+/// # Example
+/// ```
+/// extract_args!(args, path, content);
+/// // expands to:
+/// // let path = match require_arg(&args, "path") { Ok(v) => v, Err(e) => return e };
+/// // let content = match require_arg(&args, "content") { Ok(v) => v, Err(e) => return e };
+/// ```
+#[macro_export]
+macro_rules! extract_args {
+    ($args:expr, $($name:ident),* $(,)?) => {
+        $(
+            let $name = match $crate::tools::tool::require_arg(&$args, stringify!($name)) {
+                Ok(v) => v,
+                Err(e) => return e,
+            };
+        )*
+    };
+}
+
+/// Define a tool entry function with its schema.
+///
+/// Generates a `pub fn <entry_fn>() -> Tool` that calls `make_tool` with the
+/// provided name, description, schema, and handler.
+///
+/// # Example
+/// ```
+/// define_tool!(
+///     write_tool_entry, "write",
+///     "Write content to a file.",
+///     required: [("path", "The path"), ("content", "The content")],
+///     optional: [("max_size", "Max size", "1024")],
+///     handler: write_tool
+/// );
+/// ```
+#[macro_export]
+macro_rules! define_tool {
+    (
+        $entry_fn:ident, $name:expr, $description:expr,
+        required: [$(($req_name:expr, $req_desc:expr)),* $(,)?],
+        optional: [$(($opt_name:expr, $opt_desc:expr, $opt_default:expr)),* $(,)?],
+        handler: $handler:expr
+    ) => {
+        pub fn $entry_fn() -> $crate::tools::tool::Tool {
+            $crate::tools::tool::make_tool(
+                $name,
+                $description,
+                $crate::tools::tool::build_string_params_schema(
+                    &[$(($req_name, $req_desc)),*],
+                    &[$(($opt_name, $opt_desc, $opt_default)),*],
+                ),
+                $handler,
+            )
+        }
+    };
+
+    // Variant with no optional params (common case)
+    (
+        $entry_fn:ident, $name:expr, $description:expr,
+        required: [$(($req_name:expr, $req_desc:expr)),* $(,)?],
+        handler: $handler:expr
+    ) => {
+        define_tool! {
+            $entry_fn, $name, $description,
+            required: [$(($req_name, $req_desc)),*],
+            optional: [],
+            handler: $handler
+        }
+    };
+}
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub struct Tool {

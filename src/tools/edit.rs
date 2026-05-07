@@ -1,24 +1,13 @@
 use std::collections::HashMap;
 use std::fs;
 
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
+use crate::define_tool;
+use crate::extract_args;
+use crate::tools::tool::BoxFuture;
 
 pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let path = match require_arg(&args, "path") {
-            Ok(p) => p,
-            Err(e) => return e,
-        };
-
-        let old_str = match require_arg(&args, "old_str") {
-            Ok(s) => s,
-            Err(e) => return e,
-        };
-
-        let new_str = match require_arg(&args, "new_str") {
-            Ok(s) => s,
-            Err(e) => return e,
-        };
+        extract_args!(args, path, old_str, new_str);
 
         // Read the file
         let content = match fs::read_to_string(&path) {
@@ -58,21 +47,13 @@ pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     })
 }
 
-pub fn edit_tool_entry() -> Tool {
-    make_tool(
-        "edit",
-        "Edit a file by finding an exact string and replacing it with new text. The old_str must appear exactly once in the file. Use this for targeted edits instead of rewriting the entire file.",
-        build_string_params_schema(
-            &[
-                ("path", "The absolute path to the file to edit"),
-                (
-                    "old_str",
-                    "The exact string to find in the file (must appear exactly once)",
-                ),
-                ("new_str", "The replacement string"),
-            ],
-            &[],
-        ),
-        edit_tool,
-    )
-}
+define_tool!(
+    edit_tool_entry, "edit",
+    "Edit a file by finding an exact string and replacing it with new text. The old_str must appear exactly once in the file. Use this for targeted edits instead of rewriting the entire file.",
+    required: [
+        ("path", "The absolute path to the file to edit"),
+        ("old_str", "The exact string to find in the file (must appear exactly once)"),
+        ("new_str", "The replacement string"),
+    ],
+    handler: edit_tool
+);

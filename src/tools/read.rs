@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 
-use crate::tools::tool::{BoxFuture, Tool, build_string_params_schema, make_tool, require_arg};
+use crate::define_tool;
+use crate::extract_args;
+use crate::tools::tool::BoxFuture;
 
 pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
-        let path = match require_arg(&args, "path") {
-            Ok(p) => p,
-            Err(e) => return e,
-        };
+        extract_args!(args, path);
 
         // Check if partial reading is requested
         let from = args.get("from").and_then(|f| f.parse::<usize>().ok());
@@ -55,21 +54,13 @@ fn read_partial(path: &str, from: usize, to: usize) -> String {
     }
 }
 
-pub fn read_tool_entry() -> Tool {
-    make_tool(
-        "read",
-        "Read file content. Returns the entire file or a specific line range if from/to are provided.",
-        build_string_params_schema(
-            &[("path", "The absolute path to the file to read")],
-            &[
-                ("from", "Starting line number (0-based, optional)", "0"),
-                (
-                    "to",
-                    "Number of lines to read (optional, reads entire file if omitted)",
-                    "",
-                ),
-            ],
-        ),
-        read_tool,
-    )
-}
+define_tool!(
+    read_tool_entry, "read",
+    "Read file content. Returns the entire file or a specific line range if from/to are provided.",
+    required: [("path", "The absolute path to the file to read")],
+    optional: [
+        ("from", "Starting line number (0-based, optional)", "0"),
+        ("to", "Number of lines to read (optional, reads entire file if omitted)", ""),
+    ],
+    handler: read_tool
+);
