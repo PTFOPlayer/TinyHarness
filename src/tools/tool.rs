@@ -158,8 +158,7 @@ pub fn build_string_params_schema(
         "additionalProperties": false
     });
 
-    serde_json::from_value(schema_value)
-        .unwrap_or_else(|_| serde_json::from_value(serde_json::json!(true)).unwrap())
+    serde_json::from_value(schema_value).unwrap()
 }
 
 /// Convenience constructor for creating a `Tool` with a string-parameters schema.

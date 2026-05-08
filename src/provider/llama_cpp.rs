@@ -43,4 +43,8 @@ impl Provider for LlamaCppProvider {
     ) {
         self.inner.chat(messages, prompt, send, tools).await;
     }
+
+    fn last_token_usage(&self) -> Option<crate::provider::TokenUsage> {
+        self.inner.last_token_usage()
+    }
 }

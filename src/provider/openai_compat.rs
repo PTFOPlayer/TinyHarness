@@ -18,6 +18,7 @@ pub struct OpenAiCompatInner {
     pub client: Client,
     pub base_url: String,
     pub model: Option<String>,
+    pub last_usage: Option<crate::provider::TokenUsage>,
 }
 
 impl OpenAiCompatInner {
@@ -31,6 +32,7 @@ impl OpenAiCompatInner {
             client,
             base_url,
             model: None,
+            last_usage: None,
         }
     }
 
@@ -54,6 +56,14 @@ impl OpenAiCompatInner {
 
     pub fn current_model(&self) -> Option<String> {
         self.model.clone()
+    }
+
+    pub fn last_token_usage(&self) -> Option<crate::provider::TokenUsage> {
+        self.last_usage.clone()
+    }
+
+    pub fn set_last_token_usage(&mut self, usage: Option<crate::provider::TokenUsage>) {
+        self.last_usage = usage;
     }
 
     /// Return the `/v1/chat/completions` URL for this server.
@@ -81,7 +91,7 @@ impl OpenAiCompatInner {
 
     /// Stream chat completions using the OpenAI-compatible API.
     pub async fn chat(
-        &self,
+        &mut self,
         messages: Vec<Message>,
         _prompt: String,
         send: Sender<ChatMessageResponse>,
@@ -98,7 +108,8 @@ impl OpenAiCompatInner {
             tools: openai_tools,
         };
 
-        stream_chat_completions(&self.client, &self.chat_url(), &body, &send).await;
+        let usage = stream_chat_completions(&self.client, &self.chat_url(), &body, &send).await;
+        self.last_usage = usage;
     }
 }
 
@@ -177,6 +188,18 @@ pub struct Delta {
 pub struct StreamChunk {
     #[serde(default)]
     pub choices: Vec<ChunkChoice>,
+    #[serde(default)]
+    pub usage: Option<OpenAIUsage>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct OpenAIUsage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    #[serde(default)]
+    pub total_tokens: u32,
 }
 
 // ── Model list response types ──
@@ -260,12 +283,13 @@ pub fn to_openai_tool(ti: ToolInfo) -> OpenAITool {
 
 /// Stream chat completions from an OpenAI-compatible endpoint.
 /// Returns accumulated tool calls and final content via the sender.
+/// Also returns the token usage if available.
 pub async fn stream_chat_completions(
     client: &reqwest::Client,
     url: &str,
     body: &ChatRequest,
     send: &Sender<ChatMessageResponse>,
-) {
+) -> Option<crate::provider::TokenUsage> {
     let response = match client.post(url).json(body).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -277,9 +301,10 @@ pub async fn stream_chat_completions(
                     },
                     done: true,
                     is_error: true,
+                    usage: None,
                 })
                 .await;
-            return;
+            return None;
         }
     };
 
@@ -288,6 +313,7 @@ pub async fn stream_chat_completions(
 
     let mut acc_tool_calls: HashMap<usize, OpenAIToolCall> = HashMap::new();
     let mut response_content = String::new();
+    let mut token_usage: Option<crate::provider::TokenUsage> = None;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
@@ -302,6 +328,7 @@ pub async fn stream_chat_completions(
                         },
                         done: true,
                         is_error: true,
+                        usage: None,
                     })
                     .await;
                 break;
@@ -324,6 +351,15 @@ pub async fn stream_chat_completions(
                     if let Some(data) = line.strip_prefix("data: ")
                         && let Ok(chunk) = serde_json::from_str::<StreamChunk>(data)
                     {
+                        // Capture token usage if present (usually in the final chunk)
+                        if let Some(usage) = &chunk.usage {
+                            token_usage = Some(crate::provider::TokenUsage {
+                                prompt_tokens: usage.prompt_tokens,
+                                completion_tokens: usage.completion_tokens,
+                                total_tokens: usage.total_tokens,
+                            });
+                        }
+
                         for choice in chunk.choices {
                             if let Some(content) = &choice.delta.content {
                                 response_content.push_str(content);
@@ -363,6 +399,7 @@ pub async fn stream_chat_completions(
                     },
                     done: false,
                     is_error: false,
+                    usage: None,
                 })
                 .await;
             response_content.clear();
@@ -387,6 +424,7 @@ pub async fn stream_chat_completions(
         vec![]
     };
 
+    // Send the final response with tool calls and token usage
     let _ = send
         .send(ChatMessageResponse {
             message: ChatMessage {
@@ -395,6 +433,9 @@ pub async fn stream_chat_completions(
             },
             done: true,
             is_error: false,
+            usage: token_usage.clone(),
         })
         .await;
+
+    token_usage
 }

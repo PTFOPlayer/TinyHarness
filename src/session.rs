@@ -62,6 +62,21 @@ fn now_timestamp() -> u64 {
         .as_secs()
 }
 
+/// Read the metadata entry from the first line of a session file.
+fn read_session_meta(path: &PathBuf) -> Option<SessionMeta> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = io::BufReader::new(file);
+    let mut first_line = String::new();
+    if reader.read_line(&mut first_line).ok()? == 0 {
+        return None;
+    }
+    if let Ok(SessionEntry::Meta(meta)) = serde_json::from_str::<SessionEntry>(first_line.trim()) {
+        Some(meta)
+    } else {
+        None
+    }
+}
+
 // ── Session handle ─────────────────────────────────────────────────────────
 
 /// Manages a session's lifecycle: writing entries to the JSONL file.
@@ -180,16 +195,7 @@ impl Session {
                 continue;
             }
 
-            // Peek at the first line to get metadata
-            let file = fs::File::open(&path).ok()?;
-            let mut reader = io::BufReader::new(file);
-            let mut first_line = String::new();
-            if reader.read_line(&mut first_line).ok()? == 0 {
-                continue;
-            }
-
-            if let Ok(SessionEntry::Meta(meta)) =
-                serde_json::from_str::<SessionEntry>(first_line.trim())
+            if let Some(meta) = read_session_meta(&path)
                 && meta.working_dir == working_dir
             {
                 match &mut best {
@@ -239,35 +245,21 @@ impl Session {
             return Vec::new();
         }
 
-        let entries = fs::read_dir(&dir).ok();
         let mut sessions: Vec<SessionMeta> = Vec::new();
 
-        if let Some(entries) = entries {
+        if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                     continue;
                 }
 
-                let file = match fs::File::open(&path) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let mut reader = io::BufReader::new(file);
-                let mut first_line = String::new();
-                if reader.read_line(&mut first_line).ok().unwrap_or(0) == 0 {
-                    continue;
-                }
-
-                if let Ok(SessionEntry::Meta(meta)) =
-                    serde_json::from_str::<SessionEntry>(first_line.trim())
-                {
+                if let Some(meta) = read_session_meta(&path) {
                     sessions.push(meta);
                 }
             }
         }
 
-        // Sort by updated_at descending (most recent first)
         sessions.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
         sessions
     }

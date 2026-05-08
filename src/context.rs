@@ -47,20 +47,20 @@ impl WorkspaceContext {
     pub fn collect() -> Self {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let project_type = detect_project_type(&root);
-        let project_name = detect_project_name(&root, &project_type);
+        let project_name = detect_project_name(&root, project_type);
         let structure = list_top_level(&root);
         let is_git_repo = root.join(".git").is_dir();
-        let (build_command, test_command) = detect_commands(&project_type);
+        let (build_command, test_command) = detect_commands(project_type);
         let project_md = discover_project_md(&root);
 
         WorkspaceContext {
             root,
-            project_type,
+            project_type: project_type.to_string(),
             project_name,
             structure,
             is_git_repo,
-            build_command,
-            test_command,
+            build_command: build_command.to_string(),
+            test_command: test_command.to_string(),
             project_md,
         }
     }
@@ -97,12 +97,8 @@ impl WorkspaceContext {
                 .to_string(),
         );
 
-        // Inject project instruction file content
         if let Some((filename, content)) = &self.project_md {
-            lines.push(format!(
-                "\n---\n# Project Instructions (from {})\n",
-                filename
-            ));
+            lines.push(format!("\n---\n# Project Instructions (from {filename})\n"));
             lines.push(content.clone());
         }
 
@@ -110,49 +106,60 @@ impl WorkspaceContext {
     }
 }
 
-fn detect_project_type(root: &Path) -> String {
+fn detect_project_type(root: &Path) -> &'static str {
     if root.join("Cargo.toml").exists() {
-        "Rust".to_string()
+        "Rust"
     } else if root.join("package.json").exists() {
-        "Node.js".to_string()
+        "Node.js"
     } else if root.join("setup.py").exists() || root.join("pyproject.toml").exists() {
-        "Python".to_string()
+        "Python"
     } else if root.join("go.mod").exists() {
-        "Go".to_string()
+        "Go"
     } else if root.join("pom.xml").exists() || root.join("build.gradle").exists() {
-        "Java".to_string()
+        "Java"
     } else if root.join("CMakeLists.txt").exists() {
-        "C/C++ (CMake)".to_string()
+        "C/C++ (CMake)"
     } else if root.join("Makefile").exists() {
-        "C/C++ (Make)".to_string()
+        "C/C++ (Make)"
     } else {
-        "Unknown".to_string()
+        "Unknown"
     }
 }
 
+/// Extract a quoted field value (supports both double and single quotes).
+fn extract_quoted_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let trimmed = line.trim();
+    for (prefix, quote) in [
+        (format!("{} = \"", key), '"'),
+        (format!("{} = '", key), '\''),
+    ] {
+        if let Some(name) = trimmed
+            .strip_prefix(&prefix)
+            .and_then(|n| n.find(quote).map(|end| &n[..end]))
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn detect_project_name(root: &Path, project_type: &str) -> String {
+    let fallback = || {
+        root.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string())
+    };
+
     match project_type {
         "Rust" => {
             if let Ok(content) = fs::read_to_string(root.join("Cargo.toml")) {
                 for line in content.lines() {
-                    let trimmed = line.trim();
-                    if let Some(name) = trimmed
-                        .strip_prefix("name = \"")
-                        .and_then(|n| n.find('"').map(|end| &n[..end]))
-                    {
-                        return name.to_string();
-                    }
-                    if let Some(name) = trimmed
-                        .strip_prefix("name = '")
-                        .and_then(|n| n.find('\'').map(|end| &n[..end]))
-                    {
+                    if let Some(name) = extract_quoted_field(line, "name") {
                         return name.to_string();
                     }
                 }
             }
-            root.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Unknown".to_string())
+            fallback()
         }
         "Node.js" => {
             if let Ok(content) = fs::read_to_string(root.join("package.json"))
@@ -161,14 +168,9 @@ fn detect_project_name(root: &Path, project_type: &str) -> String {
             {
                 return name.to_string();
             }
-            root.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Unknown".to_string())
+            fallback()
         }
-        _ => root
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Unknown".to_string()),
+        _ => fallback(),
     }
 }
 
@@ -220,13 +222,13 @@ fn list_top_level(root: &Path) -> Vec<String> {
     entries
 }
 
-fn detect_commands(project_type: &str) -> (String, String) {
+fn detect_commands(project_type: &str) -> (&'static str, &'static str) {
     match project_type {
-        "Rust" => ("cargo build".to_string(), "cargo test".to_string()),
-        "Node.js" => ("npm run build".to_string(), "npm test".to_string()),
-        "Python" => ("pip install -e .".to_string(), "pytest".to_string()),
-        "Go" => ("go build ./...".to_string(), "go test ./...".to_string()),
-        _ => (String::new(), String::new()),
+        "Rust" => ("cargo build", "cargo test"),
+        "Node.js" => ("npm run build", "npm test"),
+        "Python" => ("pip install -e .", "pytest"),
+        "Go" => ("go build ./...", "go test ./..."),
+        _ => ("", ""),
     }
 }
 

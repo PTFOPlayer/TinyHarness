@@ -47,6 +47,7 @@ pub enum Command {
     Init,
     Timeout(String),
     Retries(String),
+    ContextLimit(String),
 }
 
 /// Result of dispatching a command.
@@ -173,6 +174,7 @@ impl CommandDispatcher {
             "/init" => Some(Command::Init),
             "/timeout" => Some(Command::Timeout(arg.unwrap_or_default())),
             "/retries" => Some(Command::Retries(arg.unwrap_or_default())),
+            "/contextlimit" => Some(Command::ContextLimit(arg.unwrap_or_default())),
             _ => None,
         }
     }
@@ -205,6 +207,7 @@ impl CommandDispatcher {
             "/init",
             "/timeout",
             "/retries",
+            "/contextlimit",
         ]
     }
 
@@ -274,6 +277,10 @@ impl CommandDispatcher {
             (
                 "/retries [count]",
                 "Show or set the maximum number of Ollama request retries (default: 3)",
+            ),
+            (
+                "/contextlimit [tokens]",
+                "Show or set the context limit for warning calculations (default: model default)",
             ),
         ]
     }
@@ -481,6 +488,55 @@ impl CommandDispatcher {
                     }
                     Err(_) => Err(format!(
                         "Invalid retries value: '{}'. Use a number, e.g. /retries 5",
+                        arg
+                    )),
+                }
+            }
+            Command::ContextLimit(arg) => {
+                if arg.is_empty() {
+                    let settings = Settings::load();
+                    match settings.context_limit {
+                        Some(limit) => {
+                            println!(
+                                "{}Context limit for warnings: {}{} tokens{}",
+                                BOLD, BLUE, limit, RESET
+                            );
+                        }
+                        None => {
+                            println!(
+                                "{}Context limit: {}auto (using model default){}",
+                                BOLD, GRAY, RESET
+                            );
+                        }
+                    }
+                    return Ok(CommandResult::Ok);
+                }
+                if arg == "auto" || arg == "default" {
+                    // Clear the limit
+                    let mut settings = Settings::load();
+                    settings.context_limit = None;
+                    settings.save();
+                    println!(
+                        "{}Context limit cleared. Using model default for warnings.{}",
+                        BOLD, RESET
+                    );
+                    return Ok(CommandResult::Ok);
+                }
+                match arg.parse::<u32>() {
+                    Ok(limit) if limit > 0 => {
+                        // Update settings
+                        let mut settings = Settings::load();
+                        settings.context_limit = Some(limit);
+                        settings.save();
+                        println!(
+                            "{}Context limit set to {}{} tokens{} for warning calculations.{}",
+                            BOLD, BLUE, limit, RESET, RESET
+                        );
+                        Ok(CommandResult::Ok)
+                    }
+                    Ok(_) => Err("Context limit must be a positive number of tokens.".to_string()),
+                    Err(_) => Err(format!(
+                        "Invalid context limit value: '{}'. Use a number of tokens, e.g. /contextlimit 32768, or 'auto' to use model default",
                         arg
                     )),
                 }

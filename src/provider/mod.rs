@@ -32,6 +32,16 @@ pub struct ChatMessageResponse {
     pub done: bool,
     #[serde(default)]
     pub is_error: bool,
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+}
+
+/// Token usage information from the provider.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -103,4 +113,9 @@ pub trait Provider {
 
     /// Set the maximum number of retries. Only meaningful for providers that use retries.
     fn set_retries(&mut self, _max_retries: u32) {}
+
+    /// Get the token usage from the last request, if available.
+    fn last_token_usage(&self) -> Option<TokenUsage> {
+        None
+    }
 }

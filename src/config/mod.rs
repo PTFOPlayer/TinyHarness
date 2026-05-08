@@ -46,6 +46,8 @@ pub struct Settings {
     pub ollama_timeout_secs: u64,
     /// Maximum number of retries for Ollama requests (default: 3)
     pub ollama_max_retries: u32,
+    /// Context limit for warning calculations only (default: None, uses model default)
+    pub context_limit: Option<u32>,
 }
 
 impl Default for Settings {
@@ -57,6 +59,7 @@ impl Default for Settings {
             ollama_api_key: None,
             ollama_timeout_secs: 5,
             ollama_max_retries: 3,
+            context_limit: None,
         }
     }
 }

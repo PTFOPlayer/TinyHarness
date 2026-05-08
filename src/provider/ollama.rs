@@ -44,6 +44,12 @@ impl From<Message> for OllamaChatMessage {
 }
 
 fn from_ollama_response(resp: OllamaChatMessageResponse) -> ChatMessageResponse {
+    let usage = resp.final_data.as_ref().map(|data| super::TokenUsage {
+        prompt_tokens: data.prompt_eval_count as u32,
+        completion_tokens: data.eval_count as u32,
+        total_tokens: (data.prompt_eval_count + data.eval_count) as u32,
+    });
+
     ChatMessageResponse {
         message: ChatMessage {
             content: resp.message.content,
@@ -61,6 +67,7 @@ fn from_ollama_response(resp: OllamaChatMessageResponse) -> ChatMessageResponse 
         },
         done: resp.done,
         is_error: false,
+        usage,
     }
 }
 
@@ -80,6 +87,7 @@ pub struct OllamaProvider {
     model: Option<String>,
     timeout_secs: u64,
     max_retries: u32,
+    last_usage: Option<super::TokenUsage>,
 }
 
 impl OllamaProvider {
@@ -90,6 +98,7 @@ impl OllamaProvider {
             model: None,
             timeout_secs,
             max_retries,
+            last_usage: None,
         }
     }
 }
@@ -126,6 +135,10 @@ impl Provider for OllamaProvider {
 
     fn set_retries(&mut self, max_retries: u32) {
         self.max_retries = max_retries;
+    }
+
+    fn last_token_usage(&self) -> Option<super::TokenUsage> {
+        self.last_usage.clone()
     }
 
     async fn chat(
@@ -175,6 +188,7 @@ impl Provider for OllamaProvider {
                                 },
                                 done: true,
                                 is_error: true,
+                                usage: None,
                             })
                             .await;
                         return;
@@ -193,6 +207,7 @@ impl Provider for OllamaProvider {
                                 },
                                 done: true,
                                 is_error: true,
+                                usage: None,
                             })
                             .await;
                         return;
@@ -210,6 +225,10 @@ impl Provider for OllamaProvider {
                 Ok(res) => {
                     let ours = from_ollama_response(res);
                     let is_done = ours.done;
+                    // Store usage info from the final response
+                    if is_done && let Some(usage) = &ours.usage {
+                        self.last_usage = Some(usage.clone());
+                    }
                     if send.send(ours).await.is_err() {
                         break;
                     }
@@ -227,6 +246,7 @@ impl Provider for OllamaProvider {
                             },
                             done: true,
                             is_error: true,
+                            usage: None,
                         })
                         .await;
                     break;

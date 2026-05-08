@@ -7,16 +7,20 @@ use std::{
 use rustyline::Editor;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::style::*;
 use crate::{
     commands::{CommandDispatcher, CommandResult, compact::execute_compact, init},
     mode::AgentMode,
     provider::{ChatMessageResponse, Message, Provider, Role, ToolCall, ToolInfo},
     session::Session,
+    token::{
+        ContextWindowSize, check_context_warning, estimate_conversation_tokens, estimate_tokens,
+        format_token_count,
+    },
     tools::ToolManager,
     ui::confirm::prompt_tool_confirmation,
     ui::input::CommandHelper,
 };
+use crate::{provider::TokenUsage, style::*};
 
 pub async fn run_agent_loop(
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
@@ -29,10 +33,27 @@ pub async fn run_agent_loop(
     let (send, mut recv) = mpsc::channel::<ChatMessageResponse>(1024);
 
     let mut stdout = io::stdout();
-    stdout.write_all(format!("{}╔════════════════════════════════════════════════════════╗{}\n", BOX_COLOR, RESET).as_bytes())?;
-    stdout.write_all(format!("{}║{}           {}TinyHarness AI Assistant{}                     {}║{}\n", BOX_COLOR, RESET, BOLD, TITLE_COLOR, BOX_COLOR, RESET).as_bytes())?;
-    stdout
-        .write_all(format!("{}╚════════════════════════════════════════════════════════╝{}\n\n", BOX_COLOR, RESET).as_bytes())?;
+    stdout.write_all(
+        format!(
+            "{}╔════════════════════════════════════════════════════════╗{}\n",
+            BOX_COLOR, RESET
+        )
+        .as_bytes(),
+    )?;
+    stdout.write_all(
+        format!(
+            "{}║{}           {}TinyHarness AI Assistant{}                     {}║{}\n",
+            BOX_COLOR, RESET, BOLD, TITLE_COLOR, BOX_COLOR, RESET
+        )
+        .as_bytes(),
+    )?;
+    stdout.write_all(
+        format!(
+            "{}╚════════════════════════════════════════════════════════╝{}\n\n",
+            BOX_COLOR, RESET
+        )
+        .as_bytes(),
+    )?;
     stdout.write_all(
         format!(
             "{}Tip:{} Type {} to see available commands\n\n",
@@ -209,6 +230,7 @@ pub async fn run_agent_loop(
         // auto_accept persists across all agent iterations within this user turn,
         // so that pressing 'a' once auto-accepts all subsequent tool calls.
         let mut auto_accept = false;
+        let mut token_usage: Option<TokenUsage> = None;
 
         loop {
             let messages_cloned = messages.clone();
@@ -247,6 +269,11 @@ pub async fn run_agent_loop(
 
                 if msg.is_error {
                     is_error = true;
+                }
+
+                // Capture token usage from the final response
+                if msg.done && token_usage.is_none() {
+                    token_usage = msg.usage.clone();
                 }
 
                 if !msg.message.content.is_empty() {
@@ -331,21 +358,80 @@ pub async fn run_agent_loop(
             });
             session.append_message(messages.last().unwrap());
 
-            // Warn if conversation is getting long
-            if messages.len() > 30 {
-                writeln!(
-                    stdout,
-                    "\n{}{}⚠ Context is getting large ({} messages). Consider using {}/compact{} to summarize.{}",
-                    YELLOW,
-                    BOLD,
-                    messages.len(),
-                    BLUE,
-                    YELLOW,
-                    RESET
-                )?;
-            }
-
             break;
+        }
+
+        // Display token usage after turn is complete (always show, with estimation if needed)
+        let estimated_total = estimate_conversation_tokens(messages);
+
+        // Use configured context limit for warnings, or fall back to default
+        let settings = crate::config::Settings::load();
+        let context_size = settings
+            .context_limit
+            .map(ContextWindowSize::Custom)
+            .unwrap_or_else(ContextWindowSize::default_size);
+        let usage_pct = context_size.usage_percentage(estimated_total);
+
+        let is_estimated = token_usage.is_none();
+        let (prompt_tokens, completion_tokens, total_tokens) = if let Some(usage) = &token_usage {
+            (
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
+            )
+        } else {
+            // Estimate if provider didn't return usage
+            let prompt_est =
+                estimate_conversation_tokens(&messages[..messages.len().saturating_sub(1)]);
+            let last_msg = messages.last().map(|m| m.content.as_str()).unwrap_or("");
+            let completion_est = estimate_tokens(last_msg);
+            (prompt_est, completion_est, prompt_est + completion_est)
+        };
+
+        let estimation_marker = if is_estimated { " (estimated)" } else { "" };
+
+        writeln!(
+            stdout,
+            "\n{}{}Tokens{}{}:{} prompt={}, completion={}, total={} | {}{}{} of context ({:.1}%){}",
+            DIM,
+            BOLD,
+            if is_estimated { YELLOW } else { RESET },
+            estimation_marker,
+            RESET,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            if usage_pct >= 90.0 {
+                RED
+            } else if usage_pct >= 70.0 {
+                YELLOW
+            } else {
+                GRAY
+            },
+            format_token_count(estimated_total),
+            RESET,
+            usage_pct,
+            RESET
+        )?;
+
+        // Show context warning if needed
+        if let Some(warning) = check_context_warning(estimated_total, context_size) {
+            let (icon, color) = if warning.is_critical() {
+                ("⚠", RED)
+            } else {
+                ("⚠", YELLOW)
+            };
+            writeln!(
+                stdout,
+                "{}{}{} Context window {:.1}% full. Consider using {}/compact{} to free space.{}",
+                icon,
+                color,
+                BOLD,
+                warning.percentage(),
+                BLUE,
+                color,
+                RESET
+            )?;
         }
 
         stdout.write_all("\n".as_bytes())?;
@@ -801,6 +887,15 @@ async fn handle_auto_compact<W: Write>(
     Ok(())
 }
 
+/// Extract the result body from a tool result message.
+fn extract_tool_result_body<'a>(content: &'a str, tool_name: &str) -> &'a str {
+    let prefix = format!("Tool '{tool_name}' result:\n");
+    content
+        .strip_prefix(&prefix)
+        .or_else(|| content.strip_prefix(&prefix)) // Redundant but kept for safety
+        .unwrap_or(content)
+}
+
 /// Print the conversation history from loaded messages so the user can see
 /// what was discussed in the resumed session. The format mimics the live
 /// conversation experience so it feels like you're picking up where you left off.
@@ -814,9 +909,7 @@ fn print_conversation_history<W: Write>(
 
     for msg in messages {
         match msg.role {
-            Role::System => {
-                // System prompt is internal — skip it in the replay.
-            }
+            Role::System => {} // System prompt is internal — skip it in the replay.
             Role::User => {
                 writeln!(stdout, "{}> {}{}", BLUE, msg.content, RESET)?;
             }
@@ -834,55 +927,19 @@ fn print_conversation_history<W: Write>(
                 writeln!(stdout)?;
             }
             Role::Tool => {
-                // Tool results are shown inline during live use as
-                //   ▶ Executing <name>...
-                //   multiline output
-                // Find the tool name embedded in the content (format: "Tool '<name>' result:\n...")
                 let tool_name = msg.content.split('\'').nth(1).unwrap_or("tool");
+                let result_body = extract_tool_result_body(&msg.content, tool_name);
 
-                // For tools that return potentially large listings, only display a summary
-                // to avoid dumping large output during conversation replay.
                 if tool_name == "read" {
-                    // The read tool result format is:
-                    //   Tool 'read' result:\nRead 'path' (N lines)\n<full content>
-                    // We want just the "Read 'path' (N lines)" summary.
-                    let result_body = msg
-                        .content
-                        .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        .or_else(|| {
-                            msg.content
-                                .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        })
-                        .unwrap_or(&msg.content);
                     let summary = result_body.lines().next().unwrap_or("(empty result)");
                     writeln!(stdout, "    {}", summary)?;
-                } else if tool_name == "ls"
-                    || tool_name == "grep"
-                    || tool_name == "glob"
-                    || tool_name == "git_status"
-                    || tool_name == "git_diff"
-                {
-                    let result_body = msg
-                        .content
-                        .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        .or_else(|| {
-                            msg.content
-                                .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        })
-                        .unwrap_or(&msg.content);
+                } else if matches!(
+                    tool_name,
+                    "ls" | "grep" | "glob" | "git_status" | "git_diff"
+                ) {
                     let summary = summarize_listing_result(result_body, tool_name);
                     writeln!(stdout, "    {}", summary)?;
                 } else {
-                    let result_body = msg
-                        .content
-                        .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        .or_else(|| {
-                            msg.content
-                                .strip_prefix(&format!("Tool '{}' result:\n", tool_name))
-                        })
-                        .unwrap_or(&msg.content);
-
-                    // Display full result, multiline with word-wrap
                     crate::ui::wrap::write_wrapped_lines(
                         stdout,
                         result_body,

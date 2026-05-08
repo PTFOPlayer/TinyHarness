@@ -47,6 +47,17 @@ pub fn execute() {
         BOLD, RESET, BLUE, settings.ollama_max_retries, RESET
     );
 
+    match settings.context_limit {
+        Some(limit) => println!(
+            "{}│{} Ctx Limit: {}{} tokens{}",
+            BOLD, RESET, BLUE, limit, RESET
+        ),
+        None => println!(
+            "{}│{} Ctx Limit: {}auto (model default){}",
+            BOLD, RESET, GRAY, RESET
+        ),
+    }
+
     println!(
         "{}╰────────────────────────────────────────────╯{}",
         BOLD, RESET

@@ -6,6 +6,7 @@ pub mod mode;
 pub mod provider;
 pub mod session;
 pub mod style;
+pub mod token;
 pub mod tools;
 pub mod ui;
 
@@ -52,15 +53,12 @@ fn default_url_for_provider(kind: ProviderKind) -> &'static str {
 
 /// Determine the provider kind from CLI flags or saved settings.
 fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
-    let has_cli_flag = args.ollama || args.llama_cpp || args.vllm;
-    if has_cli_flag {
-        if args.llama_cpp {
-            ProviderKind::LlamaCpp
-        } else if args.vllm {
-            ProviderKind::Vllm
-        } else {
-            ProviderKind::Ollama
-        }
+    if args.llama_cpp {
+        ProviderKind::LlamaCpp
+    } else if args.vllm {
+        ProviderKind::Vllm
+    } else if args.ollama {
+        ProviderKind::Ollama
     } else {
         settings.last_provider
     }

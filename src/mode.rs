@@ -12,7 +12,7 @@ pub enum AgentMode {
 }
 
 impl AgentMode {
-    pub fn system_prompt(&self) -> String {
+    pub fn system_prompt(&self) -> &'static str {
         match self {
             AgentMode::Casual => {
                 r#"
@@ -21,7 +21,6 @@ Keep your responses clear, concise, and conversational.
 You do not have access to any tools — just chat with the user.
 Avoid writing code unless the user explicitly asks for it.
 "#
-                .to_owned()
             }
             AgentMode::Planning => {
                 r#"
@@ -54,7 +53,6 @@ Guidelines:
 
 Focus on producing a clear implementation plan that a developer could follow.
 "#
-                .to_owned()
             }
             AgentMode::Agent => {
                 r#"
@@ -82,7 +80,6 @@ IMPORTANT:
 - Before using write, edit, or run, first explain to the user what you want to do and ask for their approval. The harness will prompt them for confirmation automatically, but you should still explain your plan first.
 - web_search requires an Ollama API key — if it fails, ask the user to set one via /apikey.
 "#
-                .to_owned()
             }
             AgentMode::Research => {
                 r#"
@@ -116,7 +113,6 @@ Guidelines:
 
 Focus on providing accurate, well-researched answers with proper attribution.
 "#
-                .to_owned()
             }
         }
     }
