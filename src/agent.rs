@@ -1,7 +1,10 @@
 use std::{
     error::Error,
     io::{self, Write},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use rustyline::Editor;
@@ -33,6 +36,7 @@ pub async fn run_agent_loop(
     messages: &mut Vec<Message>,
     dispatcher: &mut CommandDispatcher,
     session: &mut Session,
+    interrupted: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn Error>> {
     let mut stdout = io::stdout();
     stdout.write_all(
@@ -82,6 +86,11 @@ pub async fn run_agent_loop(
     rl.load_history(&history_path).ok();
 
     loop {
+        // Clear any stale interrupt flag from a previous turn.
+        // The flag may be set from Ctrl+C during rustyline's blocking read,
+        // which we handle below by showing a hint and continuing.
+        interrupted.store(false, Ordering::SeqCst);
+
         let mode_label = dispatcher.current_mode.to_string();
         let msg_count = messages.len();
         let pinned_count = dispatcher.file_context.pinned_file_count();
@@ -105,6 +114,9 @@ pub async fn run_agent_loop(
                 trimmed
             }
             Err(rustyline::error::ReadlineError::Interrupted) => {
+                // Ctrl+C during input — just clear the flag (set by our handler)
+                // and show a hint. Don't exit the program.
+                interrupted.store(false, Ordering::SeqCst);
                 stdout.write_all("\n".as_bytes())?;
                 stdout.write_all(
                     format!(
@@ -246,36 +258,84 @@ pub async fn run_agent_loop(
             let mut tool_calls: Vec<ToolCall> = Vec::new();
             let mut received_done = false;
             let mut is_error = false;
+            let mut was_interrupted = false;
 
             stdout.write_all(ORANGE.as_bytes())?;
 
-            while let Some(msg) = recv.recv().await {
-                if !msg.message.tool_calls.is_empty() {
-                    tool_calls = msg.message.tool_calls.clone();
-                }
+            loop {
+                tokio::select! {
+                    msg = recv.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                if !msg.message.tool_calls.is_empty() {
+                                    tool_calls = msg.message.tool_calls.clone();
+                                }
 
-                if msg.done {
-                    received_done = true;
-                }
+                                if msg.done {
+                                    received_done = true;
+                                }
 
-                if msg.is_error {
-                    is_error = true;
-                }
+                                if msg.is_error {
+                                    is_error = true;
+                                }
 
-                // Capture token usage from the final response
-                if msg.done && token_usage.is_none() {
-                    token_usage = msg.usage.clone();
-                }
+                                // Capture token usage from the final response
+                                if msg.done && token_usage.is_none() {
+                                    token_usage = msg.usage.clone();
+                                }
 
-                if !msg.message.content.is_empty() {
-                    response_content.push_str(&msg.message.content);
-                    stdout.write_all(msg.message.content.as_bytes())?;
-                    stdout.flush()?;
-                }
+                                if !msg.message.content.is_empty() {
+                                    response_content.push_str(&msg.message.content);
+                                    stdout.write_all(msg.message.content.as_bytes())?;
+                                    stdout.flush()?;
+                                }
 
-                if received_done {
-                    break;
+                                if received_done {
+                                    break;
+                                }
+                            }
+                            None => {
+                                // Channel closed — treat as end of stream
+                                break;
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                        // Check if the user pressed Ctrl+C
+                        if interrupted.load(Ordering::SeqCst) {
+                            was_interrupted = true;
+                            break;
+                        }
+                    }
                 }
+            }
+
+            // Handle user interrupt (Ctrl+C during generation)
+            if was_interrupted {
+                interrupted.store(false, Ordering::SeqCst);
+                stdout.write_all(RESET.as_bytes())?;
+                writeln!(
+                    stdout,
+                    "\n{}⚠ Generation interrupted by user.{}",
+                    ORANGE, RESET
+                )?;
+                stdout.flush()?;
+
+                // Save any partial content as an assistant message so the
+                // conversation remains coherent for future turns.
+                if !response_content.is_empty() {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: response_content,
+                        tool_calls: vec![],
+                    });
+                    session.append_message(messages.last().unwrap());
+                } else {
+                    // No content was generated — remove the user message so
+                    // the next retry isn't confused by a dangling prompt.
+                    messages.pop();
+                }
+                break; // Break out of the inner generation loop, back to input prompt
             }
 
             if !received_done || is_error {
@@ -334,6 +394,7 @@ pub async fn run_agent_loop(
                 &mut auto_accept,
                 session,
                 Arc::clone(&provider),
+                interrupted,
             )
             .await?
             {
@@ -444,6 +505,7 @@ async fn handle_tool_calls<W: Write>(
     auto_accept: &mut bool,
     session: &mut Session,
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+    interrupted: &Arc<AtomicBool>,
 ) -> Result<bool, Box<dyn Error>> {
     if tool_calls.is_empty() {
         return Ok(false);
@@ -460,6 +522,18 @@ async fn handle_tool_calls<W: Write>(
     session.append_message(messages.last().unwrap());
 
     for call in tool_calls {
+        // Check for interrupt between tool calls
+        if interrupted.load(Ordering::SeqCst) {
+            interrupted.store(false, Ordering::SeqCst);
+            writeln!(
+                stdout,
+                "\n{}⚠ Tool execution interrupted by user.{}",
+                ORANGE, RESET
+            )?;
+            stdout.flush()?;
+            return Ok(true); // Signal that there are tool results in the conversation
+        }
+
         let needs_confirmation = tool_manager.needs_approval(&call.function.name);
 
         // Confirmation step

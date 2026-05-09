@@ -3,7 +3,11 @@ pub mod commands;
 pub mod style;
 pub mod ui;
 
-use std::{error::Error, sync::Arc};
+use std::{
+    error::Error,
+    sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use tinyharness_lib::{
     config::{ProviderKind, Settings, load_settings, save_settings},
@@ -160,6 +164,17 @@ fn create_initial_session(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Install Ctrl+C handler: set an atomic flag that the agent loop checks
+    // during streaming generation. This allows interrupting LLM responses
+    // without terminating the process.
+    let interrupted = Arc::new(AtomicBool::new(false));
+    ctrlc::set_handler({
+        let interrupted = Arc::clone(&interrupted);
+        move || {
+            interrupted.store(true, Ordering::SeqCst);
+        }
+    })?;
+
     let args = Args::parse();
 
     // Load saved settings (will be used as defaults when no CLI flags are given)
@@ -269,6 +284,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &mut messages,
         &mut dispatcher,
         &mut session,
+        &interrupted,
     )
     .await
 }

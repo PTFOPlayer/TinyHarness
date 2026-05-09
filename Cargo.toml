@@ -26,6 +26,7 @@ regex = "1.11.1"
 glob = "0.3.2"
 rustyline = { version = "18.0.0", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
+ctrlc = "3"
 
 [dev-dependencies]
 tempfile = "3"
