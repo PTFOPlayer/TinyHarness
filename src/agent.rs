@@ -158,6 +158,9 @@ pub async fn run_agent_loop(
         print_conversation_history(messages, &mut stdout)?;
     }
 
+    // Warn if the loaded session is near or over the context window limit.
+    print_context_load_warning(messages, &mut stdout)?;
+
     let helper = CommandHelper::new();
     let history_dir = std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".local/share/tinyharness"))
@@ -258,6 +261,8 @@ pub async fn run_agent_loop(
                                             dispatcher.refresh_system_prompt(messages);
                                             // Print loaded conversation history
                                             print_conversation_history(messages, &mut stdout)?;
+                                            // Warn if the loaded session is near or over the context window limit
+                                            print_context_load_warning(messages, &mut stdout)?;
                                         }
                                         Err(e) => {
                                             eprintln!("{}{}{}", RED, e, RESET);
@@ -1174,6 +1179,71 @@ fn extract_tool_result_body<'a>(content: &'a str, tool_name: &str) -> &'a str {
         .strip_prefix(&prefix)
         .or_else(|| content.strip_prefix(&prefix)) // Redundant but kept for safety
         .unwrap_or(content)
+}
+
+/// Print a warning if the loaded session's conversation is near or exceeding
+/// the context window limit. This helps the user understand why the model may
+/// behave oddly and nudges them to use `/compact`.
+fn print_context_load_warning<W: Write>(
+    messages: &[Message],
+    stdout: &mut W,
+) -> Result<(), Box<dyn Error>> {
+    if messages.len() <= 1 {
+        return Ok(());
+    }
+
+    let estimated_tokens = estimate_conversation_tokens(messages);
+    let settings = load_settings();
+    let context_size = settings
+        .context_limit
+        .map(ContextWindowSize::Custom)
+        .unwrap_or_else(ContextWindowSize::default_size);
+    let usage_pct = context_size.usage_percentage(estimated_tokens);
+
+    if usage_pct >= 90.0 {
+        // Exceeds or is very close to the context window
+        writeln!(
+            stdout,
+            "\n{}⚠ This session has {} messages ({}{}{}) — exceeds the context window!{}",
+            RED,
+            messages.len(),
+            BOLD,
+            format_token_count(estimated_tokens),
+            RED,
+            RESET
+        )?;
+        writeln!(
+            stdout,
+            "{}  The conversation may not work properly until you compact it.{}",
+            RED, RESET
+        )?;
+        writeln!(
+            stdout,
+            "{}  Use {}/compact{} [focus] to summarize older messages.{}",
+            RED, BOLD, RED, RESET
+        )?;
+    } else if usage_pct >= 70.0 {
+        // Warning zone
+        writeln!(
+            stdout,
+            "\n{}⚠ This session has {} messages ({}{}{}, {:.1}% of context).{}",
+            YELLOW,
+            messages.len(),
+            BOLD,
+            format_token_count(estimated_tokens),
+            YELLOW,
+            usage_pct,
+            RESET
+        )?;
+        writeln!(
+            stdout,
+            "{}  Consider using {}/compact{} to free context space.{}",
+            YELLOW, BOLD, YELLOW, RESET
+        )?;
+    }
+
+    stdout.flush()?;
+    Ok(())
 }
 
 /// Print the conversation history from loaded messages so the user can see
