@@ -22,6 +22,7 @@ fn subcommand_completions(cmd: &str) -> Vec<&'static str> {
             "resetdeny",
             "undeny",
         ],
+        "/session" => vec!["delete"],
         "/mode" => vec!["agent", "casual", "planning", "research"],
         "/settings" => vec!["all"],
         "/autoaccept" => vec!["off", "on"],

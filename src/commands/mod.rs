@@ -37,6 +37,7 @@ pub enum Command {
     Exit,
     Sessions,
     SessionLoad(String),
+    SessionDelete(String),
     Rename(String),
     Settings(Option<String>),
     ApiKey(String),
@@ -169,7 +170,16 @@ impl CommandDispatcher {
             "/context" => Some(Command::Context),
             "/exit" | "/quit" => Some(Command::Exit),
             "/sessions" => Some(Command::Sessions),
-            "/session" => Some(Command::SessionLoad(arg.unwrap_or_default())),
+            "/session" => {
+                let arg = arg.unwrap_or_default();
+                // Check for subcommands: delete, load (default)
+                if arg.starts_with("delete ") || arg == "delete" {
+                    let id = arg.strip_prefix("delete ").unwrap_or("").trim().to_string();
+                    Some(Command::SessionDelete(id))
+                } else {
+                    Some(Command::SessionLoad(arg))
+                }
+            }
             "/rename" => Some(Command::Rename(arg.unwrap_or_default())),
             "/settings" => Some(Command::Settings(arg)),
             "/apikey" => {
@@ -284,6 +294,10 @@ impl CommandDispatcher {
             (
                 "/session <id>",
                 "Switch to an existing session (accepts ID prefix)",
+            ),
+            (
+                "/session delete <id|name>",
+                "Delete a session (with confirmation)",
             ),
             ("/rename <name>", "Rename the current session"),
             (
@@ -429,6 +443,16 @@ impl CommandDispatcher {
                     );
                 }
                 Ok(CommandResult::SwitchSession(id_prefix))
+            }
+            Command::SessionDelete(id_or_name) => {
+                if id_or_name.is_empty() {
+                    return Err(
+                        "Usage: /session delete <id|name> — use /sessions to list available sessions"
+                            .to_string(),
+                    );
+                }
+                sessions::execute_delete(&id_or_name, self.session_id.as_deref());
+                Ok(CommandResult::Ok)
             }
             Command::Rename(name) => {
                 if name.is_empty() {

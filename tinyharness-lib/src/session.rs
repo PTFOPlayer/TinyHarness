@@ -302,6 +302,21 @@ impl SessionStore {
     pub fn dir(&self) -> &PathBuf {
         &self.dir
     }
+
+    /// Delete a session by its ID.
+    pub fn delete(&self, session_id: &str) -> Result<(), SessionError> {
+        let path = self.dir.join(format!("{}.jsonl", session_id));
+        
+        if !path.exists() {
+            return Err(SessionError::NotFound(format!(
+                "Session '{}' not found",
+                session_id
+            )));
+        }
+
+        fs::remove_file(&path)?;
+        Ok(())
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
