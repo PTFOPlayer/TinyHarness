@@ -61,40 +61,9 @@ pub async fn handle_tool_calls<W: Write>(
             return Ok(true);
         }
 
-        let needs_confirmation = tool_manager.needs_approval(&call.function.name);
-
-        // Load settings to check auto_accept_safe_commands preference and safe/denied commands
-        let settings = load_settings();
-        let auto_accept_safe_commands = settings.auto_accept_safe_commands;
-        let safe_commands = settings.get_safe_commands();
-        let denied_commands = settings.get_denied_commands();
-
-        // Confirmation step
-        let (approved, auto_accepted) = confirm_tool_call(
-            call,
-            needs_confirmation,
-            auto_accept,
-            stdout,
-            auto_accept_safe_commands,
-            &safe_commands,
-            &denied_commands,
-        )?;
-
-        if !approved {
-            let args_summary = super::display::format_args_summary(&call.function.arguments);
-            messages.push(Message {
-                role: Role::System,
-                content: format!(
-                    "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
-                    call.function.name, args_summary
-                ),
-                tool_calls: vec![],
-            });
-            session.append_message(messages.last().unwrap());
-            continue;
-        }
-
-        // Signal tools are handled specially by the agent loop
+        // Signal tools are handled specially by the agent loop — they have their
+        // own user interaction (question prompts the user, switch_mode changes
+        // mode, auto_compact compacts) so they skip the generic confirmation gate.
         if tool_manager.is_signal_tool(&call.function.name) {
             if let Some(event) =
                 tool_manager.parse_signal_event(&call.function.name, &call.function.arguments)
@@ -128,6 +97,39 @@ pub async fn handle_tool_calls<W: Write>(
                 });
                 session.append_message(messages.last().unwrap());
             }
+            continue;
+        }
+
+        let needs_confirmation = tool_manager.needs_approval(&call.function.name);
+
+        // Load settings to check auto_accept_safe_commands preference and safe/denied commands
+        let settings = load_settings();
+        let auto_accept_safe_commands = settings.auto_accept_safe_commands;
+        let safe_commands = settings.get_safe_commands();
+        let denied_commands = settings.get_denied_commands();
+
+        // Confirmation step
+        let (approved, auto_accepted) = confirm_tool_call(
+            call,
+            needs_confirmation,
+            auto_accept,
+            stdout,
+            auto_accept_safe_commands,
+            &safe_commands,
+            &denied_commands,
+        )?;
+
+        if !approved {
+            let args_summary = super::display::format_args_summary(&call.function.arguments);
+            messages.push(Message {
+                role: Role::System,
+                content: format!(
+                    "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
+                    call.function.name, args_summary
+                ),
+                tool_calls: vec![],
+            });
+            session.append_message(messages.last().unwrap());
             continue;
         }
 
@@ -408,12 +410,18 @@ fn handle_question<W: Write>(
             RESET
         )?;
     }
+    writeln!(stdout, "  │")?;
+    writeln!(
+        stdout,
+        "  │   {}Enter anything else to skip with a custom answer{}",
+        DIM, RESET
+    )?;
     writeln!(stdout, "  └{}──────────────────────────────{}", BOLD, RESET)?;
 
     let answer_count = answers.len();
     write!(
         stdout,
-        "  {}Your choice (1-{}): {}",
+        "  {}Your choice (1-{} or type to skip): {}",
         BOLD, answer_count, RESET
     )?;
     stdout.flush()?;
@@ -424,36 +432,54 @@ fn handle_question<W: Write>(
         .expect("Failed to read line");
     let input = input.trim();
 
-    // Parse the user's choice — by number or by text match
-    let selected_answer = if let Ok(num) = input.parse::<usize>() {
+    // Determine if the user selected an option or skipped with custom input
+    let (selected_answer, is_skip) = if input.is_empty() {
+        ("Skipped (no answer provided)".to_string(), true)
+    } else if let Ok(num) = input.parse::<usize>() {
         if num >= 1 && num <= answer_count {
-            answers[num - 1].clone()
+            (answers[num - 1].clone(), false)
         } else {
-            format!("Invalid choice: {} (valid range: 1-{})", num, answer_count)
-        }
-    } else if !input.is_empty() {
-        let input_lower = input.to_lowercase();
-        match answers.iter().find(|a| a.to_lowercase() == input_lower) {
-            Some(a) => a.clone(),
-            None => input.to_string(), // Allow free-form answer
+            // Out-of-range number: treat as a skip with free-form input
+            (format!("Skipped (user entered: {})", input), true)
         }
     } else {
-        "No answer provided (empty input)".to_string()
+        let input_lower = input.to_lowercase();
+        match answers.iter().find(|a| a.to_lowercase() == input_lower) {
+            Some(a) => (a.clone(), false),
+            None => (input.to_string(), true), // Free-form answer (skip)
+        }
     };
 
-    writeln!(
-        stdout,
-        "  {}✓{} Selected: {}{}{}",
-        GREEN, RESET, BOLD, selected_answer, RESET
-    )?;
+    if is_skip {
+        writeln!(
+            stdout,
+            "  {}⊘{} Skipped with: {}{}{}",
+            ORANGE, RESET, BOLD, selected_answer, RESET
+        )?;
+    } else {
+        writeln!(
+            stdout,
+            "  {}✓{} Selected: {}{}{}",
+            GREEN, RESET, BOLD, selected_answer, RESET
+        )?;
+    }
     stdout.flush()?;
+
+    let result_content = if is_skip {
+        format!(
+            "User skipped the provided options for the question '{}' and entered a custom answer: '{}'.\n\nUse this answer to continue helping the user.",
+            question_text, selected_answer
+        )
+    } else {
+        format!(
+            "User answered the question '{}' with: '{}'.\n\nUse this answer to continue helping the user.",
+            question_text, selected_answer
+        )
+    };
 
     messages.push(Message {
         role: Role::Tool,
-        content: format!(
-            "User answered the question '{}' with: '{}'.\n\nUse this answer to continue helping the user.",
-            question_text, selected_answer
-        ),
+        content: result_content,
         tool_calls: vec![],
     });
     session.append_message(messages.last().unwrap());
