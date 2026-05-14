@@ -2,9 +2,24 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::define_tool;
 use crate::extract_args;
-use crate::tools::tool::{BoxFuture, ToolCategory};
+use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
+
+pub fn write_tool_entry() -> crate::tools::tool::Tool {
+    make_tool(
+        "write",
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories automatically.",
+        ToolCategory::Destructive,
+        build_string_params_schema(
+            &[
+                ("path", "The absolute path to the file to write"),
+                ("content", "The text content to write to the file"),
+            ],
+            &[],
+        ),
+        |args| Box::pin(write_tool(args)),
+    )
+}
 
 pub fn write_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -24,14 +39,3 @@ pub fn write_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         }
     })
 }
-
-define_tool!(
-    write_tool_entry, "write",
-    "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories automatically.",
-     ToolCategory::Destructive,
-    required: [
-        ("path", "The absolute path to the file to write"),
-        ("content", "The text content to write to the file"),
-    ],
-    handler: write_tool
-);

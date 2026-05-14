@@ -1,3 +1,6 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use crate::provider::{ChatMessageResponse, Message, Provider, ToolDefinition};
 
 use super::openai_compat::OpenAiCompatInner;
@@ -14,14 +17,14 @@ impl LlamaCppProvider {
     }
 }
 
-#[async_trait::async_trait]
 impl Provider for LlamaCppProvider {
-    async fn health_check(&self) -> Result<(), String> {
-        self.inner.health_check().await
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+        self.inner.health_check()
     }
 
-    async fn list_models(&self) -> Vec<String> {
-        self.inner.current_model().into_iter().collect()
+    fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
+        let model = self.inner.current_model();
+        Box::pin(async move { model.into_iter().collect() })
     }
 
     fn select_model(&mut self, name: String) {
@@ -32,11 +35,12 @@ impl Provider for LlamaCppProvider {
         self.inner.current_model()
     }
 
-    async fn chat(
+    fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> tokio::sync::mpsc::Receiver<ChatMessageResponse> {
+    ) -> Pin<Box<dyn Future<Output = tokio::sync::mpsc::Receiver<ChatMessageResponse>> + Send>>
+    {
         self.inner.chat(messages, tools)
     }
 }

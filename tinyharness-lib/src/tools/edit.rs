@@ -1,9 +1,28 @@
 use std::collections::HashMap;
 use std::fs;
 
-use crate::define_tool;
 use crate::extract_args;
-use crate::tools::tool::{BoxFuture, ToolCategory};
+use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
+
+pub fn edit_tool_entry() -> crate::tools::tool::Tool {
+    make_tool(
+        "edit",
+        "Edit a file by finding an exact string and replacing it with new text. The old_str must appear exactly once in the file. Use this for targeted edits instead of rewriting the entire file.",
+        ToolCategory::Destructive,
+        build_string_params_schema(
+            &[
+                ("path", "The absolute path to the file to edit"),
+                (
+                    "old_str",
+                    "The exact string to find in the file (must appear exactly once)",
+                ),
+                ("new_str", "The replacement string"),
+            ],
+            &[],
+        ),
+        |args| Box::pin(edit_tool(args)),
+    )
+}
 
 pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -46,15 +65,3 @@ pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         }
     })
 }
-
-define_tool!(
-    edit_tool_entry, "edit",
-    "Edit a file by finding an exact string and replacing it with new text. The old_str must appear exactly once in the file. Use this for targeted edits instead of rewriting the entire file.",
-     ToolCategory::Destructive,
-    required: [
-        ("path", "The absolute path to the file to edit"),
-        ("old_str", "The exact string to find in the file (must appear exactly once)"),
-        ("new_str", "The replacement string"),
-    ],
-    handler: edit_tool
-);

@@ -4,8 +4,17 @@ pub mod openai_compat;
 pub mod vllm;
 
 use std::fmt::Display;
+use std::future::Future;
+use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: schemars::Schema,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -43,25 +52,6 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    #[serde(rename = "type")]
-    pub tool_kind: ToolKind,
-    pub function: ToolFunctionDef,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ToolKind {
-    Function,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ToolFunctionDef {
-    pub name: String,
-    pub description: String,
-    pub parameters: schemars::Schema,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Role {
     System,
@@ -88,12 +78,11 @@ pub struct Message {
     pub tool_calls: Vec<ToolCall>,
 }
 
-#[async_trait::async_trait]
-pub trait Provider {
+pub trait Provider: Send + Sync {
     /// Check whether the backend is reachable and healthy.
-    async fn health_check(&self) -> Result<(), String>;
+    fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 
-    async fn list_models(&self) -> Vec<String>;
+    fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>>;
 
     fn select_model(&mut self, name: String);
 
@@ -107,11 +96,11 @@ pub trait Provider {
     ///
     /// Token usage, when available, is included in the final `ChatMessageResponse`
     /// chunk (in the `usage` field). No separate method is needed to retrieve it.
-    async fn chat(
+    fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> tokio::sync::mpsc::Receiver<ChatMessageResponse>;
+    ) -> Pin<Box<dyn Future<Output = tokio::sync::mpsc::Receiver<ChatMessageResponse>> + Send>>;
 
     /// Set the request timeout in seconds. Only meaningful for providers that use timeouts.
     fn set_timeout(&mut self, _timeout_secs: u64) {}

@@ -14,14 +14,12 @@ pub use context::WorkspaceContext;
 pub use mode::AgentMode;
 pub use provider::{
     ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,
-    ToolCallFunction, ToolDefinition, ToolFunctionDef, ToolKind,
+    ToolCallFunction, ToolDefinition,
 };
 pub use session::{Session, SessionEntry, SessionMeta, SessionStore};
 pub use token::ContextWindowSize;
 pub use tools::tool::ToolCategory;
 pub use tools::{SignalEvent, ToolManager};
 
-// #[macro_export] macros are automatically at the crate root:
-// - define_tool!
+// #[macro_export] macro at crate root:
 // - extract_args!
-// - register_tools!

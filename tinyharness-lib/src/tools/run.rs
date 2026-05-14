@@ -3,9 +3,32 @@ use std::time::Instant;
 
 use tokio::io::AsyncReadExt;
 
-use crate::define_tool;
 use crate::extract_args;
-use crate::tools::tool::ToolCategory;
+use crate::tools::tool::{ToolCategory, build_string_params_schema, make_tool};
+
+pub fn run_tool_entry() -> crate::tools::tool::Tool {
+    make_tool(
+        "run",
+        "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.",
+        ToolCategory::Destructive,
+        build_string_params_schema(
+            &[("command", "The shell command to execute")],
+            &[
+                (
+                    "timeout",
+                    "Timeout in milliseconds (default: 30000)",
+                    "30000",
+                ),
+                (
+                    "cwd",
+                    "Working directory for the command (default: project root)",
+                    "",
+                ),
+            ],
+        ),
+        move |args| Box::pin(run_tool(args)),
+    )
+}
 
 /// Execute a shell command asynchronously with a timeout.
 /// Returns stdout, stderr, exit code, and duration.
@@ -136,15 +159,3 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
         }
     }
 }
-
-define_tool!(
-    run_tool_entry, "run",
-    "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.",
-    ToolCategory::Destructive,
-    required: [("command", "The shell command to execute")],
-    optional: [
-        ("timeout", "Timeout in milliseconds (default: 30000)", "30000"),
-        ("cwd", "Working directory for the command (default: project root)", ""),
-    ],
-    handler: move |args| Box::pin(run_tool(args))
-);

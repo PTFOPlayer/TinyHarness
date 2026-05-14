@@ -4,9 +4,32 @@ use std::path::Path;
 
 use regex::Regex;
 
-use crate::define_tool;
 use crate::extract_args;
-use crate::tools::tool::{BoxFuture, ToolCategory};
+use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
+
+pub fn grep_tool_entry() -> crate::tools::tool::Tool {
+    make_tool(
+        "grep",
+        "Search for a regex pattern across files in a directory. Returns matching lines with file paths and line numbers. Use 'include' to filter by file extension (e.g. '.rs' for Rust files). Skips hidden directories, node_modules, target, and binary files.",
+        ToolCategory::ReadOnly,
+        build_string_params_schema(
+            &[("pattern", "The regex pattern to search for")],
+            &[
+                (
+                    "path",
+                    "The directory to search in (defaults to current directory)",
+                    ".",
+                ),
+                (
+                    "include",
+                    "Only search files whose path contains this string (e.g. '.rs' for Rust files)",
+                    "",
+                ),
+            ],
+        ),
+        |args| Box::pin(grep_tool(args)),
+    )
+}
 
 pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -154,15 +177,3 @@ fn walk_dir(
 
     Ok(())
 }
-
-define_tool!(
-    grep_tool_entry, "grep",
-    "Search for a regex pattern across files in a directory. Returns matching lines with file paths and line numbers. Use 'include' to filter by file extension (e.g. '.rs' for Rust files). Skips hidden directories, node_modules, target, and binary files.",
-     ToolCategory::ReadOnly,
-    required: [("pattern", "The regex pattern to search for")],
-    optional: [
-        ("path", "The directory to search in (defaults to current directory)", "."),
-        ("include", "Only search files whose path contains this string (e.g. '.rs' for Rust files)", ""),
-    ],
-    handler: grep_tool
-);

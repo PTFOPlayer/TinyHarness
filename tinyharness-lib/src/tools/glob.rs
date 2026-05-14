@@ -1,8 +1,27 @@
 use std::collections::HashMap;
 
-use crate::define_tool;
 use crate::extract_args;
-use crate::tools::tool::{BoxFuture, ToolCategory};
+use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
+
+pub fn glob_tool_entry() -> crate::tools::tool::Tool {
+    make_tool(
+        "glob",
+        "Find files by glob pattern. Supports patterns like '**/*.rs', 'src/**/*.toml', '**/Cargo.toml'. Returns sorted results. Use 'max_results' to limit output (default 100).",
+        ToolCategory::ReadOnly,
+        build_string_params_schema(
+            &[(
+                "pattern",
+                "The glob pattern to search for (e.g. '**/*.rs', '**/Cargo.toml')",
+            )],
+            &[(
+                "max_results",
+                "Maximum number of results to return (default: 100)",
+                "100",
+            )],
+        ),
+        |args| Box::pin(glob_tool(args)),
+    )
+}
 
 pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -54,14 +73,3 @@ pub fn glob_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         results.join("\n")
     })
 }
-
-define_tool!(
-    glob_tool_entry, "glob",
-    "Find files by glob pattern. Supports patterns like '**/*.rs', 'src/**/*.toml', '**/Cargo.toml'. Returns sorted results. Use 'max_results' to limit output (default 100).",
-     ToolCategory::ReadOnly,
-    required: [("pattern", "The glob pattern to search for (e.g. '**/*.rs', '**/Cargo.toml')")],
-    optional: [
-        ("max_results", "Maximum number of results to return (default: 100)", "100"),
-    ],
-    handler: glob_tool
-);

@@ -167,7 +167,11 @@ pub fn prompt_tool_confirmation<W: Write>(
         "  └{}───────────────────────────────{}",
         BOX_COLOR, RESET
     )?;
-    write!(stdout, "  {}Allow? {}y{}/n/a{}: {}", BOLD, GREEN, BOLD, RESET, RESET)?;
+    write!(
+        stdout,
+        "  {}Allow? {}y{}/n/a{}: {}",
+        BOLD, GREEN, BOLD, RESET, RESET
+    )?;
     stdout.flush()?;
 
     let mut input = String::new();

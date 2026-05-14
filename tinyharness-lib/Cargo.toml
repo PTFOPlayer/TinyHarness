@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-trait = "0.1.89"
 ollama-rs = { version = "0.3.4", features = ["stream"] }
 tokio = { version = "1.52.1", features = ["full"] }
 tokio-stream = "0.1.18"

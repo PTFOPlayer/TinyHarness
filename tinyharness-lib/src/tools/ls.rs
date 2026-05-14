@@ -2,9 +2,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::define_tool;
 use crate::extract_args;
-use crate::tools::tool::{BoxFuture, ToolCategory};
+use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
+
+pub fn ls_tool_entry() -> crate::tools::tool::Tool {
+    make_tool(
+        "ls",
+        "List directory contents. Returns a newline-separated list of files and directories in the specified path.",
+        ToolCategory::ReadOnly,
+        build_string_params_schema(&[("path", "The directory path to list")], &[]),
+        |args| Box::pin(ls_tool(args)),
+    )
+}
 
 pub fn ls_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(async move {
@@ -42,11 +51,3 @@ pub fn ls_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         files.join("\n")
     })
 }
-
-define_tool!(
-    ls_tool_entry, "ls",
-    "List directory contents. Returns a newline-separated list of files and directories in the specified path.",
-     ToolCategory::ReadOnly,
-    required: [("path", "The directory path to list")],
-    handler: ls_tool
-);

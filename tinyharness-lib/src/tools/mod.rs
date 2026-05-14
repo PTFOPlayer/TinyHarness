@@ -32,24 +32,6 @@ pub enum SignalEvent {
     AutoCompact { focus: String },
 }
 
-/// Register multiple tools at once.
-///
-/// # Example
-/// ```ignore
-/// register_tools!(self,
-///     crate::tools::ls::ls_tool_entry,
-///     crate::tools::read::read_tool_entry,
-/// );
-/// ```
-#[macro_export]
-macro_rules! register_tools {
-    ($manager:expr, $($entry:path),* $(,)?) => {
-        $(
-            $manager.register_tool($entry());
-        )*
-    };
-}
-
 #[derive(Default)]
 pub struct ToolManager {
     tools: Vec<Tool>,
@@ -62,21 +44,18 @@ impl ToolManager {
 
     /// Register all built-in tools.
     pub fn register_defaults(&mut self) {
-        register_tools!(
-            self,
-            crate::tools::auto_compact::auto_compact_tool_entry,
-            crate::tools::ls::ls_tool_entry,
-            crate::tools::read::read_tool_entry,
-            crate::tools::write::write_tool_entry,
-            crate::tools::edit::edit_tool_entry,
-            crate::tools::grep::grep_tool_entry,
-            crate::tools::run::run_tool_entry,
-            crate::tools::glob::glob_tool_entry,
-            crate::tools::web_search::web_search_tool_entry,
-            crate::tools::web_search::web_fetch_tool_entry,
-            crate::tools::switch_mode::switch_mode_tool_entry,
-            crate::tools::question::question_tool_entry,
-        );
+        self.register_tool(crate::tools::auto_compact::auto_compact_tool_entry());
+        self.register_tool(crate::tools::ls::ls_tool_entry());
+        self.register_tool(crate::tools::read::read_tool_entry());
+        self.register_tool(crate::tools::write::write_tool_entry());
+        self.register_tool(crate::tools::edit::edit_tool_entry());
+        self.register_tool(crate::tools::grep::grep_tool_entry());
+        self.register_tool(crate::tools::run::run_tool_entry());
+        self.register_tool(crate::tools::glob::glob_tool_entry());
+        self.register_tool(crate::tools::web_search::web_search_tool_entry());
+        self.register_tool(crate::tools::web_search::web_fetch_tool_entry());
+        self.register_tool(crate::tools::switch_mode::switch_mode_tool_entry());
+        self.register_tool(crate::tools::question::question_tool_entry());
     }
 
     pub fn register_tool(&mut self, tool: Tool) {
@@ -85,7 +64,7 @@ impl ToolManager {
 
     /// Returns the tool definitions for all registered tools.
     pub fn get_all_tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.iter().map(|t| t.tool_info.clone()).collect()
+        self.tools.iter().map(|t| t.to_definition()).collect()
     }
 
     /// Returns the tool definitions appropriate for the given agent mode.
@@ -99,7 +78,7 @@ impl ToolManager {
                 .filter(|t| {
                     t.category == ToolCategory::ReadOnly || t.category == ToolCategory::Signal
                 })
-                .map(|t| t.tool_info.clone())
+                .map(|t| t.to_definition())
                 .collect(),
             AgentMode::Research => self
                 .tools
@@ -107,7 +86,7 @@ impl ToolManager {
                 .filter(|t| {
                     t.category == ToolCategory::ReadOnly || t.category == ToolCategory::Signal
                 })
-                .map(|t| t.tool_info.clone())
+                .map(|t| t.to_definition())
                 .collect(),
         }
     }
@@ -116,7 +95,7 @@ impl ToolManager {
     pub fn category_of(&self, tool_name: &str) -> Option<ToolCategory> {
         self.tools
             .iter()
-            .find(|t| t.name() == tool_name)
+            .find(|t| t.name == tool_name)
             .map(|t| t.category)
     }
 
@@ -189,7 +168,7 @@ impl ToolManager {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> String {
-        if let Some(tool) = self.tools.iter().find(|t| t.name() == tool_name) {
+        if let Some(tool) = self.tools.iter().find(|t| t.name == tool_name) {
             tool::execute_tool_call(tool, arguments).await
         } else {
             format!("Error: Tool '{}' not found", tool_name)

@@ -4,8 +4,6 @@ use std::pin::Pin;
 
 use schemars::Schema;
 
-use crate::provider::ToolDefinition;
-
 /// Extract required string arguments from the tool arguments map.
 ///
 /// Creates `let` bindings for each named argument, with early return on missing args.
@@ -29,59 +27,6 @@ macro_rules! extract_args {
     };
 }
 
-/// Define a tool entry function with its schema and category.
-///
-/// Generates a `pub fn <entry_fn>() -> Tool` that calls `make_tool` with the
-/// provided name, description, category, schema, and handler.
-///
-/// # Example
-/// ```ignore
-/// define_tool!(
-///     write_tool_entry, "write",
-///     "Write content to a file.",
-///     Destructive,
-///     required: [("path", "The path"), ("content", "The content")],
-///     optional: [("max_size", "Max size", "1024")],
-///     handler: write_tool
-/// );
-/// ```
-#[macro_export]
-macro_rules! define_tool {
-    (
-        $entry_fn:ident, $name:expr, $description:expr, $category:expr,
-        required: [$(($req_name:expr, $req_desc:expr)),* $(,)?],
-        optional: [$(($opt_name:expr, $opt_desc:expr, $opt_default:expr)),* $(,)?],
-        handler: $handler:expr
-    ) => {
-        pub fn $entry_fn() -> $crate::tools::tool::Tool {
-            $crate::tools::tool::make_tool(
-                $name,
-                $description,
-                $category,
-                $crate::tools::tool::build_string_params_schema(
-                    &[$(($req_name, $req_desc)),*],
-                    &[$(($opt_name, $opt_desc, $opt_default)),*],
-                ),
-                $handler,
-            )
-        }
-    };
-
-    // Variant with no optional params (common case)
-    (
-        $entry_fn:ident, $name:expr, $description:expr, $category:expr,
-        required: [$(($req_name:expr, $req_desc:expr)),* $(,)?],
-        handler: $handler:expr
-    ) => {
-        define_tool! {
-            $entry_fn, $name, $description, $category,
-            required: [$(($req_name, $req_desc)),*],
-            optional: [],
-            handler: $handler
-        }
-    };
-}
-
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Classifies a tool by its side effects, used to determine whether the tool
@@ -100,14 +45,21 @@ pub enum ToolCategory {
 }
 
 pub struct Tool {
-    pub function: Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync>,
-    pub tool_info: ToolDefinition,
+    pub name: String,
+    pub description: String,
+    pub parameters: Schema,
     pub category: ToolCategory,
+    pub handler: Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync>,
 }
 
 impl Tool {
-    pub fn name(&self) -> &str {
-        &self.tool_info.function.name
+    /// Convert this tool into a `ToolDefinition` for the provider.
+    pub fn to_definition(&self) -> crate::provider::ToolDefinition {
+        crate::provider::ToolDefinition {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.parameters.clone(),
+        }
     }
 }
 
@@ -121,7 +73,7 @@ pub async fn execute_tool_call(tool: &Tool, arguments: &serde_json::Value) -> St
         })
         .unwrap_or_default();
 
-    (tool.function)(args).await
+    (tool.handler)(args).await
 }
 
 /// Extract a required string argument from the tool arguments map.
@@ -180,24 +132,18 @@ pub fn build_string_params_schema(
 }
 
 /// Convenience constructor for creating a `Tool` with a string-parameters schema.
-/// Reduces the boilerplate in each `*_tool_entry()` function.
 pub fn make_tool(
     name: &str,
     description: &str,
     category: ToolCategory,
     parameters: Schema,
-    function: impl Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync + 'static,
+    handler: impl Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync + 'static,
 ) -> Tool {
     Tool {
-        function: Box::new(function),
-        tool_info: ToolDefinition {
-            tool_kind: crate::provider::ToolKind::Function,
-            function: crate::provider::ToolFunctionDef {
-                name: name.to_string(),
-                description: description.to_string(),
-                parameters,
-            },
-        },
+        name: name.to_string(),
+        description: description.to_string(),
+        parameters,
         category,
+        handler: Box::new(handler),
     }
 }

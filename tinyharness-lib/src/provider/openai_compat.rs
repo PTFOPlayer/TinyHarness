@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -34,17 +36,20 @@ impl OpenAiCompatInner {
     }
 
     /// Perform a health check against the server's `/health` endpoint.
-    pub async fn health_check(&self) -> Result<(), String> {
+    pub fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
-        match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => Ok(()),
-            Ok(resp) => Err(format!(
-                "Server returned {}: {}",
-                resp.status().as_u16(),
-                resp.text().await.unwrap_or_default()
-            )),
-            Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
-        }
+        let client = self.client.clone();
+        Box::pin(async move {
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => Ok(()),
+                Ok(resp) => Err(format!(
+                    "Server returned {}: {}",
+                    resp.status().as_u16(),
+                    resp.text().await.unwrap_or_default()
+                )),
+                Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
+            }
+        })
     }
 
     pub fn select_model(&mut self, name: String) {
@@ -65,17 +70,21 @@ impl OpenAiCompatInner {
 
     /// Fetch the model list from the server's `/v1/models` endpoint.
     /// Returns the list of model IDs, or an empty vec on failure.
-    pub async fn fetch_model_list(&self) -> Vec<String> {
+    pub fn fetch_model_list(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
         let url = format!("{}/v1/models", self.base_url.trim_end_matches('/'));
-        match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<ModelListResponse>().await {
-                    Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
-                    Err(_) => self.model.clone().into_iter().collect(),
+        let client = self.client.clone();
+        let current_model = self.model.clone();
+        Box::pin(async move {
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.json::<ModelListResponse>().await {
+                        Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
+                        Err(_) => current_model.into_iter().collect(),
+                    }
                 }
+                _ => current_model.into_iter().collect(),
             }
-            _ => self.model.clone().into_iter().collect(),
-        }
+        })
     }
 
     /// Stream chat completions using the OpenAI-compatible API.
@@ -84,7 +93,8 @@ impl OpenAiCompatInner {
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> tokio::sync::mpsc::Receiver<ChatMessageResponse> {
+    ) -> Pin<Box<dyn Future<Output = tokio::sync::mpsc::Receiver<ChatMessageResponse>> + Send>>
+    {
         let (send, recv) = tokio::sync::mpsc::channel::<ChatMessageResponse>(1024);
 
         let model = self.model.clone().unwrap_or_default();
@@ -105,7 +115,7 @@ impl OpenAiCompatInner {
             let _usage = stream_chat_completions(&client, &chat_url, &body, &send).await;
         });
 
-        recv
+        Box::pin(async move { recv })
     }
 }
 
@@ -269,9 +279,9 @@ pub fn to_openai_tool(ti: ToolDefinition) -> OpenAITool {
     OpenAITool {
         tool_type: "function".to_string(),
         function: OpenAIToolFunction {
-            name: ti.function.name,
-            description: ti.function.description,
-            parameters: serde_json::to_value(ti.function.parameters).unwrap_or_default(),
+            name: ti.name,
+            description: ti.description,
+            parameters: serde_json::to_value(ti.parameters).unwrap_or_default(),
         },
     }
 }

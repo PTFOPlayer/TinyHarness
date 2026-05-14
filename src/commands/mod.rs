@@ -397,13 +397,16 @@ impl CommandDispatcher {
                     // No argument — list available models and show current
                     let provider = self.provider.lock().await;
                     let current = provider.current_model();
-                    
+
                     // List models
                     models::execute_list(&*provider).await?;
-                    
+
                     // Show current selection
                     if let Some(model) = current {
-                        println!("{}Current model: {}{}{}{}", BOLD, GREEN, model, RESET, RESET);
+                        println!(
+                            "{}Current model: {}{}{}{}",
+                            BOLD, GREEN, model, RESET, RESET
+                        );
                     } else {
                         println!("{}No model currently selected.{}", ORANGE, RESET);
                     }

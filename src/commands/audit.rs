@@ -130,7 +130,7 @@ pub fn clear() -> std::io::Result<()> {
 fn format_timestamp(ts: u64) -> String {
     let duration = std::time::Duration::from_secs(ts);
     let datetime = UNIX_EPOCH + duration;
-    
+
     // Format as YYYY-MM-DD HH:MM:SS
     let system_time: SystemTime = datetime;
     let datetime: chrono::DateTime<chrono::Local> = system_time.into();
@@ -140,14 +140,14 @@ fn format_timestamp(ts: u64) -> String {
 /// Display the last N audit entries in a table.
 pub fn show_last(n: usize) {
     let entries = read_last(n);
-    
+
     if entries.is_empty() {
         println!("{}No audit entries found.{}", ORANGE, RESET);
         return;
     }
 
     println!("\n{}Recent command audit (last {}):{}\n", BOLD, n, RESET);
-    
+
     // Header
     println!(
         "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
@@ -155,7 +155,13 @@ pub fn show_last(n: usize) {
     );
     println!(
         "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
-        GRAY, "────────────────────", "──────────────────────────────", "──────", "────────", "──────────", RESET
+        GRAY,
+        "────────────────────",
+        "──────────────────────────────",
+        "──────",
+        "────────",
+        "──────────",
+        RESET
     );
 
     for entry in &entries {
@@ -165,21 +171,26 @@ pub fn show_last(n: usize) {
         } else {
             entry.command.clone()
         };
-        
+
         let exit_str = if entry.exit_code == 0 {
             format!("{}{:6}{}", GREEN, entry.exit_code, RESET)
         } else {
             format!("{}{:6}{}", RED, entry.exit_code, RESET)
         };
-        
+
         let auto_str = if entry.auto_accepted {
             format!("{}✓ yes{}   ", GREEN, RESET)
         } else {
             format!("{}✗ no{}    ", ORANGE, RESET)
         };
-        
+
         let duration_str = if entry.duration_ms >= 1000 {
-            format!("{}{:.1}s{}    ", BLUE, entry.duration_ms as f64 / 1000.0, RESET)
+            format!(
+                "{}{:.1}s{}    ",
+                BLUE,
+                entry.duration_ms as f64 / 1000.0,
+                RESET
+            )
         } else {
             format!("{}{}ms{}     ", GRAY, entry.duration_ms, RESET)
         };
@@ -196,14 +207,17 @@ pub fn show_last(n: usize) {
 /// Display audit entries for a specific session.
 pub fn show_session(session_id: &str) {
     let entries = read_session(session_id);
-    
+
     if entries.is_empty() {
-        println!("{}No audit entries found for session '{}'.{}", ORANGE, session_id, RESET);
+        println!(
+            "{}No audit entries found for session '{}'.{}",
+            ORANGE, session_id, RESET
+        );
         return;
     }
 
     println!("\n{}Audit for session '{}':{}\n", BOLD, session_id, RESET);
-    
+
     // Header
     println!(
         "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
@@ -211,7 +225,13 @@ pub fn show_session(session_id: &str) {
     );
     println!(
         "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
-        GRAY, "────────────────────", "──────────────────────────────", "──────", "────────", "──────────", RESET
+        GRAY,
+        "────────────────────",
+        "──────────────────────────────",
+        "──────",
+        "────────",
+        "──────────",
+        RESET
     );
 
     for entry in &entries {
@@ -221,21 +241,26 @@ pub fn show_session(session_id: &str) {
         } else {
             entry.command.clone()
         };
-        
+
         let exit_str = if entry.exit_code == 0 {
             format!("{}{:6}{}", GREEN, entry.exit_code, RESET)
         } else {
             format!("{}{:6}{}", RED, entry.exit_code, RESET)
         };
-        
+
         let auto_str = if entry.auto_accepted {
             format!("{}✓ yes{}   ", GREEN, RESET)
         } else {
             format!("{}✗ no{}    ", ORANGE, RESET)
         };
-        
+
         let duration_str = if entry.duration_ms >= 1000 {
-            format!("{}{:.1}s{}    ", BLUE, entry.duration_ms as f64 / 1000.0, RESET)
+            format!(
+                "{}{:.1}s{}    ",
+                BLUE,
+                entry.duration_ms as f64 / 1000.0,
+                RESET
+            )
         } else {
             format!("{}{}ms{}     ", GRAY, entry.duration_ms, RESET)
         };
@@ -252,7 +277,7 @@ pub fn show_session(session_id: &str) {
 /// Execute the /audit command.
 pub fn execute(args: &str) {
     let args = args.trim();
-    
+
     if args.is_empty() {
         // Default: show last 20
         show_last(20);
@@ -262,7 +287,10 @@ pub fn execute(args: &str) {
     let parts: Vec<&str> = args.splitn(2, ' ').collect();
     match parts[0].to_lowercase().as_str() {
         "last" => {
-            let n = parts.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(20);
+            let n = parts
+                .get(1)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(20);
             show_last(n);
         }
         "session" => {
@@ -274,10 +302,13 @@ pub fn execute(args: &str) {
             show_session(session_id);
         }
         "clear" => {
-            println!("{}⚠ This will delete the entire audit log. Type 'yes' to confirm: {}", ORANGE, RESET);
+            println!(
+                "{}⚠ This will delete the entire audit log. Type 'yes' to confirm: {}",
+                ORANGE, RESET
+            );
             print!("{}> {}", BOLD, RESET);
             io::stdout().flush().unwrap();
-            
+
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() && input.trim().to_lowercase() == "yes" {
                 match clear() {

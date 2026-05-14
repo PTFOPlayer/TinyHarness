@@ -1998,7 +1998,6 @@ dependencies = [
 name = "tinyharness-lib"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "glob",
  "ollama-rs",
  "regex",
