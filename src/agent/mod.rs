@@ -134,13 +134,28 @@ pub async fn run_agent_loop(
         let session_name = session.meta().name.as_deref().unwrap_or("unnamed");
         let session_suffix = format!(" {DIM}({}){RESET}", session_name);
 
+        // Include current model name next to the mode label
+        let model_name = {
+            let p = provider.lock().await;
+            p.current_model().unwrap_or_else(|| "?".to_string())
+        };
+        let model_suffix = format!(" {DIM}{}{RESET}", model_name);
+
         let prompt = format!(
-            "{}{}{}\n{}[{}]{}> {}{}",
-            status_line, session_suffix, RESET, mode_color, mode_label, RESET, BLUE, RESET
+            "{}{}{}\n{}[{}]{}{}> {}{}",
+            status_line,
+            session_suffix,
+            RESET,
+            mode_color,
+            mode_label,
+            RESET,
+            model_suffix,
+            BLUE,
+            RESET
         );
         let continuation_prompt = format!(
-            "{}[{}]{}...> {}{}",
-            mode_color, mode_label, RESET, BLUE, RESET
+            "{}[{}]{}{}...> {}{}",
+            mode_color, mode_label, RESET, model_suffix, BLUE, RESET
         );
 
         // Read input with support for multi-line continuation
