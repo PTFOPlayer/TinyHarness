@@ -4,8 +4,8 @@ use tinyharness_lib::skill::{SkillRegistry, SkillSource};
 
 use crate::style::*;
 
-/// List all available skills.
-pub fn execute_list(registry: &SkillRegistry) {
+/// List all available skills, marking active ones.
+pub fn execute_list(registry: &SkillRegistry, active_skills: &[String]) {
     if registry.skills.is_empty() {
         println!();
         println!("{}No skills found.{}", ORANGE, RESET);
@@ -37,11 +37,18 @@ pub fn execute_list(registry: &SkillRegistry) {
         } else {
             format!("{}auto{}", GREEN, RESET)
         };
+        let active_marker = if active_skills.iter().any(|s| s.eq_ignore_ascii_case(&skill.name))
+        {
+            format!("{}●{}", GREEN, RESET)
+        } else {
+            format!("{}○{}", GRAY, RESET)
+        };
 
         println!(
-            "{}│{}   {}{}{}{} — {}  {}[{}]{}",
+            "{}│{} {} {}{}{}{} — {}  {}[{}]{}",
             BOLD,
             RESET,
+            active_marker,
             BOLD,
             CYAN,
             skill.name,
@@ -57,11 +64,27 @@ pub fn execute_list(registry: &SkillRegistry) {
         "{}╰──────────────────────────────────────────────╯{}",
         BOLD, RESET
     );
+
+    if !active_skills.is_empty() {
+        println!(
+            "  {}Active: {}{}{}",
+            GRAY,
+            GREEN,
+            active_skills.join(", "),
+            RESET
+        );
+    }
+
     println!();
 }
 
 /// Show details for a specific skill.
-pub fn execute_show<W: Write>(registry: &SkillRegistry, name: &str, stdout: &mut W) {
+pub fn execute_show<W: Write>(
+    registry: &SkillRegistry,
+    name: &str,
+    active_skills: &[String],
+    stdout: &mut W,
+) {
     let skill = match registry.get(name) {
         Some(s) => s,
         None => {
@@ -152,6 +175,19 @@ pub fn execute_show<W: Write>(registry: &SkillRegistry, name: &str, stdout: &mut
     )
     .unwrap_or(());
 
+    let active_label =
+        if active_skills.iter().any(|s| s.eq_ignore_ascii_case(&skill.name)) {
+            format!("{}● Active{}", GREEN, RESET)
+        } else {
+            format!("{}○ Inactive{}", GRAY, RESET)
+        };
+    writeln!(
+        stdout,
+        "{}│{}   {}Status:{} {}",
+        BOLD, RESET, BOLD, RESET, active_label
+    )
+    .unwrap_or(());
+
     writeln!(
         stdout,
         "{}╰──────────────────────────────────────────────╯{}",
@@ -186,8 +222,12 @@ pub fn execute_help() {
     );
     println!();
     println!(
-        "{}Tip:{} Skills are loaded from {}~/.tinyharness/skills/<name>/SKILL.md{} (personal)",
-        GRAY, RESET, BOLD, RESET
+        "{}Tip:{} Use {}/use <name>{} to activate a skill, {}/unload <name>{} to deactivate it.",
+        GRAY, RESET, BOLD, RESET, BOLD, RESET
+    );
+    println!(
+        "      Skills are loaded from {}~/.tinyharness/skills/<name>/SKILL.md{} (personal)",
+        BOLD, RESET
     );
     println!(
         "      and {}.tinyharness/skills/<name>/SKILL.md{} (project-local).",

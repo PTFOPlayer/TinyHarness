@@ -67,6 +67,7 @@ pub enum Command {
     SkillList,
     SkillShow(String),
     SkillUse(String),
+    SkillUnload(String),
 }
 
 /// Result of dispatching a command.
@@ -81,6 +82,8 @@ pub enum CommandResult {
     Init(InitResult),
     /// The user wants to activate a skill, injecting its instructions into the conversation.
     SkillUse(String),
+    /// The user wants to deactivate (unload) a skill.
+    SkillUnload(String),
 }
 
 pub struct CommandDispatcher {
@@ -91,6 +94,8 @@ pub struct CommandDispatcher {
     pub file_context: FileContext,
     pub session_id: Option<String>,
     pub skill_registry: SkillRegistry,
+    /// Names of currently active (loaded) skills.
+    pub active_skills: Vec<String>,
 }
 
 impl CommandDispatcher {
@@ -106,6 +111,7 @@ impl CommandDispatcher {
             file_context: FileContext::new(),
             session_id: None,
             skill_registry: SkillRegistry::discover(),
+            active_skills: Vec::new(),
         }
     }
 
@@ -142,7 +148,7 @@ impl CommandDispatcher {
     }
 
     /// Build the system prompt for the current mode, appending workspace context,
-    /// pinned file content, and skill index.
+    /// pinned file content, skill index, and active skill instructions.
     pub fn build_system_prompt(&self) -> String {
         let mut prompt = format!(
             "{}\n\n---\n{}",
@@ -160,6 +166,14 @@ impl CommandDispatcher {
         if !skill_index.is_empty() {
             prompt.push_str("\n\n");
             prompt.push_str(&skill_index);
+        }
+
+        // Inject active skill instructions
+        for name in &self.active_skills {
+            if let Some(skill) = self.skill_registry.get(name) {
+                prompt.push_str("\n\n");
+                prompt.push_str(&self.skill_registry.format_skill_content(skill));
+            }
         }
 
         prompt
@@ -271,6 +285,14 @@ impl CommandDispatcher {
                     Some(Command::SkillUse(name))
                 }
             }
+            "/unload" => {
+                let name = arg.unwrap_or_default();
+                if name.is_empty() {
+                    Some(Command::SkillList)
+                } else {
+                    Some(Command::SkillUnload(name))
+                }
+            }
             _ => None,
         }
     }
@@ -310,6 +332,7 @@ impl CommandDispatcher {
             "/skills",
             "/skill",
             "/use",
+            "/unload",
         ]
     }
 
@@ -422,6 +445,7 @@ impl CommandDispatcher {
                 "Activate a skill, injecting its instructions into the conversation",
             ),
             ("/use <name>", "Alias for /skill use <name>"),
+            ("/unload <name>", "Deactivate a previously loaded skill"),
         ]
     }
 
@@ -777,12 +801,12 @@ impl CommandDispatcher {
                 Ok(CommandResult::Ok)
             }
             Command::SkillList => {
-                skill::execute_list(&self.skill_registry);
+                skill::execute_list(&self.skill_registry, &self.active_skills);
                 Ok(CommandResult::Ok)
             }
             Command::SkillShow(name) => {
                 let mut stdout = std::io::stdout();
-                skill::execute_show(&self.skill_registry, &name, &mut stdout);
+                skill::execute_show(&self.skill_registry, &name, &self.active_skills, &mut stdout);
                 Ok(CommandResult::Ok)
             }
             Command::SkillUse(name) => {
@@ -813,6 +837,21 @@ impl CommandDispatcher {
                         }
                         Ok(CommandResult::Ok)
                     }
+                }
+            }
+            Command::SkillUnload(name) => {
+                if self.active_skills.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
+                    Ok(CommandResult::SkillUnload(name))
+                } else {
+                    println!(
+                        "{}Skill '{}' is not currently active.{}",
+                        ORANGE, name, RESET
+                    );
+                    if !self.active_skills.is_empty() {
+                        let active = self.active_skills.join(", ");
+                        println!("{}Active skills: {}{}{}", GRAY, CYAN, active, RESET);
+                    }
+                    Ok(CommandResult::Ok)
                 }
             }
         }

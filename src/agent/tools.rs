@@ -94,11 +94,7 @@ pub async fn handle_tool_calls<W: Write>(
                         let skill_result = {
                             let registry = &dispatcher.skill_registry;
                             registry.get(&skill_name).map(|s| {
-                                (
-                                    s.name.clone(),
-                                    s.description.clone(),
-                                    registry.format_skill_content(s),
-                                )
+                                (s.name.clone(), s.description.clone())
                             })
                         };
                         handle_invoke_skill(
@@ -675,22 +671,42 @@ async fn handle_auto_compact<W: Write>(
 /// Handle the invoke_skill signal: activate a skill by name.
 ///
 /// When the model invokes a skill, we look it up in the skill registry,
-/// display a confirmation message, and inject the skill's content into
-/// the conversation as a tool result message.
+/// display a confirmation message, track it as active, and refresh the
+/// system prompt to include the skill's instructions.
 ///
-/// `skill_result` is `Some((name, description, content))` if the skill was found,
+/// `skill_result` is `Some((name, description))` if the skill was found,
 /// or `None` if not found. This avoids borrowing the dispatcher while also
 /// calling it mutably.
 fn handle_invoke_skill<W: Write>(
     skill_name: &str,
-    skill_result: &Option<(String, String, String)>,
+    skill_result: &Option<(String, String)>,
     dispatcher: &mut crate::commands::CommandDispatcher,
     messages: &mut Vec<Message>,
     session: &mut Session,
     stdout: &mut W,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match skill_result {
-        Some((name, description, skill_content)) => {
+        Some((name, description)) => {
+            // Prevent duplicate activation
+            if dispatcher.active_skills.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                writeln!(
+                    stdout,
+                    "\n{}⚠ Skill '{}' is already active.{}", ORANGE, name, RESET
+                )?;
+                stdout.flush()?;
+
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: format!(
+                        "Skill '{}' is already active. Its instructions are already in effect.",
+                        name
+                    ),
+                    tool_calls: vec![],
+                });
+                session.append_message(messages.last().expect("just pushed a message"));
+                return Ok(());
+            }
+
             writeln!(
                 stdout,
                 "\n{}{}⚡ Skill activated: {}{}{} — {}{}",
@@ -698,21 +714,23 @@ fn handle_invoke_skill<W: Write>(
             )?;
             stdout.flush()?;
 
+            // Track the active skill
+            dispatcher.active_skills.push(name.clone());
+
             messages.push(Message {
                 role: Role::Tool,
                 content: format!(
-                    "SUCCESS: Skill '{}' activated. The skill's instructions are now in effect.\n\n---\n{}",
-                    name, skill_content
+                    "SUCCESS: Skill '{}' activated. The skill's instructions are now in effect.",
+                    name
                 ),
                 tool_calls: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
 
-            // Refresh system prompt so the skill index is up-to-date
+            // Refresh system prompt to include the active skill
             dispatcher.refresh_system_prompt(messages);
         }
         None => {
-            // Need to re-borrow for the error message
             let available = dispatcher
                 .skill_registry
                 .skills

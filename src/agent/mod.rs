@@ -256,14 +256,22 @@ pub async fn run_agent_loop(
                             }
                         },
                         Ok(CommandResult::SkillUse(skill_name)) => {
+                            // Prevent duplicate activation
+                            if dispatcher.active_skills.iter().any(|s| s.eq_ignore_ascii_case(&skill_name)) {
+                                eprintln!(
+                                    "{}⚠ Skill '{}' is already active.{} Use {}/unload {}{} to deactivate it.",
+                                    ORANGE, skill_name, RESET, BOLD, skill_name, RESET
+                                );
+                                continue;
+                            }
                             match dispatcher.skill_registry.get(&skill_name) {
                                 Some(skill) => {
-                                    let skill_content =
-                                        dispatcher.skill_registry.format_skill_content(skill);
                                     eprintln!(
                                         "{}⚡ Skill activated: {}{}{} — {}{}",
                                         BOLD, CYAN, skill_name, RESET, skill.description, RESET
                                     );
+                                    // Track the active skill
+                                    dispatcher.active_skills.push(skill.name.clone());
                                     // Inject a user message indicating skill activation
                                     messages.push(Message {
                                         role: Role::User,
@@ -273,20 +281,47 @@ pub async fn run_agent_loop(
                                     session.append_message(
                                         messages.last().expect("just pushed a message"),
                                     );
-                                    // Inject the skill content as a system-level instruction
-                                    messages.push(Message {
-                                        role: Role::System,
-                                        content: skill_content,
-                                        tool_calls: vec![],
-                                    });
-                                    session.append_message(
-                                        messages.last().expect("just pushed a message"),
-                                    );
+                                    // Refresh system prompt to include the active skill
+                                    dispatcher.refresh_system_prompt(messages);
                                 }
                                 None => {
                                     eprintln!(
                                         "{}⚠ Skill '{}' not found — it may have been removed.{}",
                                         RED, skill_name, RESET
+                                    );
+                                }
+                            }
+                        }
+                        Ok(CommandResult::SkillUnload(skill_name)) => {
+                            // Find and remove the skill from active list
+                            let pos = dispatcher
+                                .active_skills
+                                .iter()
+                                .position(|s| s.eq_ignore_ascii_case(&skill_name));
+                            match pos {
+                                Some(idx) => {
+                                    let removed = dispatcher.active_skills.remove(idx);
+                                    eprintln!(
+                                        "{}Skill deactivated: {}{}{}{}",
+                                        BOLD, CYAN, removed, RESET, RESET
+                                    );
+                                    // Inject a user message indicating skill deactivation
+                                    messages.push(Message {
+                                        role: Role::User,
+                                        content: format!("/unload {}", skill_name),
+                                        tool_calls: vec![],
+                                    });
+                                    session.append_message(
+                                        messages.last().expect("just pushed a message"),
+                                    );
+                                    // Refresh system prompt to remove the skill
+                                    dispatcher.refresh_system_prompt(messages);
+                                }
+                                None => {
+                                    // Should not happen since dispatch validates this
+                                    eprintln!(
+                                        "{}⚠ Skill '{}' is not active.{}",
+                                        ORANGE, skill_name, RESET
                                     );
                                 }
                             }
