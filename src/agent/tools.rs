@@ -93,9 +93,9 @@ pub async fn handle_tool_calls<W: Write>(
                         // Clone skill info to avoid borrowing dispatcher while calling it mutably
                         let skill_result = {
                             let registry = &dispatcher.skill_registry;
-                            registry.get(&skill_name).map(|s| {
-                                (s.name.clone(), s.description.clone())
-                            })
+                            registry
+                                .get(&skill_name)
+                                .map(|s| (s.name.clone(), s.description.clone()))
                         };
                         handle_invoke_skill(
                             &skill_name,
@@ -688,10 +688,15 @@ fn handle_invoke_skill<W: Write>(
     match skill_result {
         Some((name, description)) => {
             // Prevent duplicate activation
-            if dispatcher.active_skills.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+            if dispatcher
+                .active_skills
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(name))
+            {
                 writeln!(
                     stdout,
-                    "\n{}⚠ Skill '{}' is already active.{}", ORANGE, name, RESET
+                    "\n{}⚠ Skill '{}' is already active.{}",
+                    ORANGE, name, RESET
                 )?;
                 stdout.flush()?;
 

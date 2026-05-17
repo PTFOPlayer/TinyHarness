@@ -37,7 +37,9 @@ pub fn execute_list(registry: &SkillRegistry, active_skills: &[String]) {
         } else {
             format!("{}auto{}", GREEN, RESET)
         };
-        let active_marker = if active_skills.iter().any(|s| s.eq_ignore_ascii_case(&skill.name))
+        let active_marker = if active_skills
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&skill.name))
         {
             format!("{}●{}", GREEN, RESET)
         } else {
@@ -175,12 +177,14 @@ pub fn execute_show<W: Write>(
     )
     .unwrap_or(());
 
-    let active_label =
-        if active_skills.iter().any(|s| s.eq_ignore_ascii_case(&skill.name)) {
-            format!("{}● Active{}", GREEN, RESET)
-        } else {
-            format!("{}○ Inactive{}", GRAY, RESET)
-        };
+    let active_label = if active_skills
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(&skill.name))
+    {
+        format!("{}● Active{}", GREEN, RESET)
+    } else {
+        format!("{}○ Inactive{}", GRAY, RESET)
+    };
     writeln!(
         stdout,
         "{}│{}   {}Status:{} {}",

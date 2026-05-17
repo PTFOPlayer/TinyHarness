@@ -257,7 +257,11 @@ pub async fn run_agent_loop(
                         },
                         Ok(CommandResult::SkillUse(skill_name)) => {
                             // Prevent duplicate activation
-                            if dispatcher.active_skills.iter().any(|s| s.eq_ignore_ascii_case(&skill_name)) {
+                            if dispatcher
+                                .active_skills
+                                .iter()
+                                .any(|s| s.eq_ignore_ascii_case(&skill_name))
+                            {
                                 eprintln!(
                                     "{}⚠ Skill '{}' is already active.{} Use {}/unload {}{} to deactivate it.",
                                     ORANGE, skill_name, RESET, BOLD, skill_name, RESET
