@@ -806,7 +806,12 @@ impl CommandDispatcher {
             }
             Command::SkillShow(name) => {
                 let mut stdout = std::io::stdout();
-                skill::execute_show(&self.skill_registry, &name, &self.active_skills, &mut stdout);
+                skill::execute_show(
+                    &self.skill_registry,
+                    &name,
+                    &self.active_skills,
+                    &mut stdout,
+                );
                 Ok(CommandResult::Ok)
             }
             Command::SkillUse(name) => {
@@ -840,7 +845,11 @@ impl CommandDispatcher {
                 }
             }
             Command::SkillUnload(name) => {
-                if self.active_skills.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
+                if self
+                    .active_skills
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case(&name))
+                {
                     Ok(CommandResult::SkillUnload(name))
                 } else {
                     println!(
