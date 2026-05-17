@@ -4,7 +4,47 @@ use tinyharness_lib::{
     token::{estimate_conversation_tokens, estimate_tokens},
 };
 
+use crate::commands::registry::{Command, CommandContext, CommandResult};
 use crate::style::*;
+
+use std::future::Future;
+use std::pin::Pin;
+
+// ── Command trait implementation ────────────────────────────────────────────
+
+pub struct CompactCommand;
+
+impl Command for CompactCommand {
+    fn name(&self) -> &'static str {
+        "/compact"
+    }
+
+    fn description(&self) -> &'static str {
+        "Summarize conversation history to free context space. Optionally specify a focus area."
+    }
+
+    fn usage(&self) -> &'static str {
+        "/compact [focus]"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        raw_arg: Option<&str>,
+        ctx: &'a mut CommandContext,
+        messages: &'a mut Vec<Message>,
+    ) -> Pin<Box<dyn Future<Output = Result<CommandResult, String>> + Send + 'a>> {
+        let focus = raw_arg.unwrap_or("").to_string();
+        let provider = ctx.provider.clone();
+
+        Box::pin(async move {
+            let mut p = provider.lock().await;
+            execute_compact(&mut *p, messages, &focus).await?;
+            Ok(CommandResult::Ok)
+        })
+    }
+}
+
+// ── Core implementation ─────────────────────────────────────────────────────
 
 /// Maximum characters per message when formatting for summarization.
 const MAX_CHARS_PER_MESSAGE: usize = 2000;

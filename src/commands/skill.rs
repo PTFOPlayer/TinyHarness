@@ -2,7 +2,46 @@ use std::io::Write;
 
 use tinyharness_lib::skill::{SkillRegistry, SkillSource};
 
+use crate::commands::registry::{CommandContext, CommandResult};
 use crate::style::*;
+
+// ── Helper for /use and /skill use ──────────────────────────────────────────
+
+pub fn handle_skill_use(name: &str, ctx: &mut CommandContext) -> Result<CommandResult, String> {
+    // Validate that the skill exists and is user-invocable
+    match ctx.skill_registry.get(name) {
+        Some(skill) if !skill.user_invocable => {
+            println!(
+                "{}Skill '{}' is not user-invocable.{} It can only be activated by the model.",
+                ORANGE, name, RESET
+            );
+            Ok(CommandResult::Ok)
+        }
+        Some(_) => {
+            let name = name.to_string();
+            Ok(CommandResult::SkillUse(name))
+        }
+        None => {
+            let available = ctx
+                .skill_registry
+                .skills
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}Skill '{}' not found.{} Use {}/skills{} to list available skills.",
+                RED, name, RESET, BOLD, RESET
+            );
+            if !available.is_empty() {
+                println!("{}Available skills: {}{}{}", GRAY, CYAN, available, RESET);
+            }
+            Ok(CommandResult::Ok)
+        }
+    }
+}
+
+// ── Display functions ────────────────────────────────────────────────────────
 
 /// List all available skills, marking active ones.
 pub fn execute_list(registry: &SkillRegistry, active_skills: &[String]) {

@@ -11,6 +11,7 @@ use tinyharness_lib::{
     tools::ToolManager,
 };
 
+use crate::commands::CommandContext;
 use crate::commands::compact::execute_compact;
 use crate::style::*;
 use crate::ui::confirm::Confirmation;
@@ -27,7 +28,7 @@ pub async fn handle_tool_calls<W: Write>(
     response_content: &str,
     messages: &mut Vec<Message>,
     tool_manager: &ToolManager,
-    dispatcher: &mut crate::commands::CommandDispatcher,
+    ctx: &mut CommandContext,
     stdout: &mut W,
     auto_accept: &mut bool,
     session: &mut Session,
@@ -74,7 +75,7 @@ pub async fn handle_tool_calls<W: Write>(
             {
                 match event {
                     SignalEvent::SwitchMode { mode } => {
-                        handle_switch_mode(mode, dispatcher, messages, session, stdout)?;
+                        handle_switch_mode(mode, ctx, messages, session, stdout)?;
                     }
                     SignalEvent::Question { question, answers } => {
                         handle_question(&question, &answers, messages, session, stdout)?;
@@ -90,9 +91,9 @@ pub async fn handle_tool_calls<W: Write>(
                         .await?;
                     }
                     SignalEvent::InvokeSkill { skill_name } => {
-                        // Clone skill info to avoid borrowing dispatcher while calling it mutably
+                        // Clone skill info to avoid borrowing ctx while calling it mutably
                         let skill_result = {
-                            let registry = &dispatcher.skill_registry;
+                            let registry = &ctx.skill_registry;
                             registry
                                 .get(&skill_name)
                                 .map(|s| (s.name.clone(), s.description.clone()))
@@ -100,7 +101,7 @@ pub async fn handle_tool_calls<W: Write>(
                         handle_invoke_skill(
                             &skill_name,
                             &skill_result,
-                            dispatcher,
+                            ctx,
                             messages,
                             session,
                             stdout,
@@ -450,16 +451,16 @@ async fn execute_generic_tool<W: Write>(
     session.append_message(messages.last().expect("just pushed a message"));
 }
 
-/// Handle the switch_mode signal: update dispatcher and system prompt.
+/// Handle the switch_mode signal: update context and system prompt.
 fn handle_switch_mode<W: Write>(
     new_mode: AgentMode,
-    dispatcher: &mut crate::commands::CommandDispatcher,
+    ctx: &mut CommandContext,
     messages: &mut Vec<Message>,
     session: &mut Session,
     stdout: &mut W,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let old_mode = dispatcher.current_mode;
-    match dispatcher.switch_mode(new_mode, messages) {
+    let old_mode = ctx.current_mode;
+    match ctx.switch_mode(new_mode, messages) {
         Ok(()) => {
             session.set_mode(new_mode);
 
@@ -675,12 +676,12 @@ async fn handle_auto_compact<W: Write>(
 /// system prompt to include the skill's instructions.
 ///
 /// `skill_result` is `Some((name, description))` if the skill was found,
-/// or `None` if not found. This avoids borrowing the dispatcher while also
+/// or `None` if not found. This avoids borrowing the context while also
 /// calling it mutably.
 fn handle_invoke_skill<W: Write>(
     skill_name: &str,
     skill_result: &Option<(String, String)>,
-    dispatcher: &mut crate::commands::CommandDispatcher,
+    ctx: &mut CommandContext,
     messages: &mut Vec<Message>,
     session: &mut Session,
     stdout: &mut W,
@@ -688,7 +689,7 @@ fn handle_invoke_skill<W: Write>(
     match skill_result {
         Some((name, description)) => {
             // Prevent duplicate activation
-            if dispatcher
+            if ctx
                 .active_skills
                 .iter()
                 .any(|s| s.eq_ignore_ascii_case(name))
@@ -720,7 +721,7 @@ fn handle_invoke_skill<W: Write>(
             stdout.flush()?;
 
             // Track the active skill
-            dispatcher.active_skills.push(name.clone());
+            ctx.active_skills.push(name.clone());
 
             messages.push(Message {
                 role: Role::Tool,
@@ -733,10 +734,10 @@ fn handle_invoke_skill<W: Write>(
             session.append_message(messages.last().expect("just pushed a message"));
 
             // Refresh system prompt to include the active skill
-            dispatcher.refresh_system_prompt(messages);
+            ctx.refresh_system_prompt(messages);
         }
         None => {
-            let available = dispatcher
+            let available = ctx
                 .skill_registry
                 .skills
                 .iter()
