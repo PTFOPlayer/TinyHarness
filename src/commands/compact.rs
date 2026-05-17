@@ -16,8 +16,9 @@ const CHUNK_BUDGET_FRACTION: f64 = 0.6;
 /// Minimum number of messages per chunk (don't split finer than this).
 const MIN_MESSAGES_PER_CHUNK: usize = 10;
 
-/// Maximum number of messages per chunk (don't make chunks too large).
-const MAX_MESSAGES_PER_CHUNK: usize = 100;
+/// Maximum number of messages per chunk (capped at 250, but the 60% context
+/// budget will naturally limit how many messages actually fit).
+const MAX_MESSAGES_PER_CHUNK: usize = 250;
 
 /// Format a slice of messages into the text representation used for summarization.
 ///
@@ -496,7 +497,7 @@ mod tests {
     #[test]
     fn test_estimate_messages_per_chunk_respects_max() {
         // Even with a huge budget, cap at MAX_MESSAGES_PER_CHUNK
-        let msgs: Vec<Message> = (0..200)
+        let msgs: Vec<Message> = (0..500)
             .map(|_| Message {
                 role: Role::User,
                 content: "x".to_string(),
@@ -505,7 +506,8 @@ mod tests {
             .collect();
         let refs: Vec<&Message> = msgs.iter().collect();
         let chunk_size = estimate_messages_per_chunk(&refs, 1_000_000);
-        assert_eq!(chunk_size, MAX_MESSAGES_PER_CHUNK);
+        // Should cap at MAX_MESSAGES_PER_CHUNK (250) even with unlimited budget
+        assert_eq!(chunk_size, 250);
     }
 
     #[test]

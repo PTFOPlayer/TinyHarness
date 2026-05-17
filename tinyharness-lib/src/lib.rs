@@ -3,6 +3,7 @@ pub mod context;
 pub mod mode;
 pub mod provider;
 pub mod session;
+pub mod skill;
 pub mod token;
 pub mod tools;
 
@@ -17,6 +18,7 @@ pub use provider::{
     ToolCallFunction, ToolDefinition,
 };
 pub use session::{Session, SessionEntry, SessionMeta, SessionStore};
+pub use skill::{Skill, SkillRegistry, SkillSource, discover_skills};
 pub use token::ContextWindowSize;
 pub use tools::tool::ToolCategory;
 pub use tools::{SignalEvent, ToolManager};

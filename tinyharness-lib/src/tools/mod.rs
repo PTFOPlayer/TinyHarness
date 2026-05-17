@@ -2,6 +2,7 @@ pub mod auto_compact;
 pub mod edit;
 pub mod glob;
 pub mod grep;
+pub mod invoke_skill;
 pub mod ls;
 pub mod question;
 pub mod read;
@@ -30,6 +31,8 @@ pub enum SignalEvent {
     },
     /// The model requests conversation compaction.
     AutoCompact { focus: String },
+    /// The model requests invocation of a skill by name.
+    InvokeSkill { skill_name: String },
 }
 
 #[derive(Default)]
@@ -56,6 +59,7 @@ impl ToolManager {
         self.register_tool(crate::tools::web_search::web_fetch_tool_entry());
         self.register_tool(crate::tools::switch_mode::switch_mode_tool_entry());
         self.register_tool(crate::tools::question::question_tool_entry());
+        self.register_tool(crate::tools::invoke_skill::invoke_skill_tool_entry());
     }
 
     pub fn register_tool(&mut self, tool: Tool) {
@@ -158,6 +162,18 @@ impl ToolManager {
                     .unwrap_or("")
                     .to_string();
                 Some(SignalEvent::AutoCompact { focus })
+            }
+            "invoke_skill" => {
+                let skill_name = arguments
+                    .get("skill_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if skill_name.is_empty() {
+                    None
+                } else {
+                    Some(SignalEvent::InvokeSkill { skill_name })
+                }
             }
             _ => None,
         }
