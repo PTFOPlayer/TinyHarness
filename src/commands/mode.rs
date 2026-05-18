@@ -5,11 +5,10 @@ use crate::commands::registry::{CommandContext, CommandResult};
 use crate::style::*;
 
 /// Execute the /mode command.
-#[allow(clippy::ptr_arg)]
 pub fn execute(
     arg: Option<&str>,
     ctx: &mut CommandContext,
-    messages: &mut Vec<Message>,
+    messages: &mut [Message],
 ) -> Result<CommandResult, String> {
     let mode_str = arg.unwrap_or("");
 

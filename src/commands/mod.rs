@@ -12,7 +12,6 @@ pub mod init;
 pub mod mode;
 pub mod models;
 pub mod registry;
-pub mod rename;
 pub mod sessions;
 pub mod settings;
 pub mod skill;
@@ -33,6 +32,15 @@ use crate::commands::{
 pub use files::FileContext;
 pub use init::InitResult;
 pub use registry::{CommandContext, CommandRegistry, CommandResult};
+
+/// Require a non-empty argument. Returns `Err(usage_message)` if the argument
+/// is missing or empty, standardizing error messages across commands.
+pub fn require_arg<'a>(arg: Option<&'a str>, usage: &str) -> Result<&'a str, String> {
+    match arg {
+        Some(s) if !s.is_empty() => Ok(s),
+        _ => Err(format!("Usage: {}", usage)),
+    }
+}
 
 /// Build the default command registry with all built-in commands.
 pub fn build_registry() -> CommandRegistry {
@@ -64,13 +72,14 @@ pub fn build_registry() -> CommandRegistry {
         "/rename",
         "Rename the current session",
         "/rename <name>",
-        |arg, _ctx, _msg| crate::commands::rename::execute(arg.unwrap_or("")),
+        |arg, _ctx, _msg| {
+            let name = require_arg(
+                arg,
+                "/rename <name> — give the current session a descriptive name",
+            )?;
+            Ok(CommandResult::RenameSession(name.to_string()))
+        },
     );
-
-    reg.register_sync("/help", "Show this help message", |_arg, ctx, _msg| {
-        crate::commands::help::execute(&ctx.command_descriptions);
-        Ok(CommandResult::Ok)
-    });
 
     // ── Mode ──────────────────────────────────────────────────────────────
 
@@ -78,7 +87,7 @@ pub fn build_registry() -> CommandRegistry {
         "/mode",
         "Show or switch mode (casual/planning/agent/research)",
         "/mode [mode]",
-        crate::commands::mode::execute,
+        |arg, ctx, msg| crate::commands::mode::execute(arg, ctx, msg),
     );
 
     // ── Settings ───────────────────────────────────────────────────────────
@@ -149,22 +158,27 @@ pub fn build_registry() -> CommandRegistry {
         Ok(CommandResult::Ok)
     });
 
-    reg.register_sync_with_usage("/session", "Switch to an existing session (accepts ID prefix)", "/session <id>",
+    reg.register_sync_with_usage(
+        "/session",
+        "Switch to an existing session (accepts ID prefix)",
+        "/session <id>",
         |arg, ctx, _msg| {
-            let a = arg.unwrap_or("").to_string();
-            if a.is_empty() {
-                return Err("Usage: /session <id> — use /sessions to list available sessions".to_string());
-            }
+            let a = require_arg(
+                arg,
+                "/session <id> — use /sessions to list available sessions",
+            )?;
             if a.starts_with("delete ") || a == "delete" {
-                let id = a.strip_prefix("delete ").unwrap_or("").trim().to_string();
-                if id.is_empty() {
-                    return Err("Usage: /session delete <id|name> — use /sessions to list available sessions".to_string());
-                }
-                crate::commands::sessions::execute_delete(&id, ctx.session_id.as_deref());
+                let id = a.strip_prefix("delete ").unwrap_or("").trim();
+                let id = require_arg(
+                    if id.is_empty() { None } else { Some(id) },
+                    "/session delete <id|name> — use /sessions to list available sessions",
+                )?;
+                crate::commands::sessions::execute_delete(id, ctx.session_id.as_deref());
                 return Ok(CommandResult::Ok);
             }
-            Ok(CommandResult::SwitchSession(a))
-        });
+            Ok(CommandResult::SwitchSession(a.to_string()))
+        },
+    );
 
     // ── File pinning ──────────────────────────────────────────────────────
 
@@ -173,11 +187,8 @@ pub fn build_registry() -> CommandRegistry {
         "Pin a file into the AI's context so it's always available",
         "/add <path>",
         |arg, ctx, msg| {
-            let path = arg.unwrap_or("").to_string();
-            if path.is_empty() {
-                return Err("Usage: /add <file_path> — e.g. /add src/main.rs".to_string());
-            }
-            crate::commands::files::execute_add(&mut ctx.file_context, &path);
+            let path = require_arg(arg, "/add <file_path> — e.g. /add src/main.rs")?;
+            crate::commands::files::execute_add(&mut ctx.file_context, path);
             ctx.refresh_system_prompt(msg);
             Ok(CommandResult::Ok)
         },
@@ -188,11 +199,8 @@ pub fn build_registry() -> CommandRegistry {
         "Remove a pinned file from context",
         "/drop <path>",
         |arg, ctx, msg| {
-            let path = arg.unwrap_or("").to_string();
-            if path.is_empty() {
-                return Err("Usage: /drop <file_path> — e.g. /drop src/main.rs".to_string());
-            }
-            crate::commands::files::execute_drop(&mut ctx.file_context, &path);
+            let path = require_arg(arg, "/drop <file_path> — e.g. /drop src/main.rs")?;
+            crate::commands::files::execute_drop(&mut ctx.file_context, path);
             ctx.refresh_system_prompt(msg);
             Ok(CommandResult::Ok)
         },
@@ -269,12 +277,8 @@ pub fn build_registry() -> CommandRegistry {
         "Activate a skill, injecting its instructions into the conversation",
         "/use <name>",
         |arg, ctx, _msg| {
-            let name = arg.unwrap_or("").to_string();
-            if name.is_empty() {
-                crate::commands::skill::execute_list(&ctx.skill_registry, &ctx.active_skills);
-                return Ok(CommandResult::Ok);
-            }
-            crate::commands::skill::handle_skill_use(&name, ctx)
+            let name = require_arg(arg, "/use <name>")?;
+            crate::commands::skill::handle_skill_use(name, ctx)
         },
     );
 
@@ -283,17 +287,13 @@ pub fn build_registry() -> CommandRegistry {
         "Deactivate a previously loaded skill",
         "/unload <name>",
         |arg, ctx, _msg| {
-            let name = arg.unwrap_or("").to_string();
-            if name.is_empty() {
-                crate::commands::skill::execute_list(&ctx.skill_registry, &ctx.active_skills);
-                return Ok(CommandResult::Ok);
-            }
+            let name = require_arg(arg, "/unload <name>")?;
             if ctx
                 .active_skills
                 .iter()
-                .any(|s| s.eq_ignore_ascii_case(&name))
+                .any(|s| s.eq_ignore_ascii_case(name))
             {
-                Ok(CommandResult::SkillUnload(name))
+                Ok(CommandResult::SkillUnload(name.to_string()))
             } else {
                 println!(
                     "{}Skill '{}' is not currently active.{}",
@@ -360,6 +360,19 @@ pub fn build_registry() -> CommandRegistry {
 
     // Exit alias: /quit → /exit
     reg.register_alias("/quit", "/exit", None, "Exit the application");
+
+    // ── Help (registered last, after descriptions are frozen) ─────────────
+
+    reg.freeze_descriptions();
+    let descs = reg.descriptions().to_vec();
+    reg.register_sync(
+        "/help",
+        "Show this help message",
+        move |_arg, _ctx, _msg| {
+            crate::commands::help::execute(&descs);
+            Ok(CommandResult::Ok)
+        },
+    );
 
     reg
 }

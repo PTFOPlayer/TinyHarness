@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_format_messages_all_roles() {
-        let msgs = vec![
+        let msgs = [
             Message {
                 role: Role::System,
                 content: "sys".to_string(),

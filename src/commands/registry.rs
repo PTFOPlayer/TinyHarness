@@ -45,8 +45,6 @@ pub struct CommandContext {
     pub skill_registry: SkillRegistry,
     /// Names of currently active (loaded) skills.
     pub active_skills: Vec<String>,
-    /// Cached command descriptions from the registry (for /help).
-    pub command_descriptions: Vec<(&'static str, &'static str)>,
 }
 
 impl CommandContext {
@@ -63,7 +61,6 @@ impl CommandContext {
             session_id: None,
             skill_registry: SkillRegistry::discover(),
             active_skills: Vec::new(),
-            command_descriptions: Vec::new(),
         }
     }
 
@@ -292,6 +289,9 @@ pub struct CommandRegistry {
     alias_fixed_args: HashMap<&'static str, &'static str>,
     /// Alias descriptions for /help display.
     alias_descriptions: HashMap<&'static str, &'static str>,
+    /// Pre-computed (usage, description) pairs for /help, including aliases.
+    /// Populated by [`freeze_descriptions`] after all registrations are done.
+    descriptions: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for CommandRegistry {
@@ -307,6 +307,7 @@ impl CommandRegistry {
             aliases: HashMap::new(),
             alias_fixed_args: HashMap::new(),
             alias_descriptions: HashMap::new(),
+            descriptions: Vec::new(),
         }
     }
 
@@ -426,9 +427,6 @@ impl CommandRegistry {
             .get(resolved_name)
             .ok_or_else(|| format!("Unknown command: {}", cmd_name))?;
 
-        // Populate command descriptions for /help
-        ctx.command_descriptions = self.command_descriptions();
-
         handler.execute(effective_arg, ctx, messages).await
     }
 
@@ -440,17 +438,15 @@ impl CommandRegistry {
         names
     }
 
-    /// Get (usage, description) pairs for /help display.
-    ///
-    /// Returns entries from registered commands plus alias entries.
-    pub fn command_descriptions(&self) -> Vec<(&'static str, &'static str)> {
+    /// Freeze the pre-computed (usage, description) pairs for /help display.
+    /// Must be called after all commands and aliases have been registered.
+    pub fn freeze_descriptions(&mut self) {
         let mut descs: Vec<(&'static str, &'static str)> = self
             .commands
             .values()
             .map(|cmd| (cmd.usage(), cmd.description()))
             .collect();
 
-        // Add alias entries with their custom descriptions
         for (&alias, &target) in &self.aliases {
             let desc = self
                 .alias_descriptions
@@ -466,7 +462,12 @@ impl CommandRegistry {
         }
 
         descs.sort_by(|a, b| a.0.cmp(b.0));
-        descs
+        self.descriptions = descs;
+    }
+
+    /// Get the frozen (usage, description) pairs for /help display.
+    pub fn descriptions(&self) -> &[(&'static str, &'static str)] {
+        &self.descriptions
     }
 
     /// Check if a command name (or alias) is registered.
