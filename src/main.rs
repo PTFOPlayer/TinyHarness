@@ -21,7 +21,7 @@ use tinyharness_lib::{
     tools::ToolManager,
 };
 
-use crate::{agent::run_agent_loop, commands::CommandDispatcher};
+use crate::{agent::run_agent_loop, commands::CommandContext};
 use clap::Parser;
 use style::*;
 use tokio::sync::Mutex;
@@ -280,15 +280,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
     });
 
-    let mut dispatcher = CommandDispatcher::new(Arc::clone(&provider), workspace_ctx);
-    dispatcher.current_mode = initial_mode;
-    dispatcher.session_id = Some(session.id().to_string());
+    let mut ctx = CommandContext::new(Arc::clone(&provider), workspace_ctx);
+    ctx.current_mode = initial_mode;
+    ctx.session_id = Some(session.id().to_string());
 
     run_agent_loop(
         provider,
         tool_manager,
         &mut messages,
-        &mut dispatcher,
+        &mut ctx,
         &mut session,
         &interrupted,
     )

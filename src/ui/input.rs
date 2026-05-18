@@ -6,8 +6,46 @@ use rustyline::{
     validate::{ValidationContext, ValidationResult, Validator},
 };
 
-use crate::commands::CommandDispatcher;
 use crate::style::*;
+
+/// All known command names (primary + aliases), used for completion and hints.
+/// This must be kept in sync with the command registry in `commands/mod.rs`.
+const COMMAND_NAMES: &[&str] = &[
+    "/add",
+    "/agent",
+    "/apikey",
+    "/audit",
+    "/autoaccept",
+    "/casual",
+    "/clear",
+    "/command",
+    "/compact",
+    "/context",
+    "/contextlimit",
+    "/drop",
+    "/dropall",
+    "/exit",
+    "/files",
+    "/help",
+    "/init",
+    "/mode",
+    "/model",
+    "/models",
+    "/plan",
+    "/quit",
+    "/refresh",
+    "/rename",
+    "/retries",
+    "/research",
+    "/session",
+    "/sessions",
+    "/settings",
+    "/skill",
+    "/skills",
+    "/timeout",
+    "/unload",
+    "/use",
+];
 
 /// Subcommand completions for commands that take arguments.
 fn subcommand_completions(cmd: &str) -> Vec<&'static str> {
@@ -129,7 +167,7 @@ impl Completer for CommandCompleter {
 
         // Top-level command completion
         let cmd_prefix = prefix.to_lowercase();
-        let matches: Vec<String> = CommandDispatcher::command_names()
+        let matches: Vec<String> = COMMAND_NAMES
             .iter()
             .filter(|name| name.starts_with(&cmd_prefix))
             .take(3)
@@ -189,7 +227,7 @@ impl Hinter for CommandHinter {
 
         // Top-level command hinting
         let prefix = line.to_lowercase();
-        let matches: Vec<&str> = CommandDispatcher::command_names()
+        let matches: Vec<&str> = COMMAND_NAMES
             .iter()
             .filter(|name| name.starts_with(&prefix))
             .take(3)

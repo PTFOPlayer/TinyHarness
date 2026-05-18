@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 
 use tinyharness_lib::{
     config::load_settings,
+    context::WorkspaceContext,
     mode::AgentMode,
     provider::{Message, Provider, Role},
     session::{Session, SessionStore},
@@ -27,7 +28,7 @@ use tinyharness_lib::{
 
 use crate::style::*;
 use crate::{
-    commands::{CommandDispatcher, CommandResult, init},
+    commands::{CommandContext, CommandResult, build_registry, init},
     ui::input::CommandHelper,
 };
 
@@ -43,10 +44,13 @@ pub async fn run_agent_loop(
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
     tool_manager: ToolManager,
     messages: &mut Vec<Message>,
-    dispatcher: &mut CommandDispatcher,
+    ctx: &mut CommandContext,
     session: &mut Session,
     interrupted: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn Error>> {
+    // Build the command registry once at startup
+    let registry = build_registry();
+
     let mut stdout = io::stdout();
     stdout.write_all(
         format!(
@@ -111,22 +115,33 @@ pub async fn run_agent_loop(
         .map(ContextWindowSize::Custom)
         .unwrap_or_else(ContextWindowSize::default_size);
 
+    // Track the last known prompt token count and the message count at that time.
+    // The LLM provider reports the exact tokenized size of the prompt on every call
+    // (Ollama: prompt_eval_count, OpenAI-compat: usage.prompt_tokens). We use that
+    // ground-truth value as long as the message count hasn't changed since it was
+    // recorded. Falls back to the heuristic estimate_conversation_tokens() otherwise.
+    let mut last_known_prompt_tokens: Option<(u32, usize)> = None;
+
     loop {
         // Clear any stale interrupt flag from a previous turn.
         interrupted.store(false, Ordering::SeqCst);
 
-        let mode_label = dispatcher.current_mode.to_string();
-        let mode_color = match dispatcher.current_mode {
+        let mode_label = ctx.current_mode.to_string();
+        let mode_color = match ctx.current_mode {
             AgentMode::Casual => GREEN,
             AgentMode::Planning => YELLOW,
             AgentMode::Agent => CYAN,
             AgentMode::Research => ORANGE,
         };
-        let pinned_count = dispatcher.file_context.pinned_file_count();
+        let pinned_count = ctx.file_context.pinned_file_count();
+        let conversation_tokens = last_known_prompt_tokens
+            .filter(|(_, when_count)| *when_count == messages.len())
+            .map(|(tokens, _)| tokens)
+            .unwrap_or_else(|| estimate_conversation_tokens(messages));
         let status_line = display::format_context_status(
             messages.len(),
             pinned_count,
-            estimate_conversation_tokens(messages),
+            conversation_tokens,
             context_size,
         );
 
@@ -180,153 +195,45 @@ pub async fn run_agent_loop(
         rl.add_history_entry(&trimmed)?;
 
         if user_input.starts_with('/') {
-            match CommandDispatcher::parse(&user_input) {
-                Some(cmd) => {
-                    match dispatcher.dispatch(cmd, messages).await {
-                        Ok(CommandResult::Ok) => {}
-                        Ok(CommandResult::SwitchSession(id_prefix)) => {
-                            let store = SessionStore::default_path();
-                            match store.find_by_prefix(&id_prefix) {
-                                Ok(full_id) => {
-                                    // Flush current session before switching
-                                    session.flush();
-                                    match store.load(&full_id) {
-                                        Ok((new_session, loaded_msgs)) => {
-                                            let meta = new_session.meta();
-                                            let name = meta.name.as_deref().unwrap_or("unnamed");
-                                            eprintln!(
-                                                "{}Switched to session {}{}{} — {}{}{} ({} messages, {}){}",
-                                                BOLD,
-                                                BLUE,
-                                                &meta.id[..12],
-                                                RESET,
-                                                BOLD,
-                                                name,
-                                                RESET,
-                                                meta.message_count,
-                                                meta.mode,
-                                                RESET
-                                            );
-                                            *session = new_session;
-                                            *messages = loaded_msgs;
-                                            // Update dispatcher mode and session ID to match loaded session
-                                            dispatcher.current_mode = session.meta().mode;
-                                            dispatcher.session_id = Some(session.id().to_string());
-                                            // Ensure system prompt reflects current context
-                                            dispatcher.refresh_system_prompt(messages);
-                                            // Print loaded conversation history
-                                            print_conversation_history(messages, &mut stdout)?;
-                                            // Warn if the loaded session is near or over the context window limit
-                                            print_context_load_warning(messages, &mut stdout)?;
-                                        }
-                                        Err(e) => {
-                                            eprintln!("{}{}{}", RED, e, RESET);
-                                        }
-                                    }
+            match registry.dispatch(&user_input, ctx, messages).await {
+                Ok(CommandResult::Ok) => {}
+                Ok(CommandResult::SwitchSession(id_prefix)) => {
+                    let store = SessionStore::default_path();
+                    match store.find_by_prefix(&id_prefix) {
+                        Ok(full_id) => {
+                            // Flush current session before switching
+                            session.flush();
+                            match store.load(&full_id) {
+                                Ok((new_session, loaded_msgs)) => {
+                                    let meta = new_session.meta();
+                                    let name = meta.name.as_deref().unwrap_or("unnamed");
+                                    eprintln!(
+                                        "{}Switched to session {}{}{} — {}{}{} ({} messages, {}){}",
+                                        BOLD,
+                                        BLUE,
+                                        &meta.id[..12],
+                                        RESET,
+                                        BOLD,
+                                        name,
+                                        RESET,
+                                        meta.message_count,
+                                        meta.mode,
+                                        RESET
+                                    );
+                                    *session = new_session;
+                                    *messages = loaded_msgs;
+                                    // Update context mode and session ID to match loaded session
+                                    ctx.current_mode = session.meta().mode;
+                                    ctx.session_id = Some(session.id().to_string());
+                                    // Ensure system prompt reflects current context
+                                    ctx.refresh_system_prompt(messages);
+                                    // Print loaded conversation history
+                                    print_conversation_history(messages, &mut stdout)?;
+                                    // Warn if the loaded session is near or over the context window limit
+                                    print_context_load_warning(messages, &mut stdout)?;
                                 }
                                 Err(e) => {
                                     eprintln!("{}{}{}", RED, e, RESET);
-                                }
-                            }
-                        }
-                        Ok(CommandResult::RenameSession(new_name)) => {
-                            session.set_name(new_name.clone());
-                            eprintln!("{}Session renamed to {}{}{}", BOLD, BLUE, new_name, RESET);
-                        }
-                        Ok(CommandResult::Init(result)) => match &result {
-                            init::InitResult::Created { path } => {
-                                eprintln!(
-                                    "{}  Created {}{}{} — workspace context refreshed.{}",
-                                    GREEN,
-                                    BLUE,
-                                    path.display(),
-                                    GREEN,
-                                    RESET
-                                );
-                            }
-                            init::InitResult::Updated { path } => {
-                                eprintln!(
-                                    "{}  Updated {}{}{} — workspace context refreshed.{}",
-                                    GREEN,
-                                    BLUE,
-                                    path.display(),
-                                    GREEN,
-                                    RESET
-                                );
-                            }
-                        },
-                        Ok(CommandResult::SkillUse(skill_name)) => {
-                            // Prevent duplicate activation
-                            if dispatcher
-                                .active_skills
-                                .iter()
-                                .any(|s| s.eq_ignore_ascii_case(&skill_name))
-                            {
-                                eprintln!(
-                                    "{}⚠ Skill '{}' is already active.{} Use {}/unload {}{} to deactivate it.",
-                                    ORANGE, skill_name, RESET, BOLD, skill_name, RESET
-                                );
-                                continue;
-                            }
-                            match dispatcher.skill_registry.get(&skill_name) {
-                                Some(skill) => {
-                                    eprintln!(
-                                        "{}⚡ Skill activated: {}{}{} — {}{}",
-                                        BOLD, CYAN, skill_name, RESET, skill.description, RESET
-                                    );
-                                    // Track the active skill
-                                    dispatcher.active_skills.push(skill.name.clone());
-                                    // Inject a user message indicating skill activation
-                                    messages.push(Message {
-                                        role: Role::User,
-                                        content: format!("/use {}", skill_name),
-                                        tool_calls: vec![],
-                                    });
-                                    session.append_message(
-                                        messages.last().expect("just pushed a message"),
-                                    );
-                                    // Refresh system prompt to include the active skill
-                                    dispatcher.refresh_system_prompt(messages);
-                                }
-                                None => {
-                                    eprintln!(
-                                        "{}⚠ Skill '{}' not found — it may have been removed.{}",
-                                        RED, skill_name, RESET
-                                    );
-                                }
-                            }
-                        }
-                        Ok(CommandResult::SkillUnload(skill_name)) => {
-                            // Find and remove the skill from active list
-                            let pos = dispatcher
-                                .active_skills
-                                .iter()
-                                .position(|s| s.eq_ignore_ascii_case(&skill_name));
-                            match pos {
-                                Some(idx) => {
-                                    let removed = dispatcher.active_skills.remove(idx);
-                                    eprintln!(
-                                        "{}Skill deactivated: {}{}{}{}",
-                                        BOLD, CYAN, removed, RESET, RESET
-                                    );
-                                    // Inject a user message indicating skill deactivation
-                                    messages.push(Message {
-                                        role: Role::User,
-                                        content: format!("/unload {}", skill_name),
-                                        tool_calls: vec![],
-                                    });
-                                    session.append_message(
-                                        messages.last().expect("just pushed a message"),
-                                    );
-                                    // Refresh system prompt to remove the skill
-                                    dispatcher.refresh_system_prompt(messages);
-                                }
-                                None => {
-                                    // Should not happen since dispatch validates this
-                                    eprintln!(
-                                        "{}⚠ Skill '{}' is not active.{}",
-                                        ORANGE, skill_name, RESET
-                                    );
                                 }
                             }
                         }
@@ -334,17 +241,117 @@ pub async fn run_agent_loop(
                             eprintln!("{}{}{}", RED, e, RESET);
                         }
                     }
-                    if dispatcher.exit_requested {
-                        break;
+                }
+                Ok(CommandResult::RenameSession(new_name)) => {
+                    session.set_name(new_name.clone());
+                    eprintln!("{}Session renamed to {}{}{}", BOLD, BLUE, new_name, RESET);
+                }
+                Ok(CommandResult::Init(result)) => {
+                    // Refresh workspace context since the project instruction file may have changed
+                    ctx.workspace_ctx = WorkspaceContext::collect();
+                    ctx.refresh_system_prompt(messages);
+
+                    match &result {
+                        init::InitResult::Created { path } => {
+                            eprintln!(
+                                "{}  Created {}{}{} — workspace context refreshed.{}",
+                                GREEN,
+                                BLUE,
+                                path.display(),
+                                GREEN,
+                                RESET
+                            );
+                        }
+                        init::InitResult::Updated { path } => {
+                            eprintln!(
+                                "{}  Updated {}{}{} — workspace context refreshed.{}",
+                                GREEN,
+                                BLUE,
+                                path.display(),
+                                GREEN,
+                                RESET
+                            );
+                        }
                     }
                 }
-                None => {
-                    eprintln!(
-                        "{}Unknown command: {}{}{}\n  Type {}/help{} for available commands.{}",
-                        RED, BLUE, user_input, RED, BLUE, RED, RESET
-                    );
+                Ok(CommandResult::SkillUse(skill_name)) => {
+                    // Prevent duplicate activation
+                    if ctx
+                        .active_skills
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(&skill_name))
+                    {
+                        eprintln!(
+                            "{}⚠ Skill '{}' is already active.{} Use {}/unload {}{} to deactivate it.",
+                            ORANGE, skill_name, RESET, BOLD, skill_name, RESET
+                        );
+                        continue;
+                    }
+                    match ctx.skill_registry.get(&skill_name) {
+                        Some(skill) => {
+                            eprintln!(
+                                "{}⚡ Skill activated: {}{}{} — {}{}",
+                                BOLD, CYAN, skill_name, RESET, skill.description, RESET
+                            );
+                            // Track the active skill
+                            ctx.active_skills.push(skill.name.clone());
+                            // Inject a user message indicating skill activation
+                            messages.push(Message {
+                                role: Role::User,
+                                content: format!("/use {}", skill_name),
+                                tool_calls: vec![],
+                            });
+                            session.append_message(messages.last().expect("just pushed a message"));
+                            // Refresh system prompt to include the active skill
+                            ctx.refresh_system_prompt(messages);
+                        }
+                        None => {
+                            eprintln!(
+                                "{}⚠ Skill '{}' not found — it may have been removed.{}",
+                                RED, skill_name, RESET
+                            );
+                        }
+                    }
+                }
+                Ok(CommandResult::SkillUnload(skill_name)) => {
+                    // Find and remove the skill from active list
+                    let pos = ctx
+                        .active_skills
+                        .iter()
+                        .position(|s| s.eq_ignore_ascii_case(&skill_name));
+                    match pos {
+                        Some(idx) => {
+                            let removed = ctx.active_skills.remove(idx);
+                            eprintln!(
+                                "{}Skill deactivated: {}{}{}{}",
+                                BOLD, CYAN, removed, RESET, RESET
+                            );
+                            // Inject a user message indicating skill deactivation
+                            messages.push(Message {
+                                role: Role::User,
+                                content: format!("/unload {}", skill_name),
+                                tool_calls: vec![],
+                            });
+                            session.append_message(messages.last().expect("just pushed a message"));
+                            // Refresh system prompt to remove the skill
+                            ctx.refresh_system_prompt(messages);
+                        }
+                        None => {
+                            // Should not happen since dispatch validates this
+                            eprintln!("{}⚠ Skill '{}' is not active.{}", ORANGE, skill_name, RESET);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}{}{}", RED, e, RESET);
                 }
             }
+            if ctx.exit_requested {
+                break;
+            }
+            // Any slash command may have mutated messages (system prompt changes,
+            // file pinning, mode switch, etc.) — invalidate the cached token count.
+            last_known_prompt_tokens = None;
             continue;
         }
 
@@ -362,7 +369,7 @@ pub async fn run_agent_loop(
 
         loop {
             // Filter tools based on current mode
-            let tools = tool_manager.tools_for_mode(dispatcher.current_mode);
+            let tools = tool_manager.tools_for_mode(ctx.current_mode);
 
             // Call the provider — it returns a receiver for streaming chunks
             let mut recv = {
@@ -407,6 +414,11 @@ pub async fn run_agent_loop(
 
                                 if msg.done {
                                     received_done = true;
+                                    // Capture the ground-truth prompt token count from the
+                                    // LLM provider (Ollama: prompt_eval_count, OpenAI-compat: usage).
+                                    if let Some(ref usage) = msg.usage {
+                                        last_known_prompt_tokens = Some((usage.prompt_tokens, messages.len()));
+                                    }
                                 }
 
                                 if msg.is_error {
@@ -545,7 +557,7 @@ pub async fn run_agent_loop(
                 &response_content,
                 messages,
                 &tool_manager,
-                dispatcher,
+                ctx,
                 &mut stdout,
                 &mut auto_accept,
                 session,

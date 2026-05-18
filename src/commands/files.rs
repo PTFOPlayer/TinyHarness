@@ -170,6 +170,8 @@ impl FileContext {
     }
 }
 
+// ── Execute helpers ─────────────────────────────────────────────────────────
+
 /// Handle the /add command.
 pub fn execute_add(file_context: &mut FileContext, path: &str) {
     match file_context.add(path) {

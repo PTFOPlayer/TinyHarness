@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use tinyharness_lib::config::{get_default_safe_commands, load_settings, save_settings};
 
+use crate::commands::registry::CommandResult;
 use crate::style::*;
+
+// ── Core implementation ─────────────────────────────────────────────────────
 
 /// Check if a command prefix would match any command in the safe list.
 fn matches_safe_prefix(cmd: &str, safe_commands: &[String]) -> bool {
@@ -15,6 +18,40 @@ fn matches_safe_prefix(cmd: &str, safe_commands: &[String]) -> bool {
         }
     }
     false
+}
+
+pub fn execute(args: &str) -> Result<CommandResult, String> {
+    let args = args.trim();
+
+    if args.is_empty() {
+        execute_list();
+        return Ok(CommandResult::Ok);
+    }
+
+    // Split into subcommand + rest
+    let sub_parts: Vec<&str> = args.splitn(2, ' ').collect();
+    let sub = sub_parts[0].to_lowercase();
+    let cmd_arg = sub_parts
+        .get(1)
+        .map(|s| s.trim())
+        .unwrap_or("")
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string();
+
+    match sub.as_str() {
+        "add" => execute_add(&cmd_arg),
+        "rm" | "remove" => execute_remove(&cmd_arg),
+        "deny" => execute_deny(&cmd_arg),
+        "undeny" | "allow" => execute_undeny(&cmd_arg),
+        "list" | "ls" => execute_list(),
+        "reset" => execute_reset(),
+        "resetdeny" => execute_reset_deny(),
+        "help" => execute_help(),
+        _ => execute_list(),
+    }
+
+    Ok(CommandResult::Ok)
 }
 
 pub fn execute_add(cmd: &str) {
@@ -201,7 +238,7 @@ pub fn format_denied_command_rows(cmds: &[&str]) -> Vec<String> {
             }
             line.push_str(&format!("{}✕ {}{}{}", RED, cmd, RESET, RESET));
         }
-        rows.push(line);
+        rows.push(line)
     }
     rows
 }

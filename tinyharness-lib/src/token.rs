@@ -1,7 +1,7 @@
 use crate::provider::Message;
 
-const AVG_TOKENS_PER_WORD: f64 = 1.3;
-const AVG_CHARS_PER_TOKEN: f64 = 4.0;
+const AVG_TOKENS_PER_WORD: f64 = 1.6;
+const AVG_CHARS_PER_TOKEN: f64 = 3.2;
 
 /// A token usage estimate produced by local estimation (not from a provider).
 ///
@@ -40,8 +40,8 @@ pub fn estimate_tokens(text: &str) -> u32 {
 
 pub fn estimate_message_tokens(content: &str, has_tool_calls: bool) -> u32 {
     let base_tokens = estimate_tokens(content);
-    let role_overhead = 2;
-    let tool_call_overhead = if has_tool_calls { 10 } else { 0 };
+    let role_overhead = 4;
+    let tool_call_overhead = if has_tool_calls { 12 } else { 0 };
 
     base_tokens + role_overhead + tool_call_overhead
 }

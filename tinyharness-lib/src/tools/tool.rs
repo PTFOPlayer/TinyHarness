@@ -68,7 +68,15 @@ pub async fn execute_tool_call(tool: &Tool, arguments: &serde_json::Value) -> St
         .as_object()
         .map(|obj| {
             obj.iter()
-                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                .map(|(k, v)| {
+                    // Use to_string() instead of as_str() so JSON numbers (e.g. "timeout": 60000)
+                    // are correctly converted to "60000" rather than silently becoming "".
+                    let val = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    (k.clone(), val)
+                })
                 .collect()
         })
         .unwrap_or_default();

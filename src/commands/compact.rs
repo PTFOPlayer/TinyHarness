@@ -4,7 +4,29 @@ use tinyharness_lib::{
     token::{estimate_conversation_tokens, estimate_tokens},
 };
 
+use crate::async_command;
+use crate::commands::registry::CommandResult;
 use crate::style::*;
+
+// ── Command trait implementation ────────────────────────────────────────────
+
+async_command!(
+    CompactCommand,
+    "/compact",
+    "Summarize conversation history to free context space. Optionally specify a focus area.",
+    "/compact [focus]",
+    |raw_arg, ctx, messages| {
+        let focus = raw_arg.unwrap_or("").to_string();
+        let provider = ctx.provider.clone();
+        async move {
+            let mut p = provider.lock().await;
+            execute_compact(&mut *p, messages, &focus).await?;
+            Ok(CommandResult::Ok)
+        }
+    }
+);
+
+// ── Core implementation ─────────────────────────────────────────────────────
 
 /// Maximum characters per message when formatting for summarization.
 const MAX_CHARS_PER_MESSAGE: usize = 2000;
@@ -434,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_format_messages_all_roles() {
-        let msgs = vec![
+        let msgs = [
             Message {
                 role: Role::System,
                 content: "sys".to_string(),

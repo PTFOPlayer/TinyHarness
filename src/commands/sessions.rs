@@ -1,6 +1,7 @@
 use tinyharness_lib::session::{SessionMeta, SessionStore, format_age};
 
 use crate::style::*;
+
 use std::io::{self, Write};
 
 /// Format a session for display in the `/sessions` listing.

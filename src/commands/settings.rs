@@ -2,21 +2,21 @@ use std::collections::HashSet;
 
 use tinyharness_lib::config::load_settings;
 
+use crate::commands::registry::CommandResult;
 use crate::style::*;
 
-pub fn execute(arg: Option<&str>) {
-    let settings = load_settings();
-
+pub fn execute(arg: Option<&str>) -> Result<CommandResult, String> {
     match arg {
-        Some(sub) if sub.to_lowercase() == "all" => execute_all(&settings),
+        Some(sub) if sub.to_lowercase() == "all" => execute_all(&load_settings()),
         Some(other) => {
             println!(
                 "{}Unknown argument '{}'.{} Use {}/settings{} to show settings or {}/settings all{} to list all safe commands.",
                 ORANGE, other, RESET, BOLD, RESET, BOLD, RESET
             );
         }
-        None => execute_summary(&settings),
+        None => execute_summary(&load_settings()),
     }
+    Ok(CommandResult::Ok)
 }
 
 fn execute_summary(settings: &tinyharness_lib::config::Settings) {

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use tinyharness_lib::context::{PROJECT_MD_FILE_NAMES, WorkspaceContext};
 use tinyharness_lib::provider::{Message, Provider, Role};
 
+use crate::async_command;
+use crate::commands::registry::CommandResult;
 use crate::style::*;
 
 /// Result of the `/init` command.
@@ -12,6 +14,25 @@ pub enum InitResult {
     /// The existing file was updated.
     Updated { path: PathBuf },
 }
+
+// ── Command trait implementation ────────────────────────────────────────────
+
+async_command!(
+    InitCommand,
+    "/init",
+    "Generate or update TINYHARNESS.md project instructions",
+    |_raw_arg, ctx, messages| {
+        let provider = ctx.provider.clone();
+        let workspace_ctx = ctx.workspace_ctx.clone();
+        async move {
+            let mut p = provider.lock().await;
+            let result = execute_init(&mut *p, &workspace_ctx, messages).await?;
+            Ok(CommandResult::Init(result))
+        }
+    }
+);
+
+// ── Core implementation ─────────────────────────────────────────────────────
 
 /// Generate or update a project instruction file (TINYHARNESS.md, etc.)
 /// using the LLM provider to analyze the codebase.
