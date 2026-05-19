@@ -10,7 +10,7 @@ use std::{
 };
 
 use tinyharness_lib::{
-    config::{ProviderKind, Settings, load_settings, save_settings},
+    config::{ProviderKind, Settings, ensure_prompts_initialized, load_settings, save_settings},
     context::WorkspaceContext,
     mode::AgentMode,
     provider::{
@@ -76,6 +76,7 @@ async fn create_provider(
             url,
             settings.ollama_timeout_secs,
             settings.ollama_max_retries,
+            settings.ollama_think_type,
         ))),
     };
 
@@ -146,12 +147,13 @@ fn create_initial_session(
     provider_str: &str,
     current_model: Option<String>,
     workspace_ctx: &WorkspaceContext,
+    prompts_dir: &std::path::Path,
 ) -> (Session, Vec<Message>) {
     let sess =
         SessionStore::default_path().create(working_dir, initial_mode, provider_str, current_model);
     let system_prompt = format!(
         "{}\n\n---\n{}",
-        initial_mode.system_prompt(),
+        initial_mode.load_system_prompt(prompts_dir),
         workspace_ctx.format()
     );
     let msgs = vec![Message {
@@ -209,11 +211,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         save_settings(&settings);
     }
 
+    // ── Collect workspace context ──────────────────────────────────────────
+    let workspace_ctx = WorkspaceContext::collect();
+
+    // ── Ensure prompt files exist (seeded from hardcoded defaults on first launch)
+    let prompts_dir = ensure_prompts_initialized();
+
     let mut tool_manager = ToolManager::new();
     tool_manager.register_defaults();
 
-    // Collect workspace context and build the system prompt with the saved mode
-    let workspace_ctx = WorkspaceContext::collect();
     let initial_mode = settings.preferred_mode;
 
     let provider_str = provider_kind.to_string();
@@ -277,10 +283,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &provider_str,
             current_model.clone(),
             &workspace_ctx,
+            &prompts_dir,
         )
     });
 
-    let mut ctx = CommandContext::new(Arc::clone(&provider), workspace_ctx);
+    let mut ctx = CommandContext::new(Arc::clone(&provider), workspace_ctx, prompts_dir);
     ctx.current_mode = initial_mode;
     ctx.session_id = Some(session.id().to_string());
 

@@ -9,6 +9,8 @@ use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::OllamaThinkType;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
@@ -113,4 +115,7 @@ pub trait Provider: Send + Sync {
 
     /// Set the maximum number of retries. Only meaningful for providers that use retries.
     fn set_retries(&mut self, _max_retries: u32) {}
+
+    /// Set the think/reasoning level. Only meaningful for Ollama.
+    fn set_think_type(&mut self, _think_type: OllamaThinkType) {}
 }

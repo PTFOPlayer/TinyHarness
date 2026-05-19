@@ -189,3 +189,45 @@ pub fn execute_autoaccept(arg: Option<&str>) -> Result<CommandResult, String> {
 
     Ok(CommandResult::Ok)
 }
+
+// ── Think Type (async — needs provider.lock().await) ───────────────────────
+
+async_command!(
+    ThinkCommand,
+    "/think",
+    "Show or set the Ollama think/reasoning level (off, low, medium, high)",
+    "/think [off|low|medium|high]",
+    |raw_arg, ctx, _messages| {
+        let arg = raw_arg.unwrap_or("").to_string();
+        let provider = ctx.provider.clone();
+        async move {
+            if arg.is_empty() {
+                let settings = load_settings();
+                println!(
+                    "{}Current think level: {}{}{}{}",
+                    BOLD, BLUE, settings.ollama_think_type, RESET, RESET
+                );
+                return Ok(CommandResult::Ok);
+            }
+
+            let think_type = match arg.parse::<tinyharness_lib::config::OllamaThinkType>() {
+                Ok(tt) => tt,
+                Err(e) => return Err(e),
+            };
+
+            let mut settings = load_settings();
+            settings.ollama_think_type = think_type;
+            save_settings(&settings);
+
+            let mut p = provider.lock().await;
+            p.set_think_type(think_type);
+
+            println!(
+                "{}Think level set to {}{}{}.{}",
+                BOLD, BLUE, think_type, RESET, RESET
+            );
+
+            Ok(CommandResult::Ok)
+        }
+    }
+);

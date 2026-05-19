@@ -9,7 +9,8 @@ pub mod tools;
 
 // Re-export key types at crate root for convenience
 pub use config::{
-    ProviderKind, Settings, SettingsError, SettingsStore, load_settings, save_settings,
+    ProviderKind, Settings, SettingsError, SettingsStore, ensure_prompts_initialized,
+    load_settings, prompts_dir, save_settings,
 };
 pub use context::WorkspaceContext;
 pub use mode::AgentMode;

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,52 @@ impl FromStr for ProviderKind {
     }
 }
 
+/// Controls the "think" (reasoning) level for Ollama models that support it
+/// (e.g. qwen2.5 variants). Affects how much internal reasoning the model does
+/// before responding.
+///
+/// Corresponds to Ollama's `think` parameter. Only meaningful for Ollama;
+/// other providers ignore this setting.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum OllamaThinkType {
+    /// Disable thinking entirely (fastest, lowest quality).
+    Off,
+    /// Minimal reasoning (faster, lower latency).
+    Low,
+    /// Balanced reasoning (good default).
+    Medium,
+    /// Maximum reasoning (slowest, highest quality).
+    High,
+}
+
+impl fmt::Display for OllamaThinkType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OllamaThinkType::Off => f.write_str("off"),
+            OllamaThinkType::Low => f.write_str("low"),
+            OllamaThinkType::Medium => f.write_str("medium"),
+            OllamaThinkType::High => f.write_str("high"),
+        }
+    }
+}
+
+impl FromStr for OllamaThinkType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "off" | "false" | "0" => Ok(OllamaThinkType::Off),
+            "low" => Ok(OllamaThinkType::Low),
+            "medium" | "mid" => Ok(OllamaThinkType::Medium),
+            "high" => Ok(OllamaThinkType::High),
+            _ => Err(format!(
+                "Unknown think type '{}'. Valid values: off, low, medium, high",
+                s
+            )),
+        }
+    }
+}
+
 /// Persisted application settings — pure data type with no I/O.
 ///
 /// Use `SettingsStore` to load and save instances of this type.
@@ -48,6 +95,8 @@ pub struct Settings {
     pub ollama_timeout_secs: u64,
     /// Maximum number of retries for Ollama requests (default: 3)
     pub ollama_max_retries: u32,
+    /// Controls the think/reasoning level for Ollama (default: Medium)
+    pub ollama_think_type: OllamaThinkType,
     /// Context limit for warning calculations only (default: None, uses model default)
     pub context_limit: Option<u32>,
     /// Automatically accept safe read-only commands in the run tool (default: true)
@@ -68,6 +117,7 @@ impl Default for Settings {
             ollama_api_key: None,
             ollama_timeout_secs: 5,
             ollama_max_retries: 3,
+            ollama_think_type: OllamaThinkType::Medium,
             context_limit: None,
             auto_accept_safe_commands: true,
             safe_command_prefixes: None,
@@ -278,4 +328,56 @@ pub fn save_settings(settings: &Settings) {
     if let Err(e) = store.save(settings) {
         eprintln!("Warning: Failed to save settings: {}", e);
     }
+}
+
+// ── Prompt file management ──────────────────────────────────────────────────
+
+/// Returns the directory where per-mode prompt `.md` files are stored.
+///
+/// Default: `~/.config/tinyharness/prompts/`
+pub fn prompts_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".config")
+        .join("tinyharness")
+        .join("prompts")
+}
+
+/// Ensure the prompts directory exists and is seeded with `.md` files
+/// containing the hardcoded defaults for each mode.
+///
+/// On first launch, this creates `~/.config/tinyharness/prompts/` and writes
+/// `casual.md`, `planning.md`, `agent.md`, and `research.md`.  Existing files
+/// are **never** overwritten — users can safely customize them.
+///
+/// Returns the prompts directory path.
+pub fn ensure_prompts_initialized() -> PathBuf {
+    let dir = prompts_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).ok();
+    }
+
+    let modes = [
+        AgentMode::Casual,
+        AgentMode::Planning,
+        AgentMode::Agent,
+        AgentMode::Research,
+    ];
+
+    for mode in &modes {
+        let file_path = dir.join(mode.prompts_filename());
+        if !file_path.exists() {
+            let default_text = mode.default_system_prompt();
+            // Write the default, trimming leading/trailing whitespace/newlines
+            if let Err(e) = std::fs::write(&file_path, default_text.trim()) {
+                eprintln!(
+                    "Warning: Failed to write default prompt to {}: {}",
+                    file_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    dir
 }

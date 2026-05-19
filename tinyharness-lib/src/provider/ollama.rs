@@ -14,6 +14,7 @@ use ollama_rs::{
 };
 use tokio_stream::StreamExt;
 
+use crate::config::OllamaThinkType;
 use crate::provider::{ChatMessage, ChatMessageResponse, Message, Provider, ToolDefinition};
 
 use super::{Role, ToolCall, ToolCallFunction};
@@ -83,21 +84,37 @@ fn to_ollama_tool_info(ti: ToolDefinition) -> ollama_rs::generation::tools::Tool
     }
 }
 
+fn to_ollama_think_type(tt: OllamaThinkType) -> ThinkType {
+    match tt {
+        OllamaThinkType::Off => ThinkType::False,
+        OllamaThinkType::Low => ThinkType::Low,
+        OllamaThinkType::Medium => ThinkType::Medium,
+        OllamaThinkType::High => ThinkType::High,
+    }
+}
+
 pub struct OllamaProvider {
     client: Ollama,
     model: Option<String>,
     timeout_secs: u64,
     max_retries: u32,
+    think_type: OllamaThinkType,
 }
 
 impl OllamaProvider {
-    pub fn new(base: String, timeout_secs: u64, max_retries: u32) -> Self {
+    pub fn new(
+        base: String,
+        timeout_secs: u64,
+        max_retries: u32,
+        think_type: OllamaThinkType,
+    ) -> Self {
         let client = Ollama::from_url(base.into_url().unwrap());
         OllamaProvider {
             client,
             model: None,
             timeout_secs,
             max_retries,
+            think_type,
         }
     }
 }
@@ -139,6 +156,10 @@ impl Provider for OllamaProvider {
         self.max_retries = max_retries;
     }
 
+    fn set_think_type(&mut self, think_type: OllamaThinkType) {
+        self.think_type = think_type;
+    }
+
     fn chat(
         &mut self,
         messages: Vec<Message>,
@@ -168,7 +189,8 @@ impl Provider for OllamaProvider {
         let ollama_tools: Vec<ollama_rs::generation::tools::ToolInfo> =
             tools.into_iter().map(to_ollama_tool_info).collect();
 
-        let mut request = ChatMessageRequest::new(model, chat_messages).think(ThinkType::Medium);
+        let mut request = ChatMessageRequest::new(model, chat_messages)
+            .think(to_ollama_think_type(self.think_type));
 
         if !ollama_tools.is_empty() {
             request = request.tools(ollama_tools);

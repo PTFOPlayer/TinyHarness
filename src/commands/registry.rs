@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
 use tokio::sync::Mutex;
@@ -45,12 +46,15 @@ pub struct CommandContext {
     pub skill_registry: SkillRegistry,
     /// Names of currently active (loaded) skills.
     pub active_skills: Vec<String>,
+    /// Directory containing per-mode prompt `.md` files.
+    pub prompts_dir: PathBuf,
 }
 
 impl CommandContext {
     pub fn new(
         provider: Arc<Mutex<dyn Provider + Send + Sync>>,
         workspace_ctx: WorkspaceContext,
+        prompts_dir: PathBuf,
     ) -> Self {
         CommandContext {
             provider,
@@ -61,6 +65,7 @@ impl CommandContext {
             session_id: None,
             skill_registry: SkillRegistry::discover(),
             active_skills: Vec::new(),
+            prompts_dir,
         }
     }
 
@@ -101,7 +106,7 @@ impl CommandContext {
     pub fn build_system_prompt(&self) -> String {
         let mut prompt = format!(
             "{}\n\n---\n{}",
-            self.current_mode.system_prompt(),
+            self.current_mode.load_system_prompt(&self.prompts_dir),
             self.workspace_ctx.format()
         );
 
