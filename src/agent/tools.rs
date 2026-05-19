@@ -638,7 +638,7 @@ async fn handle_auto_compact<W: Write>(
     let mut provider_guard = provider.lock().await;
 
     match execute_compact(&mut *provider_guard, messages, focus).await {
-        Ok(()) => {
+        Ok(_tokens) => {
             messages.push(Message {
                 role: Role::Tool,
                 content: format!(

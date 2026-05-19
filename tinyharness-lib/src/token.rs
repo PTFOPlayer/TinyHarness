@@ -1,58 +1,3 @@
-use crate::provider::Message;
-
-const AVG_TOKENS_PER_WORD: f64 = 1.6;
-const AVG_CHARS_PER_TOKEN: f64 = 3.2;
-
-/// A token usage estimate produced by local estimation (not from a provider).
-///
-/// For actual token usage reported by the LLM provider, see
-/// [`crate::provider::TokenUsage`].
-#[derive(Debug, Clone, Default)]
-pub struct TokenEstimate {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-}
-
-impl TokenEstimate {
-    pub fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
-        Self {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
-        }
-    }
-}
-
-pub fn estimate_tokens(text: &str) -> u32 {
-    if text.is_empty() {
-        return 0;
-    }
-
-    let char_count = text.chars().count() as f64;
-    let char_estimate = (char_count / AVG_CHARS_PER_TOKEN) as u32;
-
-    let word_count = text.split_whitespace().count() as f64;
-    let word_estimate = (word_count * AVG_TOKENS_PER_WORD) as u32;
-
-    (char_estimate + word_estimate) / 2
-}
-
-pub fn estimate_message_tokens(content: &str, has_tool_calls: bool) -> u32 {
-    let base_tokens = estimate_tokens(content);
-    let role_overhead = 4;
-    let tool_call_overhead = if has_tool_calls { 12 } else { 0 };
-
-    base_tokens + role_overhead + tool_call_overhead
-}
-
-pub fn estimate_conversation_tokens(messages: &[Message]) -> u32 {
-    messages
-        .iter()
-        .map(|msg| estimate_message_tokens(&msg.content, !msg.tool_calls.is_empty()))
-        .sum()
-}
-
 pub fn format_token_count(tokens: u32) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
@@ -135,25 +80,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_estimate_tokens_empty() {
-        assert_eq!(estimate_tokens(""), 0);
-    }
-
-    #[test]
-    fn test_estimate_tokens_short() {
-        let tokens = estimate_tokens("Hello world");
-        assert!(tokens > 0 && tokens < 10);
-    }
-
-    #[test]
-    fn test_estimate_tokens_longer() {
-        let text = "The quick brown fox jumps over the lazy dog. ";
-        let tokens = estimate_tokens(text);
-        // Should be reasonable estimate (not zero, not huge)
-        assert!(tokens >= 5 && tokens <= 20);
-    }
-
-    #[test]
     fn test_format_token_count() {
         assert_eq!(format_token_count(0), "0");
         assert_eq!(format_token_count(100), "100");
@@ -195,13 +121,5 @@ mod tests {
         let critical = check_context_warning(7373, ctx);
         assert!(critical.is_some());
         assert!(critical.unwrap().is_critical());
-    }
-
-    #[test]
-    fn test_token_estimate() {
-        let usage = TokenEstimate::new(100, 50);
-        assert_eq!(usage.prompt_tokens, 100);
-        assert_eq!(usage.completion_tokens, 50);
-        assert_eq!(usage.total_tokens, 150);
     }
 }

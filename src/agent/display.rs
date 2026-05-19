@@ -3,69 +3,93 @@ use std::io::Write;
 use tinyharness_lib::{
     config::load_settings,
     provider::{Message, Role},
-    token::{
-        ContextWindowSize, check_context_warning, estimate_conversation_tokens, format_token_count,
-    },
+    token::{ContextWindowSize, check_context_warning, format_token_count},
 };
 
 use crate::style::*;
 
-/// Print a warning if the loaded session's conversation is near or exceeding
-/// the context window limit.
+/// Print a warning if the loaded session's conversation has many messages.
+///
+/// When token usage from the provider is available, uses that for precise
+/// context window threshold checks. Otherwise, only warns on excessive
+/// message counts.
 pub fn print_context_load_warning<W: Write>(
     messages: &[Message],
+    known_tokens: Option<u32>,
     stdout: &mut W,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if messages.len() <= 1 {
         return Ok(());
     }
 
-    let estimated_tokens = estimate_conversation_tokens(messages);
     let settings = load_settings();
     let context_size = settings
         .context_limit
         .map(ContextWindowSize::Custom)
         .unwrap_or_else(ContextWindowSize::default_size);
-    let usage_pct = context_size.usage_percentage(estimated_tokens);
 
-    if usage_pct >= 90.0 {
-        writeln!(
-            stdout,
-            "\n{}⚠ This session has {} messages ({}{}{}) — exceeds the context window!{}",
-            RED,
-            messages.len(),
-            BOLD,
-            format_token_count(estimated_tokens),
-            RED,
-            RESET
-        )?;
-        writeln!(
-            stdout,
-            "{}  The conversation may not work properly until you compact it.{}",
-            RED, RESET
-        )?;
-        writeln!(
-            stdout,
-            "{}  Use {}/compact{} [focus] to summarize older messages.{}",
-            RED, BOLD, RED, RESET
-        )?;
-    } else if usage_pct >= 70.0 {
-        writeln!(
-            stdout,
-            "\n{}⚠ This session has {} messages ({}{}{}, {:.1}% of context).{}",
-            YELLOW,
-            messages.len(),
-            BOLD,
-            format_token_count(estimated_tokens),
-            YELLOW,
-            usage_pct,
-            RESET
-        )?;
-        writeln!(
-            stdout,
-            "{}  Consider using {}/compact{} to free context space.{}",
-            YELLOW, BOLD, YELLOW, RESET
-        )?;
+    match known_tokens {
+        Some(tokens) => {
+            let usage_pct = context_size.usage_percentage(tokens);
+
+            if usage_pct >= 90.0 {
+                writeln!(
+                    stdout,
+                    "\n{}⚠ This session has {} messages ({}{}{}) — exceeds the context window!{}",
+                    RED,
+                    messages.len(),
+                    BOLD,
+                    format_token_count(tokens),
+                    RED,
+                    RESET
+                )?;
+                writeln!(
+                    stdout,
+                    "{}  The conversation may not work properly until you compact it.{}",
+                    RED, RESET
+                )?;
+                writeln!(
+                    stdout,
+                    "{}  Use {}/compact{} [focus] to summarize older messages.{}",
+                    RED, BOLD, RED, RESET
+                )?;
+            } else if usage_pct >= 70.0 {
+                writeln!(
+                    stdout,
+                    "\n{}⚠ This session has {} messages ({}{}{}, {:.1}% of context).{}",
+                    YELLOW,
+                    messages.len(),
+                    BOLD,
+                    format_token_count(tokens),
+                    YELLOW,
+                    usage_pct,
+                    RESET
+                )?;
+                writeln!(
+                    stdout,
+                    "{}  Consider using {}/compact{} to free context space.{}",
+                    YELLOW, BOLD, YELLOW, RESET
+                )?;
+            }
+        }
+        None => {
+            // No provider token data yet — warn based on message count alone.
+            // 200+ messages is likely too many for a default 8K context.
+            if messages.len() >= 200 {
+                writeln!(
+                    stdout,
+                    "\n{}⚠ This session has {} messages — may exceed the context window.{}",
+                    YELLOW,
+                    messages.len(),
+                    RESET
+                )?;
+                writeln!(
+                    stdout,
+                    "{}  Use {}/compact{} to free context space.{}",
+                    YELLOW, BOLD, YELLOW, RESET
+                )?;
+            }
+        }
     }
 
     stdout.flush()?;
@@ -146,29 +170,39 @@ pub fn print_conversation_history<W: Write>(
 ///
 /// Returns a string like: `5 msgs · 1.2K/8K (15%) · 2 pinned`
 /// Colors are applied based on usage thresholds.
+/// When no token usage is available, shows `?/8K` in dim gray.
 pub fn format_context_status(
     msg_count: usize,
     pinned_count: usize,
-    estimated_tokens: u32,
+    token_usage: Option<&tinyharness_lib::provider::TokenUsage>,
     context_size: ContextWindowSize,
 ) -> String {
-    let usage_pct = context_size.usage_percentage(estimated_tokens);
-    let used_str = format_token_count(estimated_tokens);
     let max_str = format_token_count(context_size.tokens());
 
-    let pct_color = if usage_pct >= 90.0 {
-        RED
-    } else if usage_pct >= 70.0 {
-        YELLOW
-    } else {
-        GRAY
+    let (used_str, usage_pct, pct_color) = match token_usage {
+        Some(usage) => {
+            let pct = context_size.usage_percentage(usage.total_tokens);
+            let color = if pct >= 90.0 {
+                RED
+            } else if pct >= 70.0 {
+                YELLOW
+            } else {
+                GRAY
+            };
+            (format_token_count(usage.total_tokens), Some(pct), color)
+        }
+        None => ("?".to_string(), None, GRAY),
     };
 
     let mut parts = vec![format!("{} msgs", msg_count)];
-    parts.push(format!(
-        "{}{}/{}{} ({:.0}%){}",
-        pct_color, used_str, max_str, pct_color, usage_pct, RESET
-    ));
+    if let Some(pct) = usage_pct {
+        parts.push(format!(
+            "{}{}/{}{} ({:.0}%){}",
+            pct_color, used_str, max_str, pct_color, pct, RESET
+        ));
+    } else {
+        parts.push(format!("{}{}/{}{}{}", GRAY, used_str, max_str, GRAY, RESET));
+    }
     if pinned_count > 0 {
         parts.push(format!("{}{} pinned{}", BLUE, pinned_count, RESET));
     }
@@ -184,7 +218,7 @@ pub fn format_context_status(
 /// Display a pi-style context status line.
 ///
 /// Shows a compact dim line with message count,
-/// token usage, context percentage, and pinned file count.
+/// token usage from the provider, context percentage, and pinned file count.
 /// Also emits a warning if the context window is nearing capacity.
 pub fn display_context_status<W: Write>(
     messages: &[Message],
@@ -192,24 +226,22 @@ pub fn display_context_status<W: Write>(
     token_usage: Option<&tinyharness_lib::provider::TokenUsage>,
     stdout: &mut W,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let estimated_total = estimate_conversation_tokens(messages);
-
     let settings = load_settings();
     let context_size = settings
         .context_limit
         .map(ContextWindowSize::Custom)
         .unwrap_or_else(ContextWindowSize::default_size);
 
-    // Update estimated total with actual usage if available
-    let estimated_total = token_usage
-        .map(|u| u.total_tokens)
-        .unwrap_or(estimated_total);
-
-    let status = format_context_status(messages.len(), pinned_count, estimated_total, context_size);
+    // Only use provider-reported token count.
+    // If the LLM hasn't reported usage yet (first prompt of a new session),
+    // we display "?" for the token count rather than making up numbers.
+    let status = format_context_status(messages.len(), pinned_count, token_usage, context_size);
     writeln!(stdout, "{}", status)?;
 
-    // Show context warning if needed
-    if let Some(warning) = check_context_warning(estimated_total, context_size) {
+    // Show context warning if we have real token data
+    if let Some(usage) = token_usage
+        && let Some(warning) = check_context_warning(usage.total_tokens, context_size)
+    {
         let (icon, color) = if warning.is_critical() {
             ("⚠", RED)
         } else {
@@ -399,7 +431,12 @@ mod tests {
     #[test]
     fn test_format_context_status_low_usage() {
         // 500 tokens out of 8K = ~6%
-        let result = format_context_status(5, 0, 500, ContextWindowSize::Small8K);
+        let usage = tinyharness_lib::provider::TokenUsage {
+            prompt_tokens: 400,
+            completion_tokens: 100,
+            total_tokens: 500,
+        };
+        let result = format_context_status(5, 0, Some(&usage), ContextWindowSize::Small8K);
         // Should contain "5 msgs", token info, and percentage
         assert!(result.contains("5 msgs"));
         assert!(result.contains("500"));
@@ -411,7 +448,12 @@ mod tests {
 
     #[test]
     fn test_format_context_status_with_pinned() {
-        let result = format_context_status(10, 3, 2000, ContextWindowSize::Small8K);
+        let usage = tinyharness_lib::provider::TokenUsage {
+            prompt_tokens: 1500,
+            completion_tokens: 500,
+            total_tokens: 2000,
+        };
+        let result = format_context_status(10, 3, Some(&usage), ContextWindowSize::Small8K);
         assert!(result.contains("10 msgs"));
         assert!(result.contains("3 pinned"));
         assert!(result.contains("2.0K/8.2K")); // 2000 = 2.0K, 8192 = 8.2K
@@ -420,7 +462,12 @@ mod tests {
     #[test]
     fn test_format_context_status_high_usage_warning_color() {
         // 90%+ should use RED color code
-        let result = format_context_status(20, 0, 7500, ContextWindowSize::Small8K);
+        let usage = tinyharness_lib::provider::TokenUsage {
+            prompt_tokens: 7000,
+            completion_tokens: 500,
+            total_tokens: 7500,
+        };
+        let result = format_context_status(20, 0, Some(&usage), ContextWindowSize::Small8K);
         assert!(result.contains("20 msgs"));
         assert!(result.contains(RED));
     }
@@ -428,7 +475,22 @@ mod tests {
     #[test]
     fn test_format_context_status_medium_usage_warning_color() {
         // 70-89% should use YELLOW color code
-        let result = format_context_status(10, 0, 6000, ContextWindowSize::Small8K);
+        let usage = tinyharness_lib::provider::TokenUsage {
+            prompt_tokens: 5000,
+            completion_tokens: 1000,
+            total_tokens: 6000,
+        };
+        let result = format_context_status(10, 0, Some(&usage), ContextWindowSize::Small8K);
         assert!(result.contains(YELLOW));
+    }
+
+    #[test]
+    fn test_format_context_status_no_usage() {
+        // When no token usage is available, show "?"
+        let result = format_context_status(5, 0, None, ContextWindowSize::Small8K);
+        assert!(result.contains("5 msgs"));
+        assert!(result.contains("?/8.2K")); // unknown / 8192
+        // Should have dim gray color for the token part
+        assert!(result.contains(GRAY));
     }
 }

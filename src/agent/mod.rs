@@ -22,7 +22,7 @@ use tinyharness_lib::{
     mode::AgentMode,
     provider::{Message, Provider, Role},
     session::{Session, SessionStore},
-    token::{ContextWindowSize, estimate_conversation_tokens},
+    token::ContextWindowSize,
     tools::ToolManager,
 };
 
@@ -87,8 +87,13 @@ pub async fn run_agent_loop(
         print_conversation_history(messages, &mut stdout)?;
     }
 
-    // Warn if near/over the context window limit.
-    print_context_load_warning(messages, &mut stdout)?;
+    // Warn if near/over the context window limit, using last known
+    // provider token count from the session (or None for fresh sessions).
+    print_context_load_warning(
+        messages,
+        session.meta().token_usage.as_ref().map(|u| u.total_tokens),
+        &mut stdout,
+    )?;
 
     let helper = CommandHelper::new();
     let history_dir = std::env::var("HOME")
@@ -115,12 +120,14 @@ pub async fn run_agent_loop(
         .map(ContextWindowSize::Custom)
         .unwrap_or_else(ContextWindowSize::default_size);
 
-    // Track the last known prompt token count and the message count at that time.
-    // The LLM provider reports the exact tokenized size of the prompt on every call
-    // (Ollama: prompt_eval_count, OpenAI-compat: usage.prompt_tokens). We use that
-    // ground-truth value as long as the message count hasn't changed since it was
-    // recorded. Falls back to the heuristic estimate_conversation_tokens() otherwise.
-    let mut last_known_prompt_tokens: Option<(u32, usize)> = None;
+    // Track the last known token count from the LLM provider.
+    // Providers report total_tokens (prompt + completion) on every call
+    // (Ollama: prompt_eval_count + eval_count, OpenAI-compat: usage.total_tokens).
+    // We always display the last known value — it's the best data available
+    // and gets refreshed on every provider response. Seed from the session
+    // metadata so that old sessions don't show "?" on restart.
+    let mut last_known_token_usage: Option<tinyharness_lib::provider::TokenUsage> =
+        session.meta().token_usage.clone();
 
     loop {
         // Clear any stale interrupt flag from a previous turn.
@@ -134,14 +141,20 @@ pub async fn run_agent_loop(
             AgentMode::Research => ORANGE,
         };
         let pinned_count = ctx.file_context.pinned_file_count();
-        let conversation_tokens = last_known_prompt_tokens
-            .filter(|(_, when_count)| *when_count == messages.len())
-            .map(|(tokens, _)| tokens)
-            .unwrap_or_else(|| estimate_conversation_tokens(messages));
+
+        // Only use provider-reported token counts, never estimate.
+        // The provider's total_tokens (prompt + completion) reflects the
+        // context that will be sent on the next turn. It remains valid
+        // even after the assistant reply is appended. Tool calls may add
+        // extra messages not yet accounted for, but the count will be
+        // refreshed on the next provider call — until then, it's still
+        // the best number we have.
+        let token_usage_for_status = last_known_token_usage.as_ref();
+
         let status_line = display::format_context_status(
             messages.len(),
             pinned_count,
-            conversation_tokens,
+            token_usage_for_status,
             context_size,
         );
 
@@ -196,7 +209,13 @@ pub async fn run_agent_loop(
 
         if user_input.starts_with('/') {
             match registry.dispatch(&user_input, ctx, messages).await {
-                Ok(CommandResult::Ok) => {}
+                Ok(CommandResult::Ok) => {
+                    // Update token usage from compaction side-channel.
+                    if let Some(usage) = ctx.compaction_token_usage.take() {
+                        last_known_token_usage = Some(usage.clone());
+                        session.set_token_usage(usage);
+                    }
+                }
                 Ok(CommandResult::SwitchSession(id_prefix)) => {
                     let store = SessionStore::default_path();
                     match store.find_by_prefix(&id_prefix) {
@@ -222,15 +241,22 @@ pub async fn run_agent_loop(
                                     );
                                     *session = new_session;
                                     *messages = loaded_msgs;
-                                    // Update context mode and session ID to match loaded session
+                                    // Update context mode, session ID, and token usage
+                                    // from the loaded session
                                     ctx.current_mode = session.meta().mode;
                                     ctx.session_id = Some(session.id().to_string());
+                                    last_known_token_usage = session.meta().token_usage.clone();
                                     // Ensure system prompt reflects current context
                                     ctx.refresh_system_prompt(messages);
                                     // Print loaded conversation history
                                     print_conversation_history(messages, &mut stdout)?;
-                                    // Warn if the loaded session is near or over the context window limit
-                                    print_context_load_warning(messages, &mut stdout)?;
+                                    // Warn if the loaded session is near or over the context window limit,
+                                    // using the stored provider token count from the session's metadata.
+                                    print_context_load_warning(
+                                        messages,
+                                        session.meta().token_usage.as_ref().map(|u| u.total_tokens),
+                                        &mut stdout,
+                                    )?;
                                 }
                                 Err(e) => {
                                     eprintln!("{}{}{}", RED, e, RESET);
@@ -349,9 +375,6 @@ pub async fn run_agent_loop(
             if ctx.exit_requested {
                 break;
             }
-            // Any slash command may have mutated messages (system prompt changes,
-            // file pinning, mode switch, etc.) — invalidate the cached token count.
-            last_known_prompt_tokens = None;
             continue;
         }
 
@@ -417,7 +440,9 @@ pub async fn run_agent_loop(
                                     // Capture the ground-truth prompt token count from the
                                     // LLM provider (Ollama: prompt_eval_count, OpenAI-compat: usage).
                                     if let Some(ref usage) = msg.usage {
-                                        last_known_prompt_tokens = Some((usage.prompt_tokens, messages.len()));
+                                        last_known_token_usage = Some(usage.clone());
+                                        // Persist in session so restarts don't lose the count.
+                                        session.set_token_usage(usage.clone());
                                     }
                                 }
 
