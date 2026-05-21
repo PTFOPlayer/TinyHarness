@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{mode::AgentMode, provider::Message};
+use crate::{mode::AgentMode, provider::Message, provider::TokenUsage};
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -34,6 +34,11 @@ pub struct SessionMeta {
     pub name: Option<String>,
     /// Number of messages in the session.
     pub message_count: usize,
+    /// Last known token usage reported by the LLM provider.
+    /// This is the prompt token count at the time of the last
+    /// provider response, serialized so it survives restarts.
+    #[serde(default)]
+    pub token_usage: Option<TokenUsage>,
 }
 
 /// A single line in the session JSONL file.
@@ -147,6 +152,7 @@ impl SessionStore {
             model,
             name: Some(auto_name),
             message_count: 0,
+            token_usage: None,
         };
 
         // Eagerly create the session file so callers get immediate feedback on errors
@@ -393,6 +399,14 @@ impl Session {
     /// Set a human-readable name for the session.
     pub fn set_name(&mut self, name: String) {
         self.meta.name = Some(name);
+        self.meta.updated_at = now_timestamp();
+        self.dirty = true;
+    }
+
+    /// Set the last known token usage reported by the provider.
+    /// This is stored in the session metadata so it survives restarts.
+    pub fn set_token_usage(&mut self, usage: TokenUsage) {
+        self.meta.token_usage = Some(usage);
         self.meta.updated_at = now_timestamp();
         self.dirty = true;
     }

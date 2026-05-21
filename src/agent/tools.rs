@@ -85,6 +85,7 @@ pub async fn handle_tool_calls<W: Write>(
                             &focus,
                             messages,
                             session,
+                            ctx,
                             stdout,
                             std::sync::Arc::clone(&provider),
                         )
@@ -625,6 +626,7 @@ async fn handle_auto_compact<W: Write>(
     focus: &str,
     messages: &mut Vec<Message>,
     session: &mut Session,
+    ctx: &mut CommandContext,
     stdout: &mut W,
     provider: std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -638,7 +640,14 @@ async fn handle_auto_compact<W: Write>(
     let mut provider_guard = provider.lock().await;
 
     match execute_compact(&mut *provider_guard, messages, focus).await {
-        Ok(()) => {
+        Ok(token_usage) => {
+            // Propagate token usage the same way /compact does:
+            // 1) store in CommandContext so the agent loop updates the display
+            // 2) persist in session metadata so it survives restarts
+            if let Some(usage) = token_usage.clone() {
+                ctx.compaction_token_usage = Some(usage.clone());
+                session.set_token_usage(usage);
+            }
             messages.push(Message {
                 role: Role::Tool,
                 content: format!(

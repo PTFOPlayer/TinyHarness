@@ -1,8 +1,4 @@
-use tinyharness_lib::{
-    config::load_settings,
-    provider::{Message, Provider, Role},
-    token::{estimate_conversation_tokens, estimate_tokens},
-};
+use tinyharness_lib::provider::{Message, Provider, Role, TokenUsage};
 
 use crate::async_command;
 use crate::commands::registry::CommandResult;
@@ -20,8 +16,13 @@ async_command!(
         let provider = ctx.provider.clone();
         async move {
             let mut p = provider.lock().await;
-            execute_compact(&mut *p, messages, &focus).await?;
-            Ok(CommandResult::Ok)
+            match execute_compact(&mut *p, messages, &focus).await {
+                Ok(tokens) => {
+                    ctx.compaction_token_usage = tokens;
+                    Ok(CommandResult::Ok)
+                }
+                Err(e) => Err(e),
+            }
         }
     }
 );
@@ -31,16 +32,8 @@ async_command!(
 /// Maximum characters per message when formatting for summarization.
 const MAX_CHARS_PER_MESSAGE: usize = 2000;
 
-/// Fraction of the context window to use as the token budget per chunk.
-/// We leave room for the system prompt, summarization instructions, and the response.
-const CHUNK_BUDGET_FRACTION: f64 = 0.6;
-
 /// Minimum number of messages per chunk (don't split finer than this).
 const MIN_MESSAGES_PER_CHUNK: usize = 10;
-
-/// Maximum number of messages per chunk (capped at 250, but the 60% context
-/// budget will naturally limit how many messages actually fit).
-const MAX_MESSAGES_PER_CHUNK: usize = 250;
 
 /// Format a slice of messages into the text representation used for summarization.
 ///
@@ -82,7 +75,8 @@ fn focus_instruction(focus: &str) -> String {
     }
 }
 
-/// Call the LLM to summarize a text, returning the generated summary.
+/// Call the LLM to summarize a text, returning the generated summary
+/// and the token usage reported by the provider.
 ///
 /// Uses a dedicated system prompt for summarization and streams the response.
 async fn call_llm_summarize(
@@ -90,7 +84,7 @@ async fn call_llm_summarize(
     text_to_summarize: &str,
     focus: &str,
     is_merge: bool,
-) -> Result<String, String> {
+) -> Result<(String, Option<TokenUsage>), String> {
     let summarization_prompt = if is_merge {
         format!(
             "Merge the following conversation summaries into a single coherent summary. \
@@ -130,9 +124,13 @@ async fn call_llm_summarize(
 
     let mut summary_content = String::new();
     let mut done = false;
+    let mut token_usage: Option<TokenUsage> = None;
     while let Some(msg) = recv.recv().await {
         if !msg.message.content.is_empty() {
             summary_content.push_str(&msg.message.content);
+        }
+        if msg.usage.is_some() {
+            token_usage = msg.usage;
         }
         if msg.done {
             done = true;
@@ -147,33 +145,23 @@ async fn call_llm_summarize(
         );
     }
 
-    Ok(summary_content)
+    Ok((summary_content, token_usage))
 }
 
-/// Estimate how many messages fit within the token budget per chunk.
+/// Determine how many messages fit within a chunk for cascading compaction.
 ///
-/// Walks the messages from oldest to newest, accumulating estimated tokens,
-/// and returns the number of messages that fit within the budget. The result
-/// is clamped to [`MIN_MESSAGES_PER_CHUNK`, `MAX_MESSAGES_PER_CHUNK`].
-fn estimate_messages_per_chunk(messages: &[&Message], token_budget: u32) -> usize {
-    let mut count = 0;
-    let mut tokens_used = 0u32;
+/// Uses a fixed message count approach: splits into chunks of up to 200 messages
+/// each. For very small budgets, still ensures at least MIN_MESSAGES_PER_CHUNK.
+fn messages_per_chunk(messages_len: usize) -> usize {
+    // When the conversation has 500+ messages to summarize, use 200-message chunks.
+    // For shorter conversations, just use half the messages.
+    let chunk_size = if messages_len >= 500 {
+        200
+    } else {
+        messages_len / 2
+    };
 
-    for msg in messages {
-        let msg_tokens = estimate_tokens(&msg.content);
-        if tokens_used + msg_tokens > token_budget && count >= MIN_MESSAGES_PER_CHUNK {
-            break;
-        }
-        tokens_used += msg_tokens;
-        count += 1;
-
-        if count >= MAX_MESSAGES_PER_CHUNK {
-            break;
-        }
-    }
-
-    // Ensure at least MIN_MESSAGES_PER_CHUNK per chunk
-    count.max(MIN_MESSAGES_PER_CHUNK).min(messages.len())
+    chunk_size.max(MIN_MESSAGES_PER_CHUNK).min(messages_len)
 }
 
 /// Context needed for the message reconstruction step after compaction.
@@ -197,7 +185,7 @@ pub async fn execute_compact(
     provider: &mut dyn Provider,
     messages: &mut Vec<Message>,
     focus: &str,
-) -> Result<(), String> {
+) -> Result<Option<TokenUsage>, String> {
     if messages.len() <= 6 {
         println!(
             "{}Not enough messages to compact (only {} messages).{}",
@@ -205,7 +193,7 @@ pub async fn execute_compact(
             messages.len(),
             RESET
         );
-        return Ok(());
+        return Ok(None);
     }
 
     let original_count = messages.len();
@@ -227,7 +215,7 @@ pub async fn execute_compact(
             "{}Nothing to compact — recent messages are the only ones present.{}",
             ORANGE, RESET
         );
-        return Ok(());
+        return Ok(None);
     }
 
     let ctx = CompactContext {
@@ -236,27 +224,14 @@ pub async fn execute_compact(
         original_count,
     };
 
-    // Estimate tokens for the intermediate messages
-    let total_tokens = estimate_conversation_tokens(&to_summarize);
-
-    // Determine token budget per chunk based on context window size
-    let settings = load_settings();
-    let context_tokens = settings.context_limit.unwrap_or(8192); // Default 8K context
-    let budget_per_chunk = (context_tokens as f64 * CHUNK_BUDGET_FRACTION) as u32;
-
-    // Decide: single-pass or cascade?
-    if total_tokens <= budget_per_chunk {
+    // Decide: single-pass or cascade based on message count.
+    // For up to 200 intermediate messages, use a single summarization pass.
+    // Beyond that, use cascading multi-stage compaction.
+    const SINGLE_PASS_LIMIT: usize = 200;
+    if to_summarize.len() <= SINGLE_PASS_LIMIT {
         compact_single_pass(provider, &to_summarize, messages, &ctx, focus).await
     } else {
-        compact_cascade(
-            provider,
-            &to_summarize,
-            messages,
-            &ctx,
-            focus,
-            budget_per_chunk,
-        )
-        .await
+        compact_cascade(provider, &to_summarize, messages, &ctx, focus).await
     }
 }
 
@@ -267,7 +242,7 @@ async fn compact_single_pass(
     messages: &mut Vec<Message>,
     ctx: &CompactContext,
     focus: &str,
-) -> Result<(), String> {
+) -> Result<Option<TokenUsage>, String> {
     let refs: Vec<&Message> = to_summarize.iter().collect();
     let summary_text = format_messages_for_summary(&refs);
 
@@ -278,9 +253,10 @@ async fn compact_single_pass(
         RESET
     );
 
-    let summary_content = call_llm_summarize(provider, &summary_text, focus, false).await?;
+    let (summary_content, token_usage) =
+        call_llm_summarize(provider, &summary_text, focus, false).await?;
     reconstruct_messages(messages, ctx, &summary_content);
-    Ok(())
+    Ok(token_usage)
 }
 
 /// Multi-stage cascade compaction: split intermediate messages into chunks,
@@ -291,10 +267,8 @@ async fn compact_cascade(
     messages: &mut Vec<Message>,
     ctx: &CompactContext,
     focus: &str,
-    budget_per_chunk: u32,
-) -> Result<(), String> {
-    let refs: Vec<&Message> = to_summarize.iter().collect();
-    let chunk_size = estimate_messages_per_chunk(&refs, budget_per_chunk);
+) -> Result<Option<TokenUsage>, String> {
+    let chunk_size = messages_per_chunk(to_summarize.len());
     let total_stages = to_summarize.len().div_ceil(chunk_size);
 
     println!(
@@ -327,10 +301,8 @@ async fn compact_cascade(
         let chunk_text = format_messages_for_summary(&chunk);
 
         match call_llm_summarize(provider, &chunk_text, focus, false).await {
-            Ok(summary) => summaries.push(summary),
+            Ok((summary, _)) => summaries.push(summary),
             Err(e) => {
-                // If a stage fails, try to continue with remaining chunks.
-                // We'll attempt to merge whatever we have.
                 eprintln!(
                     "{}  Stage {}/{} failed: {}{} — continuing with remaining stages.",
                     ORANGE,
@@ -350,7 +322,7 @@ async fn compact_cascade(
     }
 
     // Merge summaries if there are multiple
-    let final_summary = if summaries.len() > 1 {
+    let (final_summary, token_usage) = if summaries.len() > 1 {
         println!(
             "{}  Merging {} summaries into final summary...{}",
             BOLD,
@@ -361,7 +333,7 @@ async fn compact_cascade(
         let merged_text = summaries.join("\n\n---\n\n");
 
         match call_llm_summarize(provider, &merged_text, focus, true).await {
-            Ok(merged) => merged,
+            Ok((merged, usage)) => (merged, usage),
             Err(_) => {
                 // Merge failed — fall back to concatenating raw summaries
                 eprintln!(
@@ -374,16 +346,16 @@ async fn compact_cascade(
                 for (i, summary) in summaries.iter().enumerate() {
                     concatenated.push_str(&format!("--- Stage {} ---\n{}\n\n", i + 1, summary));
                 }
-                concatenated
+                (concatenated, None)
             }
         }
     } else {
         // Only one summary was produced (all other stages failed, or only one chunk)
-        summaries.into_iter().next().unwrap()
+        (summaries.into_iter().next().unwrap(), None)
     };
 
     reconstruct_messages(messages, ctx, &final_summary);
-    Ok(())
+    Ok(token_usage)
 }
 
 /// Reconstruct the messages vector after compaction:
@@ -487,49 +459,23 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_messages_per_chunk_small_budget() {
-        // With a tiny budget, we should still return at least MIN_MESSAGES_PER_CHUNK
-        let msgs: Vec<Message> = (0..50)
-            .map(|_| Message {
-                role: Role::User,
-                content: "a".repeat(1000), // ~250 tokens each
-                tool_calls: vec![],
-            })
-            .collect();
-        let refs: Vec<&Message> = msgs.iter().collect();
-        let chunk_size = estimate_messages_per_chunk(&refs, 100); // very small budget
-        assert!(chunk_size >= MIN_MESSAGES_PER_CHUNK);
+    fn test_messages_per_chunk_small() {
+        // For 50 messages, half is 25
+        assert_eq!(messages_per_chunk(50), 25);
     }
 
     #[test]
-    fn test_estimate_messages_per_chunk_large_budget() {
-        // With a huge budget, all messages should fit in one chunk
-        let msgs: Vec<Message> = (0..20)
-            .map(|_| Message {
-                role: Role::User,
-                content: "short".to_string(), // ~1-2 tokens each
-                tool_calls: vec![],
-            })
-            .collect();
-        let refs: Vec<&Message> = msgs.iter().collect();
-        let chunk_size = estimate_messages_per_chunk(&refs, 100_000);
-        assert_eq!(chunk_size, 20); // All fit in one chunk
+    fn test_messages_per_chunk_large() {
+        // For 1000 messages, capped at 200
+        assert_eq!(messages_per_chunk(1000), 200);
     }
 
     #[test]
-    fn test_estimate_messages_per_chunk_respects_max() {
-        // Even with a huge budget, cap at MAX_MESSAGES_PER_CHUNK
-        let msgs: Vec<Message> = (0..500)
-            .map(|_| Message {
-                role: Role::User,
-                content: "x".to_string(),
-                tool_calls: vec![],
-            })
-            .collect();
-        let refs: Vec<&Message> = msgs.iter().collect();
-        let chunk_size = estimate_messages_per_chunk(&refs, 1_000_000);
-        // Should cap at MAX_MESSAGES_PER_CHUNK (250) even with unlimited budget
-        assert_eq!(chunk_size, 250);
+    fn test_messages_per_chunk_minimum() {
+        // For very few messages, should be at least MIN_MESSAGES_PER_CHUNK
+        let size = messages_per_chunk(15);
+        assert!(size >= MIN_MESSAGES_PER_CHUNK);
+        assert!(size <= 15); // can't exceed the total
     }
 
     #[test]

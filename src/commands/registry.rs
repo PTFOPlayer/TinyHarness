@@ -7,7 +7,7 @@ use tinyharness_lib::{
     config::{load_settings, save_settings},
     context::WorkspaceContext,
     mode::AgentMode,
-    provider::{Message, Provider, Role},
+    provider::{Message, Provider, Role, TokenUsage},
     skill::SkillRegistry,
 };
 
@@ -48,6 +48,9 @@ pub struct CommandContext {
     pub active_skills: Vec<String>,
     /// Directory containing per-mode prompt `.md` files.
     pub prompts_dir: PathBuf,
+    /// Set by the compaction command after a successful summarization
+    /// to let the agent loop update the token-usage display and session metadata.
+    pub compaction_token_usage: Option<TokenUsage>,
 }
 
 impl CommandContext {
@@ -66,6 +69,7 @@ impl CommandContext {
             skill_registry: SkillRegistry::discover(),
             active_skills: Vec::new(),
             prompts_dir,
+            compaction_token_usage: None,
         }
     }
 
