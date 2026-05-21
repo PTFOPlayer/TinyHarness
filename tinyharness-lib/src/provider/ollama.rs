@@ -5,10 +5,7 @@ use std::time::Duration;
 use ollama_rs::{
     IntoUrlSealed, Ollama,
     generation::{
-        chat::{
-            ChatMessage as OllamaChatMessage,
-            request::ChatMessageRequest,
-        },
+        chat::{ChatMessage as OllamaChatMessage, request::ChatMessageRequest},
         parameters::ThinkType,
     },
 };
