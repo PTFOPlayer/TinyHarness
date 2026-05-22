@@ -6,10 +6,10 @@ use crate::commands::registry::CommandResult;
 use crate::style::*;
 
 async_command!(
-    ModelsCommand,
-    "/models",
+    ModelCommand,
+    "/model",
     "List available models or switch to a different model",
-    "/models [name]",
+    "/model [name]",
     |raw_arg, ctx, _messages| {
         let name = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();

@@ -450,6 +450,27 @@ pub async fn run_agent_loop(
                                     is_error = true;
                                 }
 
+                                // Display thinking/reasoning chain if enabled and present
+                                if let Some(ref thinking) = msg.message.thinking
+                                    && ctx.show_thinking
+                                    && !thinking.is_empty()
+                                {
+                                    // Clear spinner before first output (thinking or content)
+                                    if waiting_for_first_chunk && has_shown_spinner {
+                                        write!(stdout, "\r{CLEAR_LINE}")?;
+                                        stdout.flush()?;
+                                        waiting_for_first_chunk = false;
+                                    } else {
+                                        waiting_for_first_chunk = false;
+                                    }
+                                    // Show thinking in dim magenta
+                                    write!(
+                                        stdout,
+                                        "{DIM}{THINK_COLOR}[thinking] {thinking}{RESET}"
+                                    )?;
+                                    stdout.flush()?;
+                                }
+
                                 if !msg.message.content.is_empty() {
                                     // Clear spinner before first content
                                     if waiting_for_first_chunk && has_shown_spinner {

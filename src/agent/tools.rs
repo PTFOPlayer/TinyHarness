@@ -18,6 +18,18 @@ use crate::ui::confirm::Confirmation;
 
 use super::safety::is_safe_command;
 
+/// Result from executing a generic tool call.
+struct GenericToolResult {
+    /// Formatted content for batching into the conversation message.
+    content: String,
+    /// If this was a "run" command, the shell command that was executed.
+    run_command: Option<String>,
+    /// Duration of the tool execution in milliseconds.
+    duration_ms: u64,
+    /// Whether the tool returned an error.
+    is_error: bool,
+}
+
 /// Handle tool calls from the assistant response.
 ///
 /// Returns `Ok(true)` if tool results were added to messages (the caller should
@@ -52,6 +64,9 @@ pub async fn handle_tool_calls<W: Write>(
         tool_calls: tool_calls.to_vec(),
     });
     session.append_message(messages.last().expect("just pushed a message"));
+
+    // Collect generic tool results to batch them into a single message
+    let mut generic_tool_results: Vec<GenericToolResult> = Vec::new();
 
     for call in tool_calls {
         // Check for interrupt between tool calls
@@ -156,8 +171,50 @@ pub async fn handle_tool_calls<W: Write>(
             continue;
         }
 
-        // Generic tool execution
-        execute_generic_tool(call, tool_manager, messages, session, stdout, auto_accepted).await;
+        // Generic tool execution — collect result for batching
+        let result = execute_generic_tool(call, tool_manager, stdout, auto_accepted).await;
+
+        // Log to audit if this was a "run" command
+        if let Some(ref cmd) = result.run_command {
+            let exit_code = if result.is_error { -1 } else { 0 };
+            let session_id = session.id().to_string();
+            crate::commands::audit::log_command(
+                &session_id,
+                cmd,
+                exit_code,
+                auto_accepted,
+                result.duration_ms,
+            );
+        }
+
+        generic_tool_results.push(result);
+    }
+
+    // Batch all generic tool results into a single message
+    if !generic_tool_results.is_empty() {
+        let batched_content = if generic_tool_results.len() == 1 {
+            generic_tool_results.into_iter().next().unwrap().content
+        } else {
+            format!(
+                "Multiple tool results ({} total):\n\n{}",
+                generic_tool_results.len(),
+                generic_tool_results
+                    .into_iter()
+                    .map(|r| r.content)
+                    .collect::<Vec<_>>()
+                    .join("\n\n---\n\n")
+            )
+        };
+
+        messages.push(Message {
+            role: Role::Tool,
+            content: format!(
+                "Tool results:\n{}\n\nUse these results to continue helping the user.",
+                batched_content
+            ),
+            tool_calls: vec![],
+        });
+        session.append_message(messages.last().expect("just pushed a message"));
     }
 
     Ok(true)
@@ -244,11 +301,9 @@ fn format_duration(ms: u64) -> String {
 async fn execute_generic_tool<W: Write>(
     call: &ToolCall,
     tool_manager: &ToolManager,
-    messages: &mut Vec<Message>,
-    session: &mut Session,
     stdout: &mut W,
     auto_accepted: bool,
-) {
+) -> GenericToolResult {
     // Show the "Executing..." header line
     if auto_accepted {
         if call.function.name == "run" {
@@ -333,25 +388,6 @@ async fn execute_generic_tool<W: Write>(
     };
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
-
-    // Log to audit if this is a "run" command
-    if call.function.name == "run"
-        && let Some(cmd) = call
-            .function
-            .arguments
-            .get("command")
-            .and_then(|v| v.as_str())
-    {
-        let exit_code = if result.starts_with("Error:") { -1 } else { 0 };
-        let session_id = session.id().to_string();
-        crate::commands::audit::log_command(
-            &session_id,
-            cmd,
-            exit_code,
-            auto_accepted,
-            duration_ms,
-        );
-    }
 
     // For tools that return potentially large listings, show only a summary
     match call.function.name.as_str() {
@@ -441,15 +477,25 @@ async fn execute_generic_tool<W: Write>(
     }
     writeln!(stdout, "{RESET}").unwrap();
     stdout.flush().unwrap();
-    messages.push(Message {
-        role: Role::Tool,
-        content: format!(
-            "Tool '{}' result:\n{}\n\nUse this result to continue helping the user.",
-            call.function.name, result
-        ),
-        tool_calls: vec![],
-    });
-    session.append_message(messages.last().expect("just pushed a message"));
+
+    // Capture audit-relevant info before returning
+    let run_command = if call.function.name == "run" {
+        call.function
+            .arguments
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
+    let is_error = result.starts_with("Error:");
+
+    GenericToolResult {
+        content: format!("### {} Tool Result\n\n{}", call.function.name, result),
+        run_command,
+        duration_ms,
+        is_error,
+    }
 }
 
 /// Handle the switch_mode signal: update context and system prompt.

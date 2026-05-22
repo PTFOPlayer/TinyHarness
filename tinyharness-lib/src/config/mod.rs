@@ -97,6 +97,8 @@ pub struct Settings {
     pub ollama_max_retries: u32,
     /// Controls the think/reasoning level for Ollama (default: Medium)
     pub ollama_think_type: OllamaThinkType,
+    /// Show the model's thinking/reasoning chain inline during streaming (default: false)
+    pub show_thinking: bool,
     /// Context limit for warning calculations only (default: None, uses model default)
     pub context_limit: Option<u32>,
     /// Automatically accept safe read-only commands in the run tool (default: true)
@@ -118,6 +120,7 @@ impl Default for Settings {
             ollama_timeout_secs: 5,
             ollama_max_retries: 3,
             ollama_think_type: OllamaThinkType::Medium,
+            show_thinking: false,
             context_limit: None,
             auto_accept_safe_commands: true,
             safe_command_prefixes: None,

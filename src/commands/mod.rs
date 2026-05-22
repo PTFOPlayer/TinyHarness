@@ -18,7 +18,7 @@ pub mod skill;
 
 use std::sync::Arc;
 
-use tinyharness_lib::{context::WorkspaceContext, provider::Provider};
+use tinyharness_lib::{config::load_settings, context::WorkspaceContext, provider::Provider};
 
 use tokio::sync::Mutex;
 
@@ -26,7 +26,7 @@ use crate::commands::{
     compact::CompactCommand,
     config_settings::{RetriesCommand, ThinkCommand, TimeoutCommand},
     init::InitCommand,
-    models::ModelsCommand,
+    models::ModelCommand,
 };
 
 pub use files::FileContext;
@@ -128,6 +128,13 @@ pub fn build_registry() -> CommandRegistry {
         "Show or toggle auto-accept for safe read-only commands (default: on)",
         "/autoaccept [on|off]",
         |arg, _ctx, _msg| crate::commands::config_settings::execute_autoaccept(arg),
+    );
+
+    reg.register_sync_with_usage(
+        "/showthink",
+        "Show or toggle display of the model's thinking/reasoning chain during responses",
+        "/showthink [on|off]",
+        |arg, ctx, _msg| crate::commands::config_settings::execute_showthink(arg, ctx),
     );
 
     // ── Command management ────────────────────────────────────────────────
@@ -318,13 +325,7 @@ pub fn build_registry() -> CommandRegistry {
 
     // ── Async commands (need provider.lock().await) ────────────────────────
 
-    reg.register(ModelsCommand);
-    reg.register_alias(
-        "/model",
-        "/models",
-        None,
-        "Switch to a different model (alias for /models)",
-    );
+    reg.register(ModelCommand);
     reg.register(CompactCommand);
     reg.register(InitCommand);
     reg.register(TimeoutCommand);
@@ -379,10 +380,14 @@ pub fn build_registry() -> CommandRegistry {
 }
 
 /// Create a new CommandContext with the given provider and workspace context.
+/// Loads the `show_thinking` toggle from saved settings.
 pub fn create_context(
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
     workspace_ctx: WorkspaceContext,
     prompts_dir: std::path::PathBuf,
 ) -> CommandContext {
-    CommandContext::new(provider, workspace_ctx, prompts_dir)
+    let settings = load_settings();
+    let mut ctx = CommandContext::new(provider, workspace_ctx, prompts_dir);
+    ctx.show_thinking = settings.show_thinking;
+    ctx
 }

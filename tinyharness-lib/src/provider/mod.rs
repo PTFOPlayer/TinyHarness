@@ -34,6 +34,10 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    /// Thinking/reasoning content from the model (Ollama's `thinking` field).
+    /// Only populated when the model supports reasoning (e.g. qwen2.5 variants).
+    #[serde(default)]
+    pub thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

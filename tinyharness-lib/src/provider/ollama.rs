@@ -202,6 +202,7 @@ impl Provider for OllamaProvider {
                     message: ChatMessage {
                         content: msg,
                         tool_calls: vec![],
+                        thinking: None,
                     },
                     done: true,
                     is_error: true,
@@ -291,6 +292,8 @@ struct OllamaChunkMessage {
     #[serde(default)]
     content: String,
     #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
     tool_calls: Vec<ollama_rs::generation::tools::ToolCall>,
 }
 
@@ -319,6 +322,7 @@ impl OllamaChunk {
         ChatMessageResponse {
             message: ChatMessage {
                 content: self.message.content.clone(),
+                thinking: self.message.thinking.clone(),
                 tool_calls: self
                     .message
                     .tool_calls
@@ -421,6 +425,7 @@ async fn stream_ollama_chat(
             message: ChatMessage {
                 content: String::new(),
                 tool_calls: vec![],
+                thinking: None,
             },
             done: true,
             is_error: false,

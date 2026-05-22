@@ -308,6 +308,7 @@ pub async fn stream_chat_completions(
                     message: ChatMessage {
                         content: format!("Error: {}", e),
                         tool_calls: vec![],
+                        thinking: None,
                     },
                     done: true,
                     is_error: true,
@@ -335,6 +336,7 @@ pub async fn stream_chat_completions(
                         message: ChatMessage {
                             content: format!("\n\nStream error: {}", e),
                             tool_calls: vec![],
+                            thinking: None,
                         },
                         done: true,
                         is_error: true,
@@ -406,6 +408,7 @@ pub async fn stream_chat_completions(
                     message: ChatMessage {
                         content: response_content.clone(),
                         tool_calls: vec![],
+                        thinking: None,
                     },
                     done: false,
                     is_error: false,
@@ -440,6 +443,7 @@ pub async fn stream_chat_completions(
             message: ChatMessage {
                 content: String::new(),
                 tool_calls,
+                thinking: None,
             },
             done: true,
             is_error: false,

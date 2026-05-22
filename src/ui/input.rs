@@ -30,7 +30,6 @@ const COMMAND_NAMES: &[&str] = &[
     "/init",
     "/mode",
     "/model",
-    "/models",
     "/plan",
     "/quit",
     "/refresh",
@@ -40,8 +39,10 @@ const COMMAND_NAMES: &[&str] = &[
     "/session",
     "/sessions",
     "/settings",
+    "/showthink",
     "/skill",
     "/skills",
+    "/think",
     "/timeout",
     "/unload",
     "/use",
@@ -65,6 +66,8 @@ fn subcommand_completions(cmd: &str) -> Vec<&'static str> {
         "/settings" => vec!["all"],
         "/autoaccept" => vec!["off", "on"],
         "/apikey" => vec!["clear"],
+        "/showthink" => vec!["off", "on"],
+        "/think" => vec!["high", "low", "medium", "off"],
         _ => vec![],
     }
 }

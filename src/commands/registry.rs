@@ -51,6 +51,8 @@ pub struct CommandContext {
     /// Set by the compaction command after a successful summarization
     /// to let the agent loop update the token-usage display and session metadata.
     pub compaction_token_usage: Option<TokenUsage>,
+    /// Whether to display the model's thinking/reasoning chain during streaming.
+    pub show_thinking: bool,
 }
 
 impl CommandContext {
@@ -70,6 +72,7 @@ impl CommandContext {
             active_skills: Vec::new(),
             prompts_dir,
             compaction_token_usage: None,
+            show_thinking: false,
         }
     }
 

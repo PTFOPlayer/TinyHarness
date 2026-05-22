@@ -22,6 +22,10 @@ pub const ORANGE: &str = "\x1b[38;5;208m";
 pub const BRIGHT_YELLOW: &str = "\x1b[93m";
 pub const BRIGHT_CYAN: &str = "\x1b[96m";
 
+// Thinking/reasoning chain colors
+pub const THINK_COLOR: &str = "\x1b[35m"; // Magenta for thinking text
+pub const THINK_COLOR_DIM: &str = "\x1b[38;5;97m"; // Dimmer magenta
+
 // Background colors (subtle, for tool call highlighting)
 pub const BG_DIM: &str = "\x1b[48;5;236m"; // Dark gray bg — tool call results
 pub const BG_TOOL: &str = "\x1b[48;5;237m"; // Slightly lighter gray bg — tool headers

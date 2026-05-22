@@ -1,7 +1,7 @@
 use tinyharness_lib::config::{load_settings, save_settings};
 
 use crate::async_command;
-use crate::commands::registry::CommandResult;
+use crate::commands::registry::{CommandContext, CommandResult};
 use crate::style::*;
 
 // ── Timeout (async — needs provider.lock().await) ─────────────────────────────
@@ -231,3 +231,45 @@ async_command!(
         }
     }
 );
+
+// ── Show Think (sync — no provider access needed) ─────────────────────────────
+
+/// Execute the /showthink command to toggle display of the model's thinking/reasoning chain.
+pub fn execute_showthink(
+    arg: Option<&str>,
+    ctx: &mut CommandContext,
+) -> Result<CommandResult, String> {
+    let a = arg.unwrap_or("");
+
+    if a.is_empty() {
+        let status = if ctx.show_thinking { "on" } else { "off" };
+        let color = if ctx.show_thinking { GREEN } else { GRAY };
+        println!(
+            "{}Show thinking chain: {}{}{}{}",
+            BOLD, color, status, RESET, RESET
+        );
+        return Ok(CommandResult::Ok);
+    }
+
+    let new_value = match a.to_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => true,
+        "off" | "false" | "no" | "0" => false,
+        _ => {
+            return Err("Invalid value. Use 'on' or 'off', e.g. /showthink on".to_string());
+        }
+    };
+
+    ctx.show_thinking = new_value;
+    let mut settings = load_settings();
+    settings.show_thinking = new_value;
+    save_settings(&settings);
+
+    let status = if new_value { "on" } else { "off" };
+    let color = if new_value { GREEN } else { GRAY };
+    println!(
+        "{}Show thinking chain set to {}{}{}{}",
+        BOLD, color, status, RESET, RESET
+    );
+
+    Ok(CommandResult::Ok)
+}
