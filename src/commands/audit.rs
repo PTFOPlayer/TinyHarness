@@ -18,7 +18,10 @@ pub struct AuditEntry {
     pub timestamp: u64,
     /// Session ID where the command was run.
     pub session_id: String,
-    /// The command that was executed.
+    /// The tool that was executed (e.g. "run", "write", "edit").
+    #[serde(default = "default_tool_name")]
+    pub tool_name: String,
+    /// The primary argument: shell command for "run", file path for "write"/"edit".
     pub command: String,
     /// Exit code of the command (0 = success).
     pub exit_code: i32,
@@ -26,6 +29,10 @@ pub struct AuditEntry {
     pub auto_accepted: bool,
     /// Duration of the command execution in milliseconds.
     pub duration_ms: u64,
+}
+
+fn default_tool_name() -> String {
+    "run".to_string()
 }
 
 // ── Audit log path ──────────────────────────────────────────────────────────
@@ -50,6 +57,7 @@ pub fn ensure_audit_dir() -> std::io::Result<()> {
 /// Append a command execution to the audit log.
 pub fn log_command(
     session_id: &str,
+    tool_name: &str,
     command: &str,
     exit_code: i32,
     auto_accepted: bool,
@@ -60,6 +68,7 @@ pub fn log_command(
     let entry = AuditEntry {
         timestamp: now_timestamp(),
         session_id: session_id.to_string(),
+        tool_name: tool_name.to_string(),
         command: command.to_string(),
         exit_code,
         auto_accepted,
@@ -150,14 +159,15 @@ pub fn show_last(n: usize) {
 
     // Header
     println!(
-        "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
-        BOLD, "Timestamp", "Command", "Exit", "Auto?", "Duration", RESET
+        "  {}{:20}  {:6}  {:26}  {:6}  {:8}  {:10}{}",
+        BOLD, "Timestamp", "Tool", "Command", "Exit", "Auto?", "Duration", RESET
     );
     println!(
-        "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
+        "  {}{:20}  {:6}  {:26}  {:6}  {:8}  {:10}{}",
         GRAY,
         "────────────────────",
-        "──────────────────────────────",
+        "──────",
+        "──────────────────────────",
         "──────",
         "────────",
         "──────────",
@@ -166,8 +176,13 @@ pub fn show_last(n: usize) {
 
     for entry in &entries {
         let ts_str = format_timestamp(entry.timestamp);
-        let cmd_display = if entry.command.len() > 30 {
-            format!("{}...", &entry.command[..27])
+        let tool_display = if entry.tool_name.len() > 6 {
+            format!("{}...", &entry.tool_name[..3])
+        } else {
+            entry.tool_name.clone()
+        };
+        let cmd_display = if entry.command.len() > 26 {
+            format!("{}...", &entry.command[..23])
         } else {
             entry.command.clone()
         };
@@ -196,8 +211,8 @@ pub fn show_last(n: usize) {
         };
 
         println!(
-            "  {}{}  {}  {}  {}  {}",
-            GRAY, ts_str, cmd_display, exit_str, auto_str, duration_str
+            "  {}{}  {}{}{}  {}  {}  {}  {}",
+            GRAY, ts_str, CYAN, tool_display, RESET, cmd_display, exit_str, auto_str, duration_str
         );
     }
 
@@ -220,14 +235,15 @@ pub fn show_session(session_id: &str) {
 
     // Header
     println!(
-        "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
-        BOLD, "Timestamp", "Command", "Exit", "Auto?", "Duration", RESET
+        "  {}{:20}  {:6}  {:26}  {:6}  {:8}  {:10}{}",
+        BOLD, "Timestamp", "Tool", "Command", "Exit", "Auto?", "Duration", RESET
     );
     println!(
-        "  {}{:20}  {:30}  {:6}  {:8}  {:10}{}",
+        "  {}{:20}  {:6}  {:26}  {:6}  {:8}  {:10}{}",
         GRAY,
         "────────────────────",
-        "──────────────────────────────",
+        "──────",
+        "──────────────────────────",
         "──────",
         "────────",
         "──────────",
@@ -236,8 +252,13 @@ pub fn show_session(session_id: &str) {
 
     for entry in &entries {
         let ts_str = format_timestamp(entry.timestamp);
-        let cmd_display = if entry.command.len() > 30 {
-            format!("{}...", &entry.command[..27])
+        let tool_display = if entry.tool_name.len() > 6 {
+            format!("{}...", &entry.tool_name[..3])
+        } else {
+            entry.tool_name.clone()
+        };
+        let cmd_display = if entry.command.len() > 26 {
+            format!("{}...", &entry.command[..23])
         } else {
             entry.command.clone()
         };
@@ -266,8 +287,8 @@ pub fn show_session(session_id: &str) {
         };
 
         println!(
-            "  {}{}  {}  {}  {}  {}",
-            GRAY, ts_str, cmd_display, exit_str, auto_str, duration_str
+            "  {}{}  {}{}{}  {}  {}  {}  {}",
+            GRAY, ts_str, CYAN, tool_display, RESET, cmd_display, exit_str, auto_str, duration_str
         );
     }
 

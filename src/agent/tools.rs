@@ -22,8 +22,10 @@ use super::safety::is_safe_command;
 struct GenericToolResult {
     /// Formatted content for batching into the conversation message.
     content: String,
-    /// If this was a "run" command, the shell command that was executed.
-    run_command: Option<String>,
+    /// If this was an auditable tool (run/write/edit), the tool name.
+    audit_tool_name: Option<String>,
+    /// For auditable tools: the primary argument (command for "run", path for "write"/"edit").
+    audit_detail: Option<String>,
     /// Duration of the tool execution in milliseconds.
     duration_ms: u64,
     /// Whether the tool returned an error.
@@ -174,13 +176,14 @@ pub async fn handle_tool_calls<W: Write>(
         // Generic tool execution — collect result for batching
         let result = execute_generic_tool(call, tool_manager, stdout, auto_accepted).await;
 
-        // Log to audit if this was a "run" command
-        if let Some(ref cmd) = result.run_command {
+        // Log to audit if this was an auditable tool (run/write/edit)
+        if let Some(ref tool_name) = result.audit_tool_name {
             let exit_code = if result.is_error { -1 } else { 0 };
             let session_id = session.id().to_string();
             crate::commands::audit::log_command(
                 &session_id,
-                cmd,
+                tool_name,
+                result.audit_detail.as_deref().unwrap_or(""),
                 exit_code,
                 auto_accepted,
                 result.duration_ms,
@@ -479,20 +482,39 @@ async fn execute_generic_tool<W: Write>(
     stdout.flush().unwrap();
 
     // Capture audit-relevant info before returning
-    let run_command = if call.function.name == "run" {
-        call.function
-            .arguments
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    } else {
-        None
+    let (audit_tool_name, audit_detail) = match call.function.name.as_str() {
+        "run" => (
+            Some("run".to_string()),
+            call.function
+                .arguments
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        ),
+        "write" => (
+            Some("write".to_string()),
+            call.function
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        ),
+        "edit" => (
+            Some("edit".to_string()),
+            call.function
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        ),
+        _ => (None, None),
     };
     let is_error = result.starts_with("Error:");
 
     GenericToolResult {
         content: format!("### {} Tool Result\n\n{}", call.function.name, result),
-        run_command,
+        audit_tool_name,
+        audit_detail,
         duration_ms,
         is_error,
     }

@@ -419,6 +419,11 @@ pub async fn run_agent_loop(
             let mut is_error = false;
             let mut was_interrupted = false;
 
+            // Thinking chain tracking: accumulate thinking delta and track
+            // whether we've shown the header, so we only print new content.
+            let mut thinking_content = String::new();
+            let mut thinking_header_shown = false;
+
             // Spinner state: animate while waiting for the first content chunk
             let mut spinner_idx: usize = 0;
             let mut waiting_for_first_chunk = true;
@@ -463,11 +468,16 @@ pub async fn run_agent_loop(
                                     } else {
                                         waiting_for_first_chunk = false;
                                     }
-                                    // Show thinking in dim magenta
-                                    write!(
-                                        stdout,
-                                        "{DIM}{THINK_COLOR}[thinking] {thinking}{RESET}"
-                                    )?;
+
+                                    // Show [thinking] header once, before the first delta
+                                    if !thinking_header_shown {
+                                        write!(stdout, "{DIM}{THINK_COLOR}[thinking] ")?;
+                                        thinking_header_shown = true;
+                                    }
+
+                                    // Each chunk's `thinking` is a delta — print only the new part
+                                    write!(stdout, "{thinking}")?;
+                                    thinking_content.push_str(thinking);
                                     stdout.flush()?;
                                 }
 
@@ -480,6 +490,12 @@ pub async fn run_agent_loop(
                                         waiting_for_first_chunk = false;
                                     } else {
                                         waiting_for_first_chunk = false;
+                                    }
+
+                                    // Transition from thinking to content: close styling
+                                    if thinking_header_shown {
+                                        writeln!(stdout, "{RESET}")?;
+                                        thinking_header_shown = false;
                                     }
 
                                     response_content.push_str(&msg.message.content);
@@ -523,6 +539,12 @@ pub async fn run_agent_loop(
             // Clear spinner if still showing when stream ends
             if waiting_for_first_chunk && has_shown_spinner {
                 write!(stdout, "\r{CLEAR_LINE}")?;
+                stdout.flush()?;
+            }
+
+            // Close thinking styling if stream ended while still in thinking mode
+            if thinking_header_shown {
+                writeln!(stdout, "{RESET}")?;
                 stdout.flush()?;
             }
 
