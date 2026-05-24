@@ -23,8 +23,7 @@ impl Provider for LlamaCppProvider {
     }
 
     fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
-        let model = self.inner.current_model();
-        Box::pin(async move { model.into_iter().collect() })
+        Box::pin(async move { vec!["llama-cpp".to_string()] })
     }
 
     fn select_model(&mut self, name: String) {
