@@ -429,6 +429,7 @@ pub async fn stream_chat_completions(
                     function: ToolCallFunction {
                         name: tc.function.name,
                         arguments: args,
+                        thought_signature: None,
                     },
                 }
             })

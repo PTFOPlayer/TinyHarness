@@ -170,7 +170,20 @@ impl Provider for OllamaProvider {
         let base_url = self.base_url.clone();
         let request = {
             let chat_messages: Vec<OllamaChatMessage> =
-                messages.into_iter().map(|m| m.into()).collect();
+                messages.iter().map(|m| m.clone().into()).collect();
+
+            // Collect Gemini thought_signatures from incoming messages before
+            // ollama-rs conversion drops them. These must be re-injected into
+            // the serialized request so Gemini accepts multi-turn tool calling.
+            let thought_signatures: Vec<Vec<Option<String>>> = messages
+                .iter()
+                .map(|m| {
+                    m.tool_calls
+                        .iter()
+                        .map(|tc| tc.function.thought_signature.clone())
+                        .collect()
+                })
+                .collect();
 
             let ollama_tools: Vec<ollama_rs::generation::tools::ToolInfo> =
                 tools.into_iter().map(to_ollama_tool_info).collect();
@@ -182,7 +195,7 @@ impl Provider for OllamaProvider {
                 req = req.tools(ollama_tools);
                 req.think = None;
             }
-            req
+            (req, thought_signatures)
         };
 
         // Spawn the streaming work on a background task.
@@ -194,6 +207,7 @@ impl Provider for OllamaProvider {
         // {"usage": {"prompt_tokens": ..., "completion_tokens": ..., "total_tokens": ...}}
         // would lose their usage data.
         tokio::spawn(async move {
+            let (request, thought_signatures) = request;
             // Retry loop with exponential backoff
             let max_attempts = max_retries.max(1);
 
@@ -213,7 +227,13 @@ impl Provider for OllamaProvider {
             for attempt in 1..=max_attempts {
                 let result = tokio::time::timeout(
                     Duration::from_secs(timeout_secs),
-                    stream_ollama_chat(&http_client, &base_url, &request, &send),
+                    stream_ollama_chat(
+                        &http_client,
+                        &base_url,
+                        &request,
+                        &send,
+                        &thought_signatures,
+                    ),
                 )
                 .await;
 
@@ -275,6 +295,10 @@ struct OllamaChunk {
     // OpenAI-compatible nested usage (cloud proxies)
     #[serde(default)]
     usage: Option<OllamaUsage>,
+    /// Raw JSON for the tool_calls array from the message, used to extract
+    /// Gemini-specific fields like `thought_signature` that ollama-rs drops.
+    #[serde(skip, default)]
+    raw_tool_calls_json: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -298,16 +322,23 @@ struct OllamaChunkMessage {
 }
 
 impl OllamaChunk {
+    /// Set raw tool calls JSON from deserialized chunk line.
+    fn capture_raw_tool_calls(&mut self, raw_line: &serde_json::Value) {
+        if let Some(msg) = raw_line.get("message")
+            && let Some(tcs) = msg.get("tool_calls")
+        {
+            self.raw_tool_calls_json = Some(tcs.clone());
+        }
+    }
+
     fn to_chat_message_response(&self) -> ChatMessageResponse {
         let usage = if let Some(u) = &self.usage {
-            // OpenAI-compatible format (cloud proxy)
             Some(TokenUsage {
                 prompt_tokens: u.prompt_tokens,
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
             })
         } else if self.prompt_eval_count.is_some() || self.eval_count.is_some() {
-            // Native Ollama format
             let prompt = self.prompt_eval_count.unwrap_or(0) as u32;
             let completion = self.eval_count.unwrap_or(0) as u32;
             Some(TokenUsage {
@@ -319,22 +350,44 @@ impl OllamaChunk {
             None
         };
 
+        // Build tool_calls list. Use raw JSON when available to extract
+        // Gemini `thought_signature` fields that ollama-rs drops.
+        let mut raw_tc_iter = self
+            .raw_tool_calls_json
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter())
+            .into_iter()
+            .flatten();
+        let tool_calls: Vec<ToolCall> = self
+            .message
+            .tool_calls
+            .clone()
+            .into_iter()
+            .map(|tc| {
+                let thought_signature = raw_tc_iter
+                    .next()
+                    .and_then(|raw| {
+                        raw.get("function")
+                            .and_then(|f| f.get("thought_signature"))
+                            .and_then(|ts| ts.as_str())
+                    })
+                    .map(|s| s.to_string());
+                ToolCall {
+                    function: ToolCallFunction {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                        thought_signature,
+                    },
+                }
+            })
+            .collect();
+
         ChatMessageResponse {
             message: ChatMessage {
                 content: self.message.content.clone(),
                 thinking: self.message.thinking.clone(),
-                tool_calls: self
-                    .message
-                    .tool_calls
-                    .clone()
-                    .into_iter()
-                    .map(|tc| ToolCall {
-                        function: ToolCallFunction {
-                            name: tc.function.name,
-                            arguments: tc.function.arguments,
-                        },
-                    })
-                    .collect(),
+                tool_calls,
             },
             done: self.done,
             is_error: false,
@@ -352,6 +405,7 @@ async fn stream_ollama_chat(
     base_url: &str,
     request: &ChatMessageRequest,
     send: &tokio::sync::mpsc::Sender<ChatMessageResponse>,
+    thought_signatures: &[Vec<Option<String>>],
 ) -> Result<(), String> {
     let url = format!("{base_url}api/chat");
     let mut request = serde_json::to_value(request).map_err(|e| format!("serialize: {e}"))?;
@@ -361,10 +415,11 @@ async fn stream_ollama_chat(
     // 1. ToolType::Function serializes as "Function" (uppercase F), but the
     //    API spec requires lowercase "function". Ollama Cloud / Gemini rejects
     //    the uppercase variant with "Invalid tool type". Fix by lowercasing.
-    // 2. "role": "tool" messages need a "name" field (tool_name) so Gemini
+    // Fix 2: "role": "tool" messages need a "name" field (tool_name) so Gemini
     //    can match results to calls. ollama-rs doesn't add this, so we inject
     //    it from the preceding assistant message's tool_calls.
-    fn fix_request_json(value: &mut serde_json::Value) {
+    // 3. Re-inject Gemini `thought_signature` fields captured from tool calls.
+    fn fix_request_json(value: &mut serde_json::Value, thought_signatures: &[Vec<Option<String>>]) {
         match value {
             serde_json::Value::Object(map) => {
                 // Fix 1: Lowercase "Function" → "function" in tool definitions
@@ -374,23 +429,42 @@ async fn stream_ollama_chat(
                     *t = serde_json::Value::String("function".to_string());
                 }
                 for v in map.values_mut() {
-                    fix_request_json(v);
+                    fix_request_json(v, thought_signatures);
                 }
             }
             serde_json::Value::Array(arr) => {
                 // Fix 2: Add "name" field to tool result messages by tracking
-                // tool_calls from the most recent assistant message
+                // tool_calls from the most recent assistant message.
+                // Fix 3: Re-inject thought_signatures into assistant tool_calls.
                 let mut prev_tool_names: Vec<String> = Vec::new();
+                let mut ts_idx: usize = 0;
                 for msg in arr.iter_mut() {
                     if let serde_json::Value::Object(msg_map) = msg {
                         let role = msg_map.get("role").and_then(|v| v.as_str()).unwrap_or("");
                         match role {
                             "assistant" => {
                                 prev_tool_names.clear();
-                                if let Some(tcs) = msg_map.get("tool_calls")
-                                    && let Some(tc_arr) = tcs.as_array()
+                                if let Some(tcs) = msg_map.get_mut("tool_calls")
+                                    && let Some(tc_arr) = tcs.as_array_mut()
                                 {
-                                    for tc in tc_arr {
+                                    // Re-inject thought_signatures
+                                    if let Some(sigs) = thought_signatures.get(ts_idx) {
+                                        for (i, tc) in tc_arr.iter_mut().enumerate() {
+                                            if let Some(sig) = sigs.get(i).and_then(|s| s.clone())
+                                                && let Some(func) = tc.get_mut("function")
+                                                && let Some(obj) = func.as_object_mut()
+                                            {
+                                                obj.insert(
+                                                    "thought_signature".to_string(),
+                                                    serde_json::Value::String(sig),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    ts_idx += 1;
+
+                                    // Track tool names for Fix 2
+                                    for tc in tc_arr.iter() {
                                         if let Some(name) = tc
                                             .get("function")
                                             .and_then(|f| f.get("name"))
@@ -399,6 +473,8 @@ async fn stream_ollama_chat(
                                             prev_tool_names.push(name.to_string());
                                         }
                                     }
+                                } else {
+                                    ts_idx += 1;
                                 }
                             }
                             "tool"
@@ -413,15 +489,14 @@ async fn stream_ollama_chat(
                         }
                     }
                 }
-                // Walk children for nested objects (e.g. tools array)
                 for v in arr.iter_mut() {
-                    fix_request_json(v);
+                    fix_request_json(v, thought_signatures);
                 }
             }
             _ => {}
         }
     }
-    fix_request_json(&mut request);
+    fix_request_json(&mut request, thought_signatures);
 
     let response = client
         .post(&url)
@@ -455,7 +530,12 @@ async fn stream_ollama_chat(
             }
 
             match serde_json::from_str::<OllamaChunk>(&line) {
-                Ok(chunk) => {
+                Ok(mut chunk) => {
+                    // Capture raw JSON before extracting to preserve Gemini-
+                    // specific fields like `thought_signature`.
+                    if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&line) {
+                        chunk.capture_raw_tool_calls(&raw);
+                    }
                     let done = chunk.done;
                     let ours = chunk.to_chat_message_response();
                     if send.send(ours).await.is_err() {
@@ -474,8 +554,11 @@ async fn stream_ollama_chat(
 
     // Process remaining buffer
     if !buffer.trim().is_empty()
-        && let Ok(chunk) = serde_json::from_str::<OllamaChunk>(buffer.trim())
+        && let Ok(mut chunk) = serde_json::from_str::<OllamaChunk>(buffer.trim())
     {
+        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(buffer.trim()) {
+            chunk.capture_raw_tool_calls(&raw);
+        }
         let done = chunk.done;
         let ours = chunk.to_chat_message_response();
         if send.send(ours).await.is_err() {

@@ -27,6 +27,11 @@ pub struct ToolCall {
 pub struct ToolCallFunction {
     pub name: String,
     pub arguments: serde_json::Value,
+    /// Gemini `thought_signature` required for multi-turn tool calling.
+    /// Gemini returns this on tool calls and requires it back in subsequent
+    /// turns. Ollama Cloud doesn't preserve it, so we capture and re-inject it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
