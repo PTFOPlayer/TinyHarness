@@ -15,6 +15,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tinyharness-lib",
+ "tinyharness-ui",
  "tokio",
 ]
 

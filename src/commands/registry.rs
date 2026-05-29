@@ -53,6 +53,8 @@ pub struct CommandContext {
     pub compaction_token_usage: Option<TokenUsage>,
     /// Whether to display the model's thinking/reasoning chain during streaming.
     pub show_thinking: bool,
+    /// Structured output writer — all terminal I/O goes through this.
+    pub output: tinyharness_ui::output::Output,
 }
 
 impl CommandContext {
@@ -73,6 +75,7 @@ impl CommandContext {
             prompts_dir,
             compaction_token_usage: None,
             show_thinking: false,
+            output: tinyharness_ui::output::Output::stdout(),
         }
     }
 
