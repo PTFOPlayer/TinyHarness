@@ -11,7 +11,7 @@ name = "tinyharness"
 path = "src/main.rs"
 
 [dependencies]
-tinyharness-lib = { path = "tinyharness-lib" }
+tinyharness-lib = { version = "0.1.0", path = "tinyharness-lib" }
 clap = { version = "4.6.1", features = ["derive"] }
 tokio = { version = "1.52.1", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }
