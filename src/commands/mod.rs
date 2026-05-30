@@ -16,6 +16,7 @@ pub mod sessions;
 pub mod settings;
 pub mod skill;
 
+use std::io::Write;
 use std::sync::Arc;
 
 use tinyharness_lib::{config::load_settings, context::WorkspaceContext, provider::Provider};
@@ -48,13 +49,13 @@ pub fn build_registry() -> CommandRegistry {
 
     // ── Sync commands (simple closures, no async needed) ──────────────────
 
-    reg.register_sync("/clear", "Clear the terminal screen", |_arg, _ctx, _msg| {
-        crate::commands::clear::execute();
+    reg.register_sync("/clear", "Clear the terminal screen", |_arg, ctx, _msg| {
+        crate::commands::clear::execute(&mut ctx.output);
         Ok(CommandResult::Ok)
     });
 
     reg.register_sync("/exit", "Exit the application", |_arg, ctx, _msg| {
-        crate::commands::exit::execute();
+        crate::commands::exit::execute(&mut ctx.output);
         ctx.exit_requested = true;
         Ok(CommandResult::Ok)
     });
@@ -63,7 +64,7 @@ pub fn build_registry() -> CommandRegistry {
         "/context",
         "Show the workspace context available to the agent",
         |_arg, ctx, _msg| {
-            crate::commands::context::execute(&ctx.workspace_ctx);
+            crate::commands::context::execute(&mut ctx.output, &ctx.workspace_ctx);
             Ok(CommandResult::Ok)
         },
     );
@@ -103,14 +104,14 @@ pub fn build_registry() -> CommandRegistry {
         "/apikey",
         "Set or show the Ollama API key for web search. Use /apikey clear to remove it.",
         "/apikey [key]",
-        |arg, _ctx, _msg| {
+        |arg, ctx, _msg| {
             let a = arg.unwrap_or("");
             if a.is_empty() {
-                crate::commands::apikey::execute_show();
+                crate::commands::apikey::execute_show(&mut ctx.output);
             } else if a == "clear" {
-                crate::commands::apikey::execute_clear();
+                crate::commands::apikey::execute_clear(&mut ctx.output);
             } else {
-                crate::commands::apikey::execute_set(a);
+                crate::commands::apikey::execute_set(&mut ctx.output, a);
             }
             Ok(CommandResult::Ok)
         },
@@ -300,26 +301,27 @@ pub fn build_registry() -> CommandRegistry {
                 .iter()
                 .any(|s| s.eq_ignore_ascii_case(name))
             {
-                Ok(CommandResult::SkillUnload(name.to_string()))
-            } else {
-                println!(
-                    "{}Skill '{}' is not currently active.{}",
-                    crate::style::ORANGE,
-                    name,
+                return Ok(CommandResult::SkillUnload(name.to_string()));
+            }
+            let _ = writeln!(
+                ctx.output,
+                "{}Skill '{}' is not currently active.{}",
+                crate::style::ORANGE,
+                name,
+                crate::style::RESET
+            );
+            if !ctx.active_skills.is_empty() {
+                let active = ctx.active_skills.join(", ");
+                let _ = writeln!(
+                    ctx.output,
+                    "{}Active skills: {}{}{}",
+                    crate::style::GRAY,
+                    crate::style::CYAN,
+                    active,
                     crate::style::RESET
                 );
-                if !ctx.active_skills.is_empty() {
-                    let active = ctx.active_skills.join(", ");
-                    println!(
-                        "{}Active skills: {}{}{}",
-                        crate::style::GRAY,
-                        crate::style::CYAN,
-                        active,
-                        crate::style::RESET
-                    );
-                }
-                Ok(CommandResult::Ok)
             }
+            Ok(CommandResult::Ok)
         },
     );
 
@@ -367,14 +369,10 @@ pub fn build_registry() -> CommandRegistry {
 
     reg.freeze_descriptions();
     let descs = reg.descriptions().to_vec();
-    reg.register_sync(
-        "/help",
-        "Show this help message",
-        move |_arg, _ctx, _msg| {
-            crate::commands::help::execute(&descs);
-            Ok(CommandResult::Ok)
-        },
-    );
+    reg.register_sync("/help", "Show this help message", move |_arg, ctx, _msg| {
+        crate::commands::help::execute(&mut ctx.output, &descs);
+        Ok(CommandResult::Ok)
+    });
 
     reg
 }

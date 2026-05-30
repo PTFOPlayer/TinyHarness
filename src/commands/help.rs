@@ -1,9 +1,13 @@
+use std::io::Write;
+
+use tinyharness_ui::output::Output;
+
 use crate::style::*;
 
-pub fn execute(descriptions: &[(&'static str, &'static str)]) {
-    println!("\n{}Available commands:{}", BOLD, RESET);
+pub fn execute(out: &mut Output, descriptions: &[(&'static str, &'static str)]) {
+    let _ = writeln!(out, "\n{BOLD}Available commands:{RESET}");
     for (name, desc) in descriptions {
-        println!("  {}{:<20}{} {}", BLUE, name, RESET, desc);
+        let _ = writeln!(out, "  {BLUE}{name:<20}{RESET} {desc}");
     }
-    println!();
+    let _ = writeln!(out);
 }

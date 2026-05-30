@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use tinyharness_lib::mode::AgentMode;
 use tinyharness_lib::provider::Message;
 
@@ -13,9 +15,10 @@ pub fn execute(
     let mode_str = arg.unwrap_or("");
 
     if mode_str.is_empty() {
-        println!(
-            "{}Current mode: {}{}{}",
-            BOLD, BLUE, ctx.current_mode, RESET
+        let _ = writeln!(
+            ctx.output,
+            "{BOLD}Current mode: {BLUE}{}{RESET}",
+            ctx.current_mode,
         );
         return Ok(CommandResult::Ok);
     }
@@ -24,10 +27,13 @@ pub fn execute(
 
     match ctx.switch_mode(new_mode, messages) {
         Ok(()) => {
-            println!("{}Switched to {} mode.{}", BOLD, BLUE, RESET);
+            let _ = writeln!(
+                ctx.output,
+                "{BOLD}Switched to {BLUE}{new_mode}{RESET} mode."
+            );
         }
         Err(msg) => {
-            println!("{}{}{}", ORANGE, msg, RESET);
+            let _ = writeln!(ctx.output, "{ORANGE}{msg}{RESET}");
         }
     }
 

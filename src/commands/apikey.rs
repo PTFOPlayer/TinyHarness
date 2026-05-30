@@ -1,15 +1,18 @@
+use std::io::Write;
+
 use tinyharness_lib::config::{load_settings, save_settings};
+use tinyharness_ui::output::Output;
 
 use crate::style::*;
 
-pub fn execute_set(key: &str) {
+pub fn execute_set(out: &mut Output, key: &str) {
     let mut settings = load_settings();
     settings.ollama_api_key = Some(key.to_string());
     save_settings(&settings);
-    println!("{}Ollama API key saved.{}", BOLD, RESET);
+    let _ = writeln!(out, "{BOLD}Ollama API key saved.{RESET}");
 }
 
-pub fn execute_show() {
+pub fn execute_show(out: &mut Output) {
     let settings = load_settings();
     match &settings.ollama_api_key {
         Some(key) => {
@@ -18,18 +21,20 @@ pub fn execute_show() {
             } else {
                 "****".to_string()
             };
-            println!("{}Ollama API key:{} {}", BOLD, RESET, masked);
+            let _ = writeln!(out, "{BOLD}Ollama API key:{RESET} {masked}");
         }
-        None => println!(
-            "{}No Ollama API key set.{} Use {}/apikey <key>{} to set one.",
-            ORANGE, RESET, BLUE, RESET
-        ),
+        None => {
+            let _ = writeln!(
+                out,
+                "{ORANGE}No Ollama API key set.{RESET} Use {BLUE}/apikey <key>{RESET} to set one.",
+            );
+        }
     }
 }
 
-pub fn execute_clear() {
+pub fn execute_clear(out: &mut Output) {
     let mut settings = load_settings();
     settings.ollama_api_key = None;
     save_settings(&settings);
-    println!("{}Ollama API key cleared.{}", BOLD, RESET);
+    let _ = writeln!(out, "{BOLD}Ollama API key cleared.{RESET}");
 }
