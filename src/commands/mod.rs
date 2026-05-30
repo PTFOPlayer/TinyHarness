@@ -121,14 +121,16 @@ pub fn build_registry() -> CommandRegistry {
         "/contextlimit",
         "Show or set the context limit for warning calculations (default: model default)",
         "/contextlimit [tokens]",
-        |arg, _ctx, _msg| crate::commands::config_settings::execute_context_limit(arg),
+        |arg, ctx, _msg| {
+            crate::commands::config_settings::execute_context_limit(&mut ctx.output, arg)
+        },
     );
 
     reg.register_sync_with_usage(
         "/autoaccept",
         "Show or toggle auto-accept for safe read-only commands (default: on)",
         "/autoaccept [on|off]",
-        |arg, _ctx, _msg| crate::commands::config_settings::execute_autoaccept(arg),
+        |arg, ctx, _msg| crate::commands::config_settings::execute_autoaccept(&mut ctx.output, arg),
     );
 
     reg.register_sync_with_usage(
@@ -196,7 +198,7 @@ pub fn build_registry() -> CommandRegistry {
         "/add <path>",
         |arg, ctx, msg| {
             let path = require_arg(arg, "/add <file_path> — e.g. /add src/main.rs")?;
-            crate::commands::files::execute_add(&mut ctx.file_context, path);
+            crate::commands::files::execute_add(&mut ctx.output, &mut ctx.file_context, path);
             ctx.refresh_system_prompt(msg);
             Ok(CommandResult::Ok)
         },
@@ -208,7 +210,7 @@ pub fn build_registry() -> CommandRegistry {
         "/drop <path>",
         |arg, ctx, msg| {
             let path = require_arg(arg, "/drop <file_path> — e.g. /drop src/main.rs")?;
-            crate::commands::files::execute_drop(&mut ctx.file_context, path);
+            crate::commands::files::execute_drop(&mut ctx.output, &mut ctx.file_context, path);
             ctx.refresh_system_prompt(msg);
             Ok(CommandResult::Ok)
         },
@@ -218,7 +220,7 @@ pub fn build_registry() -> CommandRegistry {
         "/files",
         "List all pinned files in context",
         |_arg, ctx, _msg| {
-            crate::commands::files::execute_list(&ctx.file_context);
+            crate::commands::files::execute_list(&mut ctx.output, &ctx.file_context);
             Ok(CommandResult::Ok)
         },
     );
@@ -227,7 +229,7 @@ pub fn build_registry() -> CommandRegistry {
         "/dropall",
         "Remove all pinned files from context",
         |_arg, ctx, msg| {
-            crate::commands::files::execute_clear(&mut ctx.file_context);
+            crate::commands::files::execute_clear(&mut ctx.output, &mut ctx.file_context);
             ctx.refresh_system_prompt(msg);
             Ok(CommandResult::Ok)
         },
@@ -237,7 +239,7 @@ pub fn build_registry() -> CommandRegistry {
         "/refresh",
         "Re-read all pinned files from disk (updates content)",
         |_arg, ctx, msg| {
-            crate::commands::files::execute_refresh(&mut ctx.file_context);
+            crate::commands::files::execute_refresh(&mut ctx.output, &mut ctx.file_context);
             ctx.refresh_system_prompt(msg);
             Ok(CommandResult::Ok)
         },

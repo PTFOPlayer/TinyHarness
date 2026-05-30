@@ -1,4 +1,7 @@
+use std::io::Write;
+
 use tinyharness_lib::config::{load_settings, save_settings};
+use tinyharness_ui::output::Output;
 
 use crate::async_command;
 use crate::commands::registry::{CommandContext, CommandResult};
@@ -15,11 +18,13 @@ async_command!(
         let arg = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
+            let mut out = Output::stdout();
             if arg.is_empty() {
                 let settings = load_settings();
-                println!(
-                    "{}Current timeout: {}{}s{}",
-                    BOLD, BLUE, settings.ollama_timeout_secs, RESET
+                let _ = writeln!(
+                    out,
+                    "{BOLD}Current timeout: {BLUE}{}s{RESET}",
+                    settings.ollama_timeout_secs,
                 );
                 return Ok(CommandResult::Ok);
             }
@@ -31,10 +36,7 @@ async_command!(
                     save_settings(&settings);
                     let mut p = provider.lock().await;
                     p.set_timeout(secs);
-                    println!(
-                        "{}Timeout set to {}{}s{}.{}",
-                        BOLD, BLUE, secs, RESET, RESET
-                    );
+                    let _ = writeln!(out, "{BOLD}Timeout set to {BLUE}{secs}s.{RESET}",);
                     Ok(CommandResult::Ok)
                 }
                 Ok(_) => Err("Timeout must be a positive number of seconds.".to_string()),
@@ -58,11 +60,13 @@ async_command!(
         let arg = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
+            let mut out = Output::stdout();
             if arg.is_empty() {
                 let settings = load_settings();
-                println!(
-                    "{}Current max retries: {}{}{}",
-                    BOLD, BLUE, settings.ollama_max_retries, RESET
+                let _ = writeln!(
+                    out,
+                    "{BOLD}Current max retries: {BLUE}{}{RESET}",
+                    settings.ollama_max_retries,
                 );
                 return Ok(CommandResult::Ok);
             }
@@ -74,10 +78,7 @@ async_command!(
                     save_settings(&settings);
                     let mut p = provider.lock().await;
                     p.set_retries(count);
-                    println!(
-                        "{}Max retries set to {}{}{}.{}",
-                        BOLD, BLUE, count, RESET, RESET
-                    );
+                    let _ = writeln!(out, "{BOLD}Max retries set to {BLUE}{count}.{RESET}",);
                     Ok(CommandResult::Ok)
                 }
                 Err(_) => Err(format!(
@@ -92,22 +93,22 @@ async_command!(
 // ── ContextLimit (sync — no provider access needed) ──────────────────────────
 
 /// Execute the /contextlimit command (sync — no provider access needed).
-pub fn execute_context_limit(arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute_context_limit(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
         let settings = load_settings();
         match settings.context_limit {
             Some(limit) => {
-                println!(
-                    "{}Context limit for warnings: {}{} tokens{}",
-                    BOLD, BLUE, limit, RESET
+                let _ = writeln!(
+                    out,
+                    "{BOLD}Context limit for warnings: {BLUE}{limit} tokens{RESET}",
                 );
             }
             None => {
-                println!(
-                    "{}Context limit: {}auto (using model default){}",
-                    BOLD, GRAY, RESET
+                let _ = writeln!(
+                    out,
+                    "{BOLD}Context limit: {GRAY}auto (using model default){RESET}",
                 );
             }
         }
@@ -118,9 +119,9 @@ pub fn execute_context_limit(arg: Option<&str>) -> Result<CommandResult, String>
         let mut settings = load_settings();
         settings.context_limit = None;
         save_settings(&settings);
-        println!(
-            "{}Context limit cleared. Using model default for warnings.{}",
-            BOLD, RESET
+        let _ = writeln!(
+            out,
+            "{BOLD}Context limit cleared. Using model default for warnings.{RESET}",
         );
         return Ok(CommandResult::Ok);
     }
@@ -130,9 +131,9 @@ pub fn execute_context_limit(arg: Option<&str>) -> Result<CommandResult, String>
             let mut settings = load_settings();
             settings.context_limit = Some(limit);
             save_settings(&settings);
-            println!(
-                "{}Context limit set to {}{} tokens{} for warning calculations.{}",
-                BOLD, BLUE, limit, RESET, RESET
+            let _ = writeln!(
+                out,
+                "{BOLD}Context limit set to {BLUE}{limit} tokens{RESET} for warning calculations.",
             );
             Ok(CommandResult::Ok)
         }
@@ -147,24 +148,19 @@ pub fn execute_context_limit(arg: Option<&str>) -> Result<CommandResult, String>
 // ── AutoAccept (sync — no provider access needed) ─────────────────────────────
 
 /// Execute the /autoaccept command (sync — no provider access needed).
-pub fn execute_autoaccept(arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute_autoaccept(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
         let settings = load_settings();
-        let status = if settings.auto_accept_safe_commands {
-            "enabled"
+        let (status, color) = if settings.auto_accept_safe_commands {
+            ("enabled", GREEN)
         } else {
-            "disabled"
+            ("disabled", ORANGE)
         };
-        let color = if settings.auto_accept_safe_commands {
-            GREEN
-        } else {
-            ORANGE
-        };
-        println!(
-            "{}Auto-accept safe commands: {}{}{}{}",
-            BOLD, color, status, RESET, RESET
+        let _ = writeln!(
+            out,
+            "{BOLD}Auto-accept safe commands: {color}{status}{RESET}",
         );
         return Ok(CommandResult::Ok);
     }
@@ -180,11 +176,14 @@ pub fn execute_autoaccept(arg: Option<&str>) -> Result<CommandResult, String> {
     let mut settings = load_settings();
     settings.auto_accept_safe_commands = new_value;
     save_settings(&settings);
-    let status = if new_value { "enabled" } else { "disabled" };
-    let color = if new_value { GREEN } else { ORANGE };
-    println!(
-        "{}Auto-accept safe commands set to {}{}{}{}",
-        BOLD, color, status, RESET, RESET
+    let (status, color) = if new_value {
+        ("enabled", GREEN)
+    } else {
+        ("disabled", ORANGE)
+    };
+    let _ = writeln!(
+        out,
+        "{BOLD}Auto-accept safe commands set to {color}{status}{RESET}",
     );
 
     Ok(CommandResult::Ok)
@@ -201,11 +200,13 @@ async_command!(
         let arg = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
+            let mut out = Output::stdout();
             if arg.is_empty() {
                 let settings = load_settings();
-                println!(
-                    "{}Current think level: {}{}{}{}",
-                    BOLD, BLUE, settings.ollama_think_type, RESET, RESET
+                let _ = writeln!(
+                    out,
+                    "{BOLD}Current think level: {BLUE}{}{RESET}",
+                    settings.ollama_think_type,
                 );
                 return Ok(CommandResult::Ok);
             }
@@ -222,10 +223,7 @@ async_command!(
             let mut p = provider.lock().await;
             p.set_think_type(think_type);
 
-            println!(
-                "{}Think level set to {}{}{}.{}",
-                BOLD, BLUE, think_type, RESET, RESET
-            );
+            let _ = writeln!(out, "{BOLD}Think level set to {BLUE}{think_type}.{RESET}",);
 
             Ok(CommandResult::Ok)
         }
@@ -242,11 +240,14 @@ pub fn execute_showthink(
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
-        let status = if ctx.show_thinking { "on" } else { "off" };
-        let color = if ctx.show_thinking { GREEN } else { GRAY };
-        println!(
-            "{}Show thinking chain: {}{}{}{}",
-            BOLD, color, status, RESET, RESET
+        let (status, color) = if ctx.show_thinking {
+            ("on", GREEN)
+        } else {
+            ("off", GRAY)
+        };
+        let _ = writeln!(
+            ctx.output,
+            "{BOLD}Show thinking chain: {color}{status}{RESET}",
         );
         return Ok(CommandResult::Ok);
     }
@@ -264,11 +265,14 @@ pub fn execute_showthink(
     settings.show_thinking = new_value;
     save_settings(&settings);
 
-    let status = if new_value { "on" } else { "off" };
-    let color = if new_value { GREEN } else { GRAY };
-    println!(
-        "{}Show thinking chain set to {}{}{}{}",
-        BOLD, color, status, RESET, RESET
+    let (status, color) = if new_value {
+        ("on", GREEN)
+    } else {
+        ("off", GRAY)
+    };
+    let _ = writeln!(
+        ctx.output,
+        "{BOLD}Show thinking chain set to {color}{status}{RESET}",
     );
 
     Ok(CommandResult::Ok)
