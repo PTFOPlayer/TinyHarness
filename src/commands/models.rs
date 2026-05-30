@@ -1,5 +1,8 @@
+use std::io::Write;
+
 use tinyharness_lib::config::{load_settings, save_settings};
 use tinyharness_lib::provider::Provider;
+use tinyharness_ui::output::Output;
 
 use crate::async_command;
 use crate::commands::registry::CommandResult;
@@ -14,23 +17,21 @@ async_command!(
         let name = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
+            let mut out = Output::stdout();
             if name.is_empty() {
                 let p = provider.lock().await;
-                execute_list(&*p).await?;
+                execute_list(&mut out, &*p).await?;
 
                 if let Some(model) = p.current_model() {
-                    println!(
-                        "{}Current model: {}{}{}{}",
-                        BOLD, GREEN, model, RESET, RESET
-                    );
+                    let _ = writeln!(out, "{BOLD}Current model: {GREEN}{model}{RESET}",);
                 } else {
-                    println!("{}No model currently selected.{}", ORANGE, RESET);
+                    let _ = writeln!(out, "{ORANGE}No model currently selected.{RESET}");
                 }
                 return Ok(CommandResult::Ok);
             }
 
             let mut p = provider.lock().await;
-            execute_select(&mut *p, &name).await?;
+            execute_select(&mut out, &mut *p, &name).await?;
 
             let mut settings = load_settings();
             settings.last_model = p.current_model();
@@ -41,29 +42,33 @@ async_command!(
     }
 );
 
-pub async fn execute_list(provider: &dyn Provider) -> Result<(), String> {
+pub async fn execute_list(out: &mut Output, provider: &dyn Provider) -> Result<(), String> {
     let models = provider.list_models().await;
     if models.is_empty() {
-        println!("{}No models available.{}", ORANGE, RESET);
+        let _ = writeln!(out, "{ORANGE}No models available.{RESET}");
     } else {
-        println!("\n{}Available models:{}", BOLD, RESET);
+        let _ = writeln!(out, "\n{BOLD}Available models:{RESET}");
         for model in &models {
-            println!("  {}{}{}", BLUE, model, RESET);
+            let _ = writeln!(out, "  {BLUE}{model}{RESET}");
         }
-        println!();
+        let _ = writeln!(out);
     }
     Ok(())
 }
 
-pub async fn execute_select(provider: &mut dyn Provider, name: &str) -> Result<(), String> {
+pub async fn execute_select(
+    out: &mut Output,
+    provider: &mut dyn Provider,
+    name: &str,
+) -> Result<(), String> {
     let models = provider.list_models().await;
     if models.iter().any(|m| m == name) {
         provider.select_model(name.to_string());
-        println!("{}Switched to model: {}{}{}", BOLD, BLUE, name, RESET);
+        let _ = writeln!(out, "{BOLD}Switched to model: {BLUE}{name}{RESET}");
         Ok(())
     } else {
         provider.select_model(name.to_string());
-        println!("{}Set model to: {}{}{}", BOLD, BLUE, name, RESET);
+        let _ = writeln!(out, "{BOLD}Set model to: {BLUE}{name}{RESET}");
         Ok(())
     }
 }

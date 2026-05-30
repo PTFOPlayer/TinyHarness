@@ -5,6 +5,7 @@ pub mod ui;
 
 use std::{
     error::Error,
+    io::Write,
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -24,6 +25,7 @@ use tinyharness_lib::{
 use crate::{agent::run_agent_loop, commands::CommandContext};
 use clap::Parser;
 use style::*;
+use tinyharness_ui::output::Output;
 use tokio::sync::Mutex;
 
 #[derive(clap::Parser, Debug)]
@@ -84,9 +86,10 @@ async fn create_provider(
     {
         let p = provider.lock().await;
         if let Err(e) = p.health_check().await {
-            eprintln!(
-                "{}Error:{} {} health check failed: {}",
-                BOLD, RESET, kind, e
+            let mut err_out = Output::stderr();
+            let _ = writeln!(
+                err_out,
+                "{BOLD}Error:{RESET} {kind} health check failed: {e}",
             );
             std::process::exit(1);
         }
@@ -111,15 +114,17 @@ async fn auto_select_model(provider: &mut dyn Provider, saved_model: Option<&Str
         }
         // Saved model not available — warn and fall through
         if let Some(first) = models.first() {
-            eprintln!(
-                "{}Warning:{} Saved model '{}' not available. Picked first: {}{}{}",
-                BOLD, RESET, saved, BLUE, first, RESET
+            let mut err_out = Output::stderr();
+            let _ = writeln!(
+                err_out,
+                "{BOLD}Warning:{RESET} Saved model '{saved}' not available. Picked first: {BLUE}{first}{RESET}",
             );
             provider.select_model(first.clone());
         } else {
-            eprintln!(
-                "{}Error:{} No models available. Use /model <name> to set one manually.",
-                BOLD, RESET
+            let mut err_out = Output::stderr();
+            let _ = writeln!(
+                err_out,
+                "{BOLD}Error:{RESET} No models available. Use /model <name> to set one manually.",
             );
         }
         return;
@@ -127,15 +132,17 @@ async fn auto_select_model(provider: &mut dyn Provider, saved_model: Option<&Str
 
     // No saved model — pick first available
     if let Some(first) = models.first() {
-        eprintln!(
-            "{}Warning:{} No model selected. Automatically picked first available model: {}{}{}",
-            BOLD, RESET, BLUE, first, RESET
+        let mut err_out = Output::stderr();
+        let _ = writeln!(
+            err_out,
+            "{BOLD}Warning:{RESET} No model selected. Automatically picked first available model: {BLUE}{first}{RESET}",
         );
         provider.select_model(first.clone());
     } else {
-        eprintln!(
-            "{}Error:{} No models available. Use /model <name> to set one manually.",
-            BOLD, RESET
+        let mut err_out = Output::stderr();
+        let _ = writeln!(
+            err_out,
+            "{BOLD}Error:{RESET} No models available. Use /model <name> to set one manually.",
         );
     }
 }
@@ -243,32 +250,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Ok((sess, loaded_msgs)) => {
                     let meta = sess.meta();
                     let name = meta.name.as_deref().unwrap_or("unnamed");
-                    eprintln!(
-                        "{}Resumed session {}{}{} — {}{}{} ({} messages, {})",
-                        BOLD,
-                        BLUE,
+                    let mut err_out = Output::stderr();
+                    let _ = writeln!(
+                        err_out,
+                        "{BOLD}Resumed session {BLUE}{}{RESET} — {BOLD}{name}{RESET} ({} messages, {})",
                         &meta.id[..12],
-                        RESET,
-                        BOLD,
-                        name,
-                        RESET,
                         meta.message_count,
-                        meta.mode
+                        meta.mode,
                     );
                     Some((sess, loaded_msgs))
                 }
                 Err(e) => {
-                    eprintln!(
-                        "{}Warning:{} Failed to resume session: {}. Starting fresh.",
-                        BOLD, RESET, e
+                    let mut err_out = Output::stderr();
+                    let _ = writeln!(
+                        err_out,
+                        "{BOLD}Warning:{RESET} Failed to resume session: {e}. Starting fresh.",
                     );
                     None
                 }
             },
             None => {
-                eprintln!(
-                    "{}No previous session found in this directory. Starting fresh.{}",
-                    ORANGE, RESET
+                let mut err_out = Output::stderr();
+                let _ = writeln!(
+                    err_out,
+                    "{ORANGE}No previous session found in this directory. Starting fresh.{RESET}",
                 );
                 None
             }

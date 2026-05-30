@@ -5,8 +5,7 @@ pub mod tools;
 
 use std::{
     error::Error,
-    io,
-    io::Write,
+    io::{self, Write},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -25,6 +24,7 @@ use tinyharness_lib::{
     token::ContextWindowSize,
     tools::ToolManager,
 };
+use tinyharness_ui::output::Output;
 
 use crate::style::*;
 use crate::{
@@ -51,7 +51,7 @@ pub async fn run_agent_loop(
     // Build the command registry once at startup
     let registry = build_registry();
 
-    let mut stdout = io::stdout();
+    let mut stdout = Output::stdout();
     stdout.write_all(
         format!(
             "{}╔════════════════════════════════════════════════════════╗{}\n",
@@ -226,18 +226,13 @@ pub async fn run_agent_loop(
                                 Ok((new_session, loaded_msgs)) => {
                                     let meta = new_session.meta();
                                     let name = meta.name.as_deref().unwrap_or("unnamed");
-                                    eprintln!(
-                                        "{}Switched to session {}{}{} — {}{}{} ({} messages, {}){}",
-                                        BOLD,
-                                        BLUE,
+                                    let mut err_out = Output::stderr();
+                                    let _ = writeln!(
+                                        err_out,
+                                        "{BOLD}Switched to session {BLUE}{}{RESET} — {BOLD}{name}{RESET} ({} messages, {})",
                                         &meta.id[..12],
-                                        RESET,
-                                        BOLD,
-                                        name,
-                                        RESET,
                                         meta.message_count,
                                         meta.mode,
-                                        RESET
                                     );
                                     *session = new_session;
                                     *messages = loaded_msgs;
@@ -259,43 +254,44 @@ pub async fn run_agent_loop(
                                     )?;
                                 }
                                 Err(e) => {
-                                    eprintln!("{}{}{}", RED, e, RESET);
+                                    let mut err_out = Output::stderr();
+                                    let _ = writeln!(err_out, "{RED}{e}{RESET}");
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("{}{}{}", RED, e, RESET);
+                            let mut err_out = Output::stderr();
+                            let _ = writeln!(err_out, "{RED}{e}{RESET}");
                         }
                     }
                 }
                 Ok(CommandResult::RenameSession(new_name)) => {
                     session.set_name(new_name.clone());
-                    eprintln!("{}Session renamed to {}{}{}", BOLD, BLUE, new_name, RESET);
+                    let mut err_out = Output::stderr();
+                    let _ = writeln!(
+                        err_out,
+                        "{BOLD}Session renamed to {BLUE}{new_name}{RESET}",
+                    );
                 }
                 Ok(CommandResult::Init(result)) => {
                     // Refresh workspace context since the project instruction file may have changed
                     ctx.workspace_ctx = WorkspaceContext::collect();
                     ctx.refresh_system_prompt(messages);
 
+                    let mut err_out = Output::stderr();
                     match &result {
                         init::InitResult::Created { path } => {
-                            eprintln!(
-                                "{}  Created {}{}{} — workspace context refreshed.{}",
-                                GREEN,
-                                BLUE,
+                            let _ = writeln!(
+                                err_out,
+                                "{GREEN}  Created {BLUE}{}{GREEN} — workspace context refreshed.{RESET}",
                                 path.display(),
-                                GREEN,
-                                RESET
                             );
                         }
                         init::InitResult::Updated { path } => {
-                            eprintln!(
-                                "{}  Updated {}{}{} — workspace context refreshed.{}",
-                                GREEN,
-                                BLUE,
+                            let _ = writeln!(
+                                err_out,
+                                "{GREEN}  Updated {BLUE}{}{GREEN} — workspace context refreshed.{RESET}",
                                 path.display(),
-                                GREEN,
-                                RESET
                             );
                         }
                     }
@@ -307,17 +303,20 @@ pub async fn run_agent_loop(
                         .iter()
                         .any(|s| s.eq_ignore_ascii_case(&skill_name))
                     {
-                        eprintln!(
-                            "{}⚠ Skill '{}' is already active.{} Use {}/unload {}{} to deactivate it.",
-                            ORANGE, skill_name, RESET, BOLD, skill_name, RESET
+                        let mut err_out = Output::stderr();
+                        let _ = writeln!(
+                            err_out,
+                            "{ORANGE}⚠ Skill '{skill_name}' is already active.{RESET} Use {BOLD}/unload {skill_name}{RESET} to deactivate it.",
                         );
                         continue;
                     }
                     match ctx.skill_registry.get(&skill_name) {
                         Some(skill) => {
-                            eprintln!(
-                                "{}⚡ Skill activated: {}{}{} — {}{}",
-                                BOLD, CYAN, skill_name, RESET, skill.description, RESET
+                            let mut err_out = Output::stderr();
+                            let _ = writeln!(
+                                err_out,
+                                "{BOLD}⚡ Skill activated: {CYAN}{skill_name}{RESET} — {}{RESET}",
+                                skill.description,
                             );
                             // Track the active skill
                             ctx.active_skills.push(skill.name.clone());
@@ -332,9 +331,10 @@ pub async fn run_agent_loop(
                             ctx.refresh_system_prompt(messages);
                         }
                         None => {
-                            eprintln!(
-                                "{}⚠ Skill '{}' not found — it may have been removed.{}",
-                                RED, skill_name, RESET
+                            let mut err_out = Output::stderr();
+                            let _ = writeln!(
+                                err_out,
+                                "{RED}⚠ Skill '{skill_name}' not found — it may have been removed.{RESET}",
                             );
                         }
                     }
@@ -348,9 +348,10 @@ pub async fn run_agent_loop(
                     match pos {
                         Some(idx) => {
                             let removed = ctx.active_skills.remove(idx);
-                            eprintln!(
-                                "{}Skill deactivated: {}{}{}{}",
-                                BOLD, CYAN, removed, RESET, RESET
+                            let mut err_out = Output::stderr();
+                            let _ = writeln!(
+                                err_out,
+                                "{BOLD}Skill deactivated: {CYAN}{removed}{RESET}",
                             );
                             // Inject a user message indicating skill deactivation
                             messages.push(Message {
@@ -364,12 +365,17 @@ pub async fn run_agent_loop(
                         }
                         None => {
                             // Should not happen since dispatch validates this
-                            eprintln!("{}⚠ Skill '{}' is not active.{}", ORANGE, skill_name, RESET);
+                            let mut err_out = Output::stderr();
+                            let _ = writeln!(
+                                err_out,
+                                "{ORANGE}⚠ Skill '{skill_name}' is not active.{RESET}",
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("{}{}{}", RED, e, RESET);
+                    let mut err_out = Output::stderr();
+                    let _ = writeln!(err_out, "{RED}{e}{RESET}");
                 }
             }
             if ctx.exit_requested {

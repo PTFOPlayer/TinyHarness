@@ -4,6 +4,7 @@ use rustyline::Editor;
 
 use crate::style::*;
 use crate::ui::input::CommandHelper;
+use crate::Output;
 
 /// Read input from the user with support for multi-line continuation.
 ///
@@ -74,7 +75,8 @@ pub fn read_multiline_input(
                 return Ok(None);
             }
             Err(err) => {
-                eprintln!("{}Error reading input: {}{}", RED, err, RESET);
+                let mut err_out = Output::stderr();
+                let _ = writeln!(err_out, "{RED}Error reading input: {err}{RESET}");
                 return Ok(None);
             }
         }
