@@ -1,4 +1,7 @@
+use std::io::Write;
+
 use tinyharness_lib::provider::{Message, Role};
+use tinyharness_ui::output::Output;
 
 use crate::style::*;
 
@@ -173,34 +176,42 @@ impl FileContext {
 // ── Execute helpers ─────────────────────────────────────────────────────────
 
 /// Handle the /add command.
-pub fn execute_add(file_context: &mut FileContext, path: &str) {
+pub fn execute_add(out: &mut Output, file_context: &mut FileContext, path: &str) {
     match file_context.add(path) {
-        Ok(msg) => println!("{}{}{}", GREEN, msg, RESET),
-        Err(e) => println!("{}{}{}", RED, e, RESET),
+        Ok(msg) => {
+            let _ = writeln!(out, "{GREEN}{msg}{RESET}");
+        }
+        Err(e) => {
+            let _ = writeln!(out, "{RED}{e}{RESET}");
+        }
     }
 }
 
 /// Handle the /drop command.
-pub fn execute_drop(file_context: &mut FileContext, path: &str) {
+pub fn execute_drop(out: &mut Output, file_context: &mut FileContext, path: &str) {
     match file_context.drop(path) {
-        Ok(msg) => println!("{}{}{}", GREEN, msg, RESET),
-        Err(e) => println!("{}{}{}", RED, e, RESET),
+        Ok(msg) => {
+            let _ = writeln!(out, "{GREEN}{msg}{RESET}");
+        }
+        Err(e) => {
+            let _ = writeln!(out, "{RED}{e}{RESET}");
+        }
     }
 }
 
 /// Handle the /files command.
-pub fn execute_list(file_context: &FileContext) {
-    println!("\n{}", file_context.list());
+pub fn execute_list(out: &mut Output, file_context: &FileContext) {
+    let _ = writeln!(out, "\n{}", file_context.list());
 }
 
 /// Handle the /dropall command.
-pub fn execute_clear(file_context: &mut FileContext) {
-    println!("{}{}{}", GREEN, file_context.clear(), RESET);
+pub fn execute_clear(out: &mut Output, file_context: &mut FileContext) {
+    let _ = writeln!(out, "{GREEN}{}{RESET}", file_context.clear());
 }
 
 /// Handle the /refresh command (re-read pinned files from disk).
-pub fn execute_refresh(file_context: &mut FileContext) {
-    println!("{}", file_context.refresh());
+pub fn execute_refresh(out: &mut Output, file_context: &mut FileContext) {
+    let _ = writeln!(out, "{}", file_context.refresh());
 }
 
 /// Inject pinned file content into the system prompt message.
