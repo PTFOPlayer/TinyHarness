@@ -21,7 +21,22 @@ impl From<Message> for OllamaChatMessage {
     fn from(msg: Message) -> Self {
         match msg.role {
             Role::System => OllamaChatMessage::system(msg.content),
-            Role::User => OllamaChatMessage::user(msg.content),
+            Role::User => {
+                let mut m = OllamaChatMessage::user(msg.content);
+                if !msg.images.is_empty() {
+                    let images: Vec<ollama_rs::generation::images::Image> = msg
+                        .images
+                        .iter()
+                        .map(|img| {
+                            ollama_rs::generation::images::Image::from_base64(
+                                img.base64_data.clone(),
+                            )
+                        })
+                        .collect();
+                    m.images = Some(images);
+                }
+                m
+            }
             Role::Assistant => {
                 let mut m = OllamaChatMessage::assistant(msg.content);
                 if !msg.tool_calls.is_empty() {

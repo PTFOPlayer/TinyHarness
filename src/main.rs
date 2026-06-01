@@ -165,6 +165,7 @@ fn create_initial_session(
         role: Role::System,
         content: system_prompt,
         tool_calls: vec![],
+        images: vec![],
     }];
     (sess, msgs)
 }

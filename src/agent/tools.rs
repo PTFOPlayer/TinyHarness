@@ -64,6 +64,7 @@ pub async fn handle_tool_calls<W: Write>(
         role: Role::Assistant,
         content: response_content.to_string(),
         tool_calls: tool_calls.to_vec(),
+        images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
 
@@ -134,6 +135,7 @@ pub async fn handle_tool_calls<W: Write>(
                         call.function.name
                     ),
                     tool_calls: vec![],
+                    images: vec![],
                 });
                 session.append_message(messages.last().expect("just pushed a message"));
             }
@@ -167,7 +169,7 @@ pub async fn handle_tool_calls<W: Write>(
                     "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
                     call.function.name, args_summary
                 ),
-                tool_calls: vec![],
+                tool_calls: vec![], images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
             continue;
@@ -216,6 +218,7 @@ pub async fn handle_tool_calls<W: Write>(
                 batched_content
             ),
             tool_calls: vec![],
+            images: vec![],
         });
         session.append_message(messages.last().expect("just pushed a message"));
     }
@@ -546,7 +549,7 @@ fn handle_switch_mode<W: Write>(
                     "SUCCESS: Mode switched from '{}' to '{}'. The assistant is now in {} mode and will use the appropriate toolset and behavior.",
                     old_mode, new_mode, new_mode
                 ),
-                tool_calls: vec![],
+                tool_calls: vec![], images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
         }
@@ -556,6 +559,7 @@ fn handle_switch_mode<W: Write>(
                 role: Role::Tool,
                 content: format!("Already in '{}' mode. No change was made.", new_mode),
                 tool_calls: vec![],
+                images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
         }
@@ -576,6 +580,7 @@ fn handle_question<W: Write>(
             role: Role::Tool,
             content: "Error: 'question' argument is required for the question tool.".to_string(),
             tool_calls: vec![],
+            images: vec![],
         });
         session.append_message(messages.last().expect("just pushed a message"));
         return Ok(());
@@ -588,6 +593,7 @@ fn handle_question<W: Write>(
                 "Error: 'answers' argument must contain at least one option for the question tool."
                     .to_string(),
             tool_calls: vec![],
+            images: vec![],
         });
         session.append_message(messages.last().expect("just pushed a message"));
         return Ok(());
@@ -684,6 +690,7 @@ fn handle_question<W: Write>(
         role: Role::Tool,
         content: result_content,
         tool_calls: vec![],
+        images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
     Ok(())
@@ -727,6 +734,7 @@ async fn handle_auto_compact<W: Write>(
                     }
                 ),
                 tool_calls: vec![],
+                images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
         }
@@ -738,6 +746,7 @@ async fn handle_auto_compact<W: Write>(
                     e
                 ),
                 tool_calls: vec![],
+                images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
         }
@@ -785,6 +794,7 @@ fn handle_invoke_skill<W: Write>(
                         name
                     ),
                     tool_calls: vec![],
+                    images: vec![],
                 });
                 session.append_message(messages.last().expect("just pushed a message"));
                 return Ok(());
@@ -807,6 +817,7 @@ fn handle_invoke_skill<W: Write>(
                     name
                 ),
                 tool_calls: vec![],
+                images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
 
@@ -835,6 +846,7 @@ fn handle_invoke_skill<W: Write>(
                     skill_name, available
                 ),
                 tool_calls: vec![],
+                images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
         }

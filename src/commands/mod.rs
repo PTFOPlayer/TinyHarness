@@ -8,6 +8,7 @@ pub mod context;
 pub mod exit;
 pub mod files;
 pub mod help;
+pub mod image;
 pub mod init;
 pub mod mode;
 pub mod models;
@@ -245,6 +246,18 @@ pub fn build_registry() -> CommandRegistry {
         |_arg, ctx, msg| {
             crate::commands::files::execute_refresh(&mut ctx.output, &mut ctx.file_context);
             ctx.refresh_system_prompt(msg);
+            Ok(CommandResult::Ok)
+        },
+    );
+
+    // ── Images ───────────────────────────────────────────────────────────
+
+    reg.register_sync_with_usage(
+        "/image",
+        "Attach an image to the next message (for multimodal models)",
+        "/image [<path>|clear|drop <n>]",
+        |arg, ctx, _msg| {
+            crate::commands::image::execute(ctx, arg);
             Ok(CommandResult::Ok)
         },
     );

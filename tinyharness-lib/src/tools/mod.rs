@@ -7,6 +7,7 @@ pub mod ls;
 pub mod question;
 pub mod read;
 pub mod run;
+pub mod screenshot;
 pub mod switch_mode;
 pub mod tool;
 pub mod web_search;
@@ -60,6 +61,7 @@ impl ToolManager {
         self.register_tool(crate::tools::switch_mode::switch_mode_tool_entry());
         self.register_tool(crate::tools::question::question_tool_entry());
         self.register_tool(crate::tools::invoke_skill::invoke_skill_tool_entry());
+        self.register_tool(crate::tools::screenshot::screenshot_tool_entry());
     }
 
     pub fn register_tool(&mut self, tool: Tool) {

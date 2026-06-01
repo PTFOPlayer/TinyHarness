@@ -362,6 +362,7 @@ mod tests {
             role: Role::System,
             content: "You are a helpful assistant.".to_string(),
             tool_calls: vec![],
+            images: vec![],
         }];
 
         inject_into_system_prompt(&mut messages, &ctx);
@@ -379,7 +380,7 @@ mod tests {
         let mut messages = vec![Message {
             role: Role::System,
             content: "Base prompt\n\nThe following files are pinned in context\n--- old ---\nold content\n--- End of pinned files ---".to_string(),
-            tool_calls: vec![],
+            tool_calls: vec![], images: vec![],
         }];
 
         inject_into_system_prompt(&mut messages, &ctx);

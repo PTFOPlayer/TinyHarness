@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 use tinyharness_lib::{
     config::{load_settings, save_settings},
     context::WorkspaceContext,
+    image::ImageAttachment,
     mode::AgentMode,
     provider::{Message, Provider, Role, TokenUsage},
     skill::SkillRegistry,
@@ -46,6 +47,9 @@ pub struct CommandContext {
     pub skill_registry: SkillRegistry,
     /// Names of currently active (loaded) skills.
     pub active_skills: Vec<String>,
+    /// Images pending attachment to the next user message.
+    /// Cleared after each message is sent.
+    pub pending_images: Vec<ImageAttachment>,
     /// Directory containing per-mode prompt `.md` files.
     pub prompts_dir: PathBuf,
     /// Set by the compaction command after a successful summarization
@@ -72,6 +76,7 @@ impl CommandContext {
             session_id: None,
             skill_registry: SkillRegistry::discover(),
             active_skills: Vec::new(),
+            pending_images: Vec::new(),
             prompts_dir,
             compaction_token_usage: None,
             show_thinking: false,

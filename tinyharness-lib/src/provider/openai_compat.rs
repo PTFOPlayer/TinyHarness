@@ -138,7 +138,7 @@ pub struct ChatRequest {
 #[derive(Serialize)]
 pub struct OpenAIMessage {
     pub role: String,
-    pub content: String,
+    pub content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OpenAIToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,16 +227,43 @@ pub struct ModelEntry {
 // ── Conversion helpers ──
 
 pub fn to_openai_message(msg: Message) -> OpenAIMessage {
+    /// Build the content value: if images are present, use multipart array format;
+    /// otherwise use plain string.
+    fn build_content(msg: &Message) -> serde_json::Value {
+        if msg.images.is_empty() {
+            serde_json::Value::String(msg.content.clone())
+        } else {
+            let mut parts: Vec<serde_json::Value> = Vec::new();
+            // Add text part
+            if !msg.content.is_empty() {
+                parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": msg.content
+                }));
+            }
+            // Add image parts
+            for img in &msg.images {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": img.data_uri()
+                    }
+                }));
+            }
+            serde_json::Value::Array(parts)
+        }
+    }
+
     match msg.role {
         Role::System => OpenAIMessage {
             role: "system".to_string(),
-            content: msg.content,
+            content: serde_json::Value::String(msg.content),
             tool_calls: None,
             tool_call_id: None,
         },
         Role::User => OpenAIMessage {
             role: "user".to_string(),
-            content: msg.content,
+            content: build_content(&msg),
             tool_calls: None,
             tool_call_id: None,
         },
@@ -244,7 +271,7 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
             if msg.tool_calls.is_empty() {
                 OpenAIMessage {
                     role: "assistant".to_string(),
-                    content: msg.content,
+                    content: serde_json::Value::String(msg.content),
                     tool_calls: None,
                     tool_call_id: None,
                 }
@@ -265,7 +292,7 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
                     .collect();
                 OpenAIMessage {
                     role: "assistant".to_string(),
-                    content: msg.content,
+                    content: serde_json::Value::String(msg.content),
                     tool_calls: Some(tool_calls),
                     tool_call_id: None,
                 }
@@ -273,7 +300,7 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
         }
         Role::Tool => OpenAIMessage {
             role: "tool".to_string(),
-            content: msg.content,
+            content: serde_json::Value::String(msg.content),
             tool_calls: None,
             tool_call_id: None,
         },

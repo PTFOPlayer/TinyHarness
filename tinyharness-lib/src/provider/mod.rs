@@ -10,6 +10,7 @@ use std::pin::Pin;
 use serde::{Deserialize, Serialize};
 
 use crate::config::OllamaThinkType;
+use crate::image::ImageAttachment;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -87,6 +88,22 @@ pub struct Message {
     pub role: Role,
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    /// Optional images attached to the message (multimodal models).
+    /// Only meaningful for `User` role messages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
+}
+
+impl Message {
+    /// Create a new message with the given role and content, no tool calls, no images.
+    pub fn simple(role: Role, content: impl Into<String>) -> Self {
+        Message {
+            role,
+            content: content.into(),
+            tool_calls: vec![],
+            images: vec![],
+        }
+    }
 }
 
 pub trait Provider: Send + Sync {
