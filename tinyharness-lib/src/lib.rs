@@ -1,5 +1,6 @@
 pub mod config;
 pub mod context;
+pub mod image;
 pub mod mode;
 pub mod provider;
 pub mod session;
@@ -13,6 +14,7 @@ pub use config::{
     load_settings, prompts_dir, save_settings,
 };
 pub use context::WorkspaceContext;
+pub use image::ImageAttachment;
 pub use mode::AgentMode;
 pub use provider::{
     ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,

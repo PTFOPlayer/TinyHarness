@@ -320,6 +320,7 @@ pub async fn run_agent_loop(
                                 role: Role::User,
                                 content: format!("/use {}", skill_name),
                                 tool_calls: vec![],
+                                images: vec![],
                             });
                             session.append_message(messages.last().expect("just pushed a message"));
                             // Refresh system prompt to include the active skill
@@ -353,6 +354,7 @@ pub async fn run_agent_loop(
                                 role: Role::User,
                                 content: format!("/unload {}", skill_name),
                                 tool_calls: vec![],
+                                images: vec![],
                             });
                             session.append_message(messages.last().expect("just pushed a message"));
                             // Refresh system prompt to remove the skill
@@ -379,10 +381,12 @@ pub async fn run_agent_loop(
             continue;
         }
 
+        let pending_images = std::mem::take(&mut ctx.pending_images);
         messages.push(Message {
             role: Role::User,
             content: user_input.clone(),
             tool_calls: vec![],
+            images: pending_images,
         });
 
         // Auto-save: user message
@@ -566,6 +570,7 @@ pub async fn run_agent_loop(
                         role: Role::Assistant,
                         content: response_content,
                         tool_calls: vec![],
+                        images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                 } else {
@@ -642,6 +647,7 @@ pub async fn run_agent_loop(
                 role: Role::Assistant,
                 content: response_content,
                 tool_calls: vec![],
+                images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
 

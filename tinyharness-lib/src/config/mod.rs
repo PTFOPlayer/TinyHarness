@@ -347,17 +347,31 @@ pub fn prompts_dir() -> PathBuf {
 }
 
 /// Ensure the prompts directory exists and is seeded with `.md` files
-/// containing the hardcoded defaults for each mode.
+/// containing the hardcoded defaults for each mode, plus the shared header.
 ///
 /// On first launch, this creates `~/.config/tinyharness/prompts/` and writes
-/// `casual.md`, `planning.md`, `agent.md`, and `research.md`.  Existing files
-/// are **never** overwritten — users can safely customize them.
+/// `header.md`, `casual.md`, `planning.md`, `agent.md`, and `research.md`.
+/// Existing files are **never** overwritten — users can safely customize them.
 ///
 /// Returns the prompts directory path.
 pub fn ensure_prompts_initialized() -> PathBuf {
     let dir = prompts_dir();
     if !dir.exists() {
         std::fs::create_dir_all(&dir).ok();
+    }
+
+    // Write shared header (new in 0.2 — always writes if missing)
+    {
+        let header_path = dir.join("header.md");
+        if !header_path.exists() {
+            let header_text = include_str!("../prompts/header.md");
+            if let Err(e) = std::fs::write(&header_path, header_text.trim()) {
+                tracing::warn!(
+                    "Failed to write default header to {}: {e}",
+                    header_path.display(),
+                );
+            }
+        }
     }
 
     let modes = [

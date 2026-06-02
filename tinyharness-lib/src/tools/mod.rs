@@ -7,6 +7,7 @@ pub mod ls;
 pub mod question;
 pub mod read;
 pub mod run;
+pub mod screenshot;
 pub mod switch_mode;
 pub mod tool;
 pub mod web_search;
@@ -60,6 +61,7 @@ impl ToolManager {
         self.register_tool(crate::tools::switch_mode::switch_mode_tool_entry());
         self.register_tool(crate::tools::question::question_tool_entry());
         self.register_tool(crate::tools::invoke_skill::invoke_skill_tool_entry());
+        self.register_tool(crate::tools::screenshot::screenshot_tool_entry());
     }
 
     pub fn register_tool(&mut self, tool: Tool) {
@@ -75,7 +77,12 @@ impl ToolManager {
     pub fn tools_for_mode(&self, mode: AgentMode) -> Vec<ToolDefinition> {
         match mode {
             AgentMode::Agent => self.get_all_tool_definitions(),
-            AgentMode::Casual => Vec::new(),
+            AgentMode::Casual => self
+                .tools
+                .iter()
+                .filter(|t| t.name == "web_search" || t.name == "web_fetch")
+                .map(|t| t.to_definition())
+                .collect(),
             AgentMode::Planning => self
                 .tools
                 .iter()

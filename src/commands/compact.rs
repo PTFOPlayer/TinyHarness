@@ -114,12 +114,12 @@ async fn call_llm_summarize(
                        Preserve all technical details: file paths, code snippets, error messages, decisions made, \
                        and current task status. Do NOT add information that was not in the original conversation."
                 .to_string(),
-            tool_calls: vec![],
+            tool_calls: vec![], images: vec![],
         },
         Message {
             role: Role::User,
             content: format!("{}\n\n{}", summarization_prompt, text_to_summarize),
-            tool_calls: vec![],
+            tool_calls: vec![], images: vec![],
         },
     ];
 
@@ -381,7 +381,7 @@ fn reconstruct_messages(
              If the user references something from before, it may be in this summary.]",
             summary_content.trim()
         ),
-        tool_calls: vec![],
+        tool_calls: vec![], images: vec![],
     });
 
     // Keep all recent messages from keep_from onward
@@ -410,6 +410,7 @@ mod tests {
             role: Role::User,
             content: long_content,
             tool_calls: vec![],
+            images: vec![],
         };
         let formatted = format_messages_for_summary(&[&msg]);
         assert!(formatted.contains("[USER]:"));
@@ -426,6 +427,7 @@ mod tests {
             role: Role::Assistant,
             content: "Hello world".to_string(),
             tool_calls: vec![],
+            images: vec![],
         };
         let formatted = format_messages_for_summary(&[&msg]);
         assert!(formatted.contains("[ASSISTANT]: Hello world"));
@@ -438,21 +440,25 @@ mod tests {
                 role: Role::System,
                 content: "sys".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "usr".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "ast".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::Tool,
                 content: "tol".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
         ];
         let refs: Vec<&Message> = msgs.iter().collect();
@@ -496,6 +502,7 @@ mod tests {
             role: Role::System,
             content: "You are helpful.".to_string(),
             tool_calls: vec![],
+            images: vec![],
         };
         let mut messages = vec![
             system.clone(),
@@ -503,41 +510,49 @@ mod tests {
                 role: Role::User,
                 content: "msg1".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "msg2".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "msg3".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "msg4".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "recent1".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "recent2".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "recent3".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "recent4".to_string(),
                 tool_calls: vec![],
+                images: vec![],
             },
         ];
         let ctx = CompactContext {

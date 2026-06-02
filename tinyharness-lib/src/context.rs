@@ -91,12 +91,6 @@ impl WorkspaceContext {
             lines.push(format!("Test command: {}", self.test_command));
         }
 
-        lines.push("\nUse the available tools (ls, read, write, edit, grep, run, glob) to explore and modify files.".to_string());
-        lines.push(
-            "Always read a file before editing it. Prefer the glob tool over 'find' or 'ls -R'."
-                .to_string(),
-        );
-
         if let Some((filename, content)) = &self.project_md {
             lines.push(format!("\n---\n# Project Instructions (from {filename})\n"));
             lines.push(content.clone());
