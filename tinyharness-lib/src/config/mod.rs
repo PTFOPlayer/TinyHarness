@@ -5,6 +5,228 @@ use serde::{Deserialize, Serialize};
 
 use crate::mode::AgentMode;
 
+// ── Project Settings ────────────────────────────────────────────────────────
+
+/// Per-project override settings discovered from `.tinyharness/config.json`.
+///
+/// All fields are `Option` — only present fields override the global setting.
+/// Discovery walks up from CWD, same algorithm as `discover_project_md`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectSettings {
+    /// Override safe command prefixes (extends, doesn't replace)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_command_prefixes: Option<Vec<String>>,
+    /// Override denied command prefixes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied_command_prefixes: Option<Vec<String>>,
+    /// Override auto_accept_safe_commands
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_accept_safe_commands: Option<bool>,
+    /// Override context_limit
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u32>,
+    /// Additional project-specific MD file names to include in context
+    /// (e.g. ["RULES.md", ".cursorrules"]). These are loaded AFTER the main
+    /// project instruction file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_md_files: Option<Vec<String>>,
+    /// Override the preferred mode for this project
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_mode: Option<AgentMode>,
+}
+
+/// Discover and load `.tinyharness/config.json` by walking up from CWD.
+///
+/// Returns `None` if no config file is found. Returns `Some(Err(...))` if
+/// a file is found but cannot be parsed.
+pub fn discover_project_settings(start_dir: &std::path::Path) -> Option<Result<ProjectSettings, SettingsError>> {
+    let mut dir = start_dir.to_path_buf();
+
+    loop {
+        let candidate = dir.join(".tinyharness").join("config.json");
+        if candidate.is_file() {
+            let content = match std::fs::read_to_string(&candidate) {
+                Ok(c) => c,
+                Err(e) => return Some(Err(SettingsError::Io(e))),
+            };
+            let parsed = serde_json::from_str(&content).map_err(SettingsError::Parse);
+            return Some(parsed);
+        }
+
+        // Walk up one directory
+        if let Some(parent) = dir.parent() {
+            if parent == dir {
+                break;
+            }
+            dir = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+
+    None
+}
+
+/// Source annotation for merged settings values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingSource {
+    /// Value came from the global `~/.config/tinyharness/settings.json`
+    Global,
+    /// Value came from `.tinyharness/config.json`
+    Project,
+    /// Value is the hardcoded default (no config found)
+    Default,
+}
+
+impl std::fmt::Display for SettingSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SettingSource::Global => f.write_str("global"),
+            SettingSource::Project => f.write_str("project"),
+            SettingSource::Default => f.write_str("default"),
+        }
+    }
+}
+
+/// Effective merged settings — the result of layering global + project settings.
+///
+/// This is a read-only view. Each field has a source annotation for display.
+#[derive(Debug, Clone)]
+pub struct MergedSettings {
+    /// Merged safe command prefixes (project extends global)
+    pub safe_commands: Vec<String>,
+    pub safe_commands_source: SettingSource,
+    /// Merged denied command prefixes (project overrides global)
+    pub denied_commands: Vec<String>,
+    pub denied_commands_source: SettingSource,
+    pub auto_accept_safe_commands: bool,
+    pub auto_accept_source: SettingSource,
+    pub context_limit: Option<u32>,
+    pub context_limit_source: SettingSource,
+    pub project_md_files: Vec<String>,
+    pub project_md_files_source: SettingSource,
+    pub preferred_mode: AgentMode,
+    pub preferred_mode_source: SettingSource,
+}
+
+/// Load and merge global + project settings.
+///
+/// Layering: project overrides global where specified, otherwise falls back
+/// to global. For safe commands, project *extends* the global list rather
+/// than replacing it.
+pub fn load_merged_settings() -> (Settings, Option<ProjectSettings>, MergedSettings) {
+    let global = load_settings();
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let project = match discover_project_settings(&cwd) {
+        Some(Ok(ps)) => Some(ps),
+        Some(Err(e)) => {
+            tracing::warn!("Failed to parse .tinyharness/config.json: {e}. Ignoring project settings.");
+            None
+        }
+        None => None,
+    };
+
+    let merged = merge_settings(&global, project.as_ref());
+    (global, project, merged)
+}
+
+/// Merge global settings with optional project overrides.
+fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> MergedSettings {
+    let global_safe = global.get_safe_commands();
+    let global_denied = global.get_denied_commands();
+
+    match project {
+        None => MergedSettings {
+            safe_commands: global_safe,
+            safe_commands_source: SettingSource::Default,
+            denied_commands: global_denied,
+            denied_commands_source: SettingSource::Default,
+            auto_accept_safe_commands: global.auto_accept_safe_commands,
+            auto_accept_source: SettingSource::Default,
+            context_limit: global.context_limit,
+            context_limit_source: SettingSource::Default,
+            project_md_files: Vec::new(),
+            project_md_files_source: SettingSource::Default,
+            preferred_mode: global.preferred_mode,
+            preferred_mode_source: SettingSource::Default,
+        },
+        Some(p) => {
+            // Safe commands: project extends global
+            let safe_commands = if let Some(ref proj_safe) = p.safe_command_prefixes {
+                let mut combined = global_safe.clone();
+                for cmd in proj_safe {
+                    if !combined.contains(cmd) {
+                        combined.push(cmd.clone());
+                    }
+                }
+                combined
+            } else {
+                global_safe
+            };
+            let safe_source = if p.safe_command_prefixes.is_some() {
+                SettingSource::Project
+            } else {
+                SettingSource::Default
+            };
+
+            // Denied commands: project replaces global
+            let (denied_commands, denied_source) =
+                if let Some(ref proj_denied) = p.denied_command_prefixes {
+                    (proj_denied.clone(), SettingSource::Project)
+                } else {
+                    (global_denied, SettingSource::Default)
+                };
+
+            let (auto_accept, auto_source) = p.auto_accept_safe_commands
+                .map(|v| (v, SettingSource::Project))
+                .unwrap_or((global.auto_accept_safe_commands, SettingSource::Default));
+
+            let (context_limit, ctx_source) = p.context_limit
+                .map(|v| (Some(v), SettingSource::Project))
+                .unwrap_or((global.context_limit, SettingSource::Default));
+
+            let (project_md_files, md_source) = p.project_md_files
+                .as_ref()
+                .map(|files| (files.clone(), SettingSource::Project))
+                .unwrap_or((Vec::new(), SettingSource::Default));
+
+            let (preferred_mode, mode_source) = p.preferred_mode
+                .map(|m| (m, SettingSource::Project))
+                .unwrap_or((global.preferred_mode, SettingSource::Default));
+
+            MergedSettings {
+                safe_commands,
+                safe_commands_source: safe_source,
+                denied_commands,
+                denied_commands_source: denied_source,
+                auto_accept_safe_commands: auto_accept,
+                auto_accept_source: auto_source,
+                context_limit,
+                context_limit_source: ctx_source,
+                project_md_files,
+                project_md_files_source: md_source,
+                preferred_mode,
+                preferred_mode_source: mode_source,
+            }
+        }
+    }
+}
+
+/// Generate a starter `.tinyharness/config.json` file from current settings
+/// overrides that make sense for a project (safe commands, denied commands,
+/// auto-accept, context limit).
+pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings {
+    ProjectSettings {
+        safe_command_prefixes: settings.safe_command_prefixes.clone(),
+        denied_command_prefixes: settings.denied_command_prefixes.clone(),
+        auto_accept_safe_commands: Some(settings.auto_accept_safe_commands),
+        context_limit: settings.context_limit,
+        project_md_files: None, // user must fill this in
+        preferred_mode: Some(settings.preferred_mode),
+    }
+}
+
 /// Identifies which provider backend was used last.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ProviderKind {
@@ -113,6 +335,12 @@ pub struct Settings {
     /// List of command prefixes that are always denied auto-accept, even if they
     /// match a safe prefix. Takes priority over the safe list. (default: empty)
     pub denied_command_prefixes: Option<Vec<String>>,
+    /// Override the project instruction file discovery list.
+    /// When set, replaces the hardcoded default list (TINYHARNESS.md, AGENTS.md, etc.).
+    /// Use `TINYHARNESS_MD_FILES` env var for the highest priority override.
+    /// (default: None → use hardcoded defaults)
+    #[serde(default)]
+    pub project_md_files: Option<Vec<String>>,
 }
 
 impl Default for Settings {
@@ -131,6 +359,7 @@ impl Default for Settings {
             auto_accept_safe_commands: true,
             safe_command_prefixes: None,
             denied_command_prefixes: None,
+            project_md_files: None,
         }
     }
 }
@@ -340,6 +569,41 @@ pub fn save_settings(settings: &Settings) {
 }
 
 // ── Prompt file management ──────────────────────────────────────────────────
+
+/// Resolve the effective list of project instruction file names to discover.
+///
+/// Priority (highest first):
+/// 1. `TINYHARNESS_MD_FILES` env var (comma-separated)
+/// 2. `settings.project_md_files` from global settings
+/// 3. Hardcoded default: TINYHARNESS.md, .tinyharness.md, AGENTS.md, CLAUDE.md
+pub fn resolve_project_md_files(settings: Option<&Settings>) -> Vec<String> {
+    // 1. Env var takes highest priority
+    if let Ok(env) = std::env::var("TINYHARNESS_MD_FILES") {
+        let files: Vec<String> = env
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !files.is_empty() {
+            return files;
+        }
+    }
+
+    // 2. Settings override
+    if let Some(s) = settings {
+        if let Some(ref configured) = s.project_md_files {
+            if !configured.is_empty() {
+                return configured.clone();
+            }
+        }
+    }
+
+    // 3. Hardcoded defaults
+    crate::context::DEFAULT_PROJECT_MD_FILE_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
 
 /// Returns the directory where per-mode prompt `.md` files are stored.
 ///
