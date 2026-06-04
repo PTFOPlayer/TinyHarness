@@ -39,7 +39,9 @@ pub struct ProjectSettings {
 ///
 /// Returns `None` if no config file is found. Returns `Some(Err(...))` if
 /// a file is found but cannot be parsed.
-pub fn discover_project_settings(start_dir: &std::path::Path) -> Option<Result<ProjectSettings, SettingsError>> {
+pub fn discover_project_settings(
+    start_dir: &std::path::Path,
+) -> Option<Result<ProjectSettings, SettingsError>> {
     let mut dir = start_dir.to_path_buf();
 
     loop {
@@ -121,7 +123,9 @@ pub fn load_merged_settings() -> (Settings, Option<ProjectSettings>, MergedSetti
     let project = match discover_project_settings(&cwd) {
         Some(Ok(ps)) => Some(ps),
         Some(Err(e)) => {
-            tracing::warn!("Failed to parse .tinyharness/config.json: {e}. Ignoring project settings.");
+            tracing::warn!(
+                "Failed to parse .tinyharness/config.json: {e}. Ignoring project settings."
+            );
             None
         }
         None => None,
@@ -178,20 +182,24 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                     (global_denied, SettingSource::Default)
                 };
 
-            let (auto_accept, auto_source) = p.auto_accept_safe_commands
+            let (auto_accept, auto_source) = p
+                .auto_accept_safe_commands
                 .map(|v| (v, SettingSource::Project))
                 .unwrap_or((global.auto_accept_safe_commands, SettingSource::Default));
 
-            let (context_limit, ctx_source) = p.context_limit
+            let (context_limit, ctx_source) = p
+                .context_limit
                 .map(|v| (Some(v), SettingSource::Project))
                 .unwrap_or((global.context_limit, SettingSource::Default));
 
-            let (project_md_files, md_source) = p.project_md_files
+            let (project_md_files, md_source) = p
+                .project_md_files
                 .as_ref()
                 .map(|files| (files.clone(), SettingSource::Project))
                 .unwrap_or((Vec::new(), SettingSource::Default));
 
-            let (preferred_mode, mode_source) = p.preferred_mode
+            let (preferred_mode, mode_source) = p
+                .preferred_mode
                 .map(|m| (m, SettingSource::Project))
                 .unwrap_or((global.preferred_mode, SettingSource::Default));
 
@@ -590,12 +598,11 @@ pub fn resolve_project_md_files(settings: Option<&Settings>) -> Vec<String> {
     }
 
     // 2. Settings override
-    if let Some(s) = settings {
-        if let Some(ref configured) = s.project_md_files {
-            if !configured.is_empty() {
-                return configured.clone();
-            }
-        }
+    if let Some(s) = settings
+        && let Some(ref configured) = s.project_md_files
+        && !configured.is_empty()
+    {
+        return configured.clone();
     }
 
     // 3. Hardcoded defaults

@@ -26,10 +26,7 @@ fn execute_show(out: &mut Output) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let project_config = discover_project_settings(&cwd);
 
-    let has_project = match &project_config {
-        Some(Ok(_)) => true,
-        _ => false,
-    };
+    let has_project = matches!(&project_config, Some(Ok(_)));
 
     let (_, _, merged) = load_merged_settings();
 
@@ -203,10 +200,7 @@ fn execute_init(out: &mut Output) {
     let stripped = strip_json_comments(json);
 
     if let Err(e) = std::fs::write(&config_path, &stripped) {
-        let _ = writeln!(
-            out,
-            "{RED}Failed to write config file: {e}{RESET}"
-        );
+        let _ = writeln!(out, "{RED}Failed to write config file: {e}{RESET}");
         return;
     }
 

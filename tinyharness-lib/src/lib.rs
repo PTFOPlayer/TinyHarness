@@ -11,8 +11,9 @@ pub mod tools;
 // Re-export key types at crate root for convenience
 pub use config::{
     MergedSettings, ProjectSettings, ProviderKind, SettingSource, Settings, SettingsError,
-    SettingsStore, discover_project_settings, ensure_prompts_initialized, generate_project_config_template,
-    load_merged_settings, load_settings, prompts_dir, resolve_project_md_files, save_settings,
+    SettingsStore, discover_project_settings, ensure_prompts_initialized,
+    generate_project_config_template, load_merged_settings, load_settings, prompts_dir,
+    resolve_project_md_files, save_settings,
 };
 pub use context::WorkspaceContext;
 pub use image::ImageAttachment;

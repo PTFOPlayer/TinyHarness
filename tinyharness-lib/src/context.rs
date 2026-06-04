@@ -65,13 +65,12 @@ impl WorkspaceContext {
         let project_md = discover_project_md(&root, &md_files);
 
         // Load additional MD files from per-project .tinyharness/config.json
-        let additional_project_mds = if let Some(Ok(proj)) =
-            crate::config::discover_project_settings(&root)
-        {
-            load_additional_md_files(&root, proj.project_md_files.as_deref())
-        } else {
-            Vec::new()
-        };
+        let additional_project_mds =
+            if let Some(Ok(proj)) = crate::config::discover_project_settings(&root) {
+                load_additional_md_files(&root, proj.project_md_files.as_deref())
+            } else {
+                Vec::new()
+            };
 
         WorkspaceContext {
             root,
@@ -119,7 +118,9 @@ impl WorkspaceContext {
 
         // Append additional project MD files
         for (filename, content) in &self.additional_project_mds {
-            lines.push(format!("\n---\n# Additional Instructions (from {filename})\n"));
+            lines.push(format!(
+                "\n---\n# Additional Instructions (from {filename})\n"
+            ));
             lines.push(content.clone());
         }
 
@@ -129,7 +130,9 @@ impl WorkspaceContext {
 
 /// Load additional project instruction files specified in per-project config.
 fn load_additional_md_files(root: &Path, files: Option<&[String]>) -> Vec<(String, String)> {
-    let Some(files) = files else { return Vec::new() };
+    let Some(files) = files else {
+        return Vec::new();
+    };
     files
         .iter()
         .filter_map(|name| {
@@ -230,7 +233,12 @@ const LANGUAGE_SIGNATURES: &[LanguageSignature] = &[
     },
     LanguageSignature {
         label: "Python",
-        markers: &["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"],
+        markers: &[
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+        ],
         build_cmd: "pip install -e .",
         test_cmd: "pytest",
     },
@@ -288,10 +296,10 @@ fn detect_project_type(root: &Path) -> String {
         if found.contains(label) {
             continue;
         }
-        if let Ok(entries) = glob::glob(&root.join(pattern).to_string_lossy()) {
-            if entries.flatten().next().is_some() {
-                found.push(label);
-            }
+        if let Ok(entries) = glob::glob(&root.join(pattern).to_string_lossy())
+            && entries.flatten().next().is_some()
+        {
+            found.push(label);
         }
     }
 
@@ -337,7 +345,10 @@ fn detect_project_name(root: &Path, project_type: &str) -> String {
     };
 
     // Handle "Rust + Node.js" style monorepo labels
-    let primary = project_type.split_once(" + ").map(|(a, _)| a).unwrap_or(project_type);
+    let primary = project_type
+        .split_once(" + ")
+        .map(|(a, _)| a)
+        .unwrap_or(project_type);
 
     match primary {
         "Rust" => {
@@ -437,7 +448,10 @@ fn list_top_level(root: &Path) -> Vec<String> {
 
 fn detect_commands(project_type: &str, root: &Path) -> (&'static str, &'static str) {
     // Handle monorepo labels: use the first detected type's commands
-    let primary = project_type.split_once(" + ").map(|(a, _)| a).unwrap_or(project_type);
+    let primary = project_type
+        .split_once(" + ")
+        .map(|(a, _)| a)
+        .unwrap_or(project_type);
 
     for sig in LANGUAGE_SIGNATURES {
         if sig.label == primary {
@@ -525,7 +539,10 @@ mod tests {
 
     /// Helper: the default discovery list as owned Strings for tests.
     fn default_md_names() -> Vec<String> {
-        DEFAULT_PROJECT_MD_FILE_NAMES.iter().map(|s| s.to_string()).collect()
+        DEFAULT_PROJECT_MD_FILE_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// Helper: custom discovery list for override tests.
@@ -750,9 +767,7 @@ mod tests {
             build_command: "cargo build".to_string(),
             test_command: "cargo test".to_string(),
             project_md: None,
-            additional_project_mds: vec![
-                ("RULES.md".to_string(), "# Custom Rules".to_string()),
-            ],
+            additional_project_mds: vec![("RULES.md".to_string(), "# Custom Rules".to_string())],
         };
 
         let formatted = ctx.format();
