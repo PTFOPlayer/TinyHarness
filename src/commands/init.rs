@@ -389,6 +389,7 @@ mod tests {
             build_command: "cargo build".to_string(),
             test_command: "cargo test".to_string(),
             project_md: None,
+            additional_project_mds: Vec::new(),
         };
 
         let prompt = build_init_prompt(&ctx, None);
@@ -413,6 +414,7 @@ mod tests {
             build_command: "cargo build".to_string(),
             test_command: "cargo test".to_string(),
             project_md: None,
+            additional_project_mds: Vec::new(),
         };
 
         let existing = "# Old Rules\nUse cargo.";

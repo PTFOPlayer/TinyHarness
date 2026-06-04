@@ -12,6 +12,7 @@ pub mod image;
 pub mod init;
 pub mod mode;
 pub mod models;
+pub mod project_settings;
 pub mod registry;
 pub mod sessions;
 pub mod settings;
@@ -132,6 +133,15 @@ pub fn build_registry() -> CommandRegistry {
         "Show or toggle auto-accept for safe read-only commands (default: on)",
         "/autoaccept [on|off]",
         |arg, ctx, _msg| crate::commands::config_settings::execute_autoaccept(&mut ctx.output, arg),
+    );
+
+    // ── Per-project settings ──────────────────────────────────────────────
+
+    reg.register_sync_with_usage(
+        "/project-settings",
+        "Show or initialize per-project settings (.tinyharness/config.json)",
+        "/project-settings [init]",
+        |arg, ctx, _msg| crate::commands::project_settings::execute(&mut ctx.output, arg),
     );
 
     reg.register_sync_with_usage(
