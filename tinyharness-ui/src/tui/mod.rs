@@ -74,14 +74,18 @@ pub enum TuiAgentEvent {
     ModelChanged(String),
     /// Token usage was updated.
     TokenUpdate { count: u64, limit: Option<u64> },
+    /// Context window warning triggered (70%+ or 90%+).
+    ContextWarning { percentage: f64, critical: bool },
     /// A system/info message to display.
     SystemMessage(String),
     /// The agent is requesting user confirmation for a tool call.
     /// The TUI should show a confirmation prompt.
+    /// `diff_preview` contains a plain-text unified diff to display (for edit/write).
     ConfirmTool {
         name: String,
         args_summary: String,
         needs_approval: bool,
+        diff_preview: Option<String>,
     },
     /// The agent is asking a question (from the question signal tool).
     Question {
@@ -119,7 +123,7 @@ pub use screen::Screen;
 pub use terminal::{Size, Terminal};
 pub use widget::{Action, Widget};
 
-pub use widgets::conversation::{ConversationLine, ConversationWidget};
+pub use widgets::conversation::{ContextWarningLevel, ConversationLine, ConversationWidget};
 pub use widgets::input_bar::InputBarWidget;
 pub use widgets::sidebar::SidebarWidget;
 pub use widgets::spinner::SpinnerWidget;

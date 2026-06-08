@@ -26,41 +26,48 @@ struct DirEntry {
 }
 
 impl DirEntry {
+    /// Return a narrow (single-cell) icon for this entry.
+    ///
+    /// All icons are exactly 1 column wide so `write_str` cell positioning
+    /// stays aligned.  Emojis are avoided because they are double-width
+    /// and cause column misalignment in the cell-based screen buffer.
     fn icon(&self) -> &'static str {
         if self.is_dir {
-            "📁"
+            "▸"
         } else {
             match self.name.rsplit('.').next() {
-                Some("rs") => "🦀",
+                Some("rs") => "Σ",
                 Some("toml") => "⚙",
-                Some("md") => "📝",
+                Some("md") => "¶",
                 Some("json") => "{ }",
-                Some("yaml" | "yml") => "📋",
-                Some("py") => "🐍",
-                Some("js" | "ts") => "📜",
-                Some("txt") => "📄",
-                Some("lock") => "🔒",
-                Some("cfg" | "ini" | "conf") => "🔧",
-                Some("sh" | "bash") => "🐚",
-                Some("png" | "jpg" | "jpeg" | "gif" | "svg" | "webp") => "🖼",
-                Some("gitignore" | "env") => "🙈",
-                _ => "  ",
+                Some("yaml" | "yml") => "≡",
+                Some("py") => "λ",
+                Some("js" | "ts") => "ƒ",
+                Some("txt") => "─",
+                Some("lock") => "■",
+                Some("cfg" | "ini" | "conf") => "※",
+                Some("sh" | "bash") => "$",
+                Some("png" | "jpg" | "jpeg" | "gif" | "svg" | "webp") => "◈",
+                Some("gitignore" | "env") => "○",
+                _ => "·",
             }
         }
     }
 }
 
 /// Read directory entries from a path, sorted (directories first, then files).
-fn read_dir_sorted(path: &PathBuf) -> Vec<DirEntry> {
+/// If `show_hidden` is true, include files/dirs starting with `.`.
+fn read_dir_sorted(path: &PathBuf, show_hidden: bool) -> Vec<DirEntry> {
     let mut entries: Vec<DirEntry> = Vec::new();
     if let Ok(read_dir) = fs::read_dir(path) {
         for entry in read_dir.flatten() {
             let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
             let name = entry.file_name().to_string_lossy().to_string();
-            // Skip hidden files/dirs (starting with .)
-            if !name.starts_with('.') {
-                entries.push(DirEntry { name, is_dir });
+            // Skip hidden files/dirs unless show_hidden is true
+            if !show_hidden && name.starts_with('.') {
+                continue;
             }
+            entries.push(DirEntry { name, is_dir });
         }
     }
     // Sort: directories first, then files; each group sorted alphabetically
@@ -72,27 +79,30 @@ fn read_dir_sorted(path: &PathBuf) -> Vec<DirEntry> {
     entries
 }
 
-/// Return the icon for a file/dir entry based on its name and type.
-/// Reuses the same icon logic as `DirEntry::icon()` but works with just name + is_dir.
+/// Return a narrow (single-cell) icon for a file/dir entry.
+///
+/// Mirrors `DirEntry::icon()` but works with just name + is_dir.
+/// All icons are exactly 1 column wide (2 for `{ }` which is 3 chars
+/// but still narrow) to keep cell positioning aligned.
 fn icon_for_entry(name: &str, is_dir: bool) -> &'static str {
     if is_dir {
-        "📁"
+        "▸"
     } else {
         match name.rsplit('.').next() {
-            Some("rs") => "🦀",
+            Some("rs") => "Σ",
             Some("toml") => "⚙",
-            Some("md") => "📝",
+            Some("md") => "¶",
             Some("json") => "{ }",
-            Some("yaml" | "yml") => "📋",
-            Some("py") => "🐍",
-            Some("js" | "ts") => "📜",
-            Some("txt") => "📄",
-            Some("lock") => "🔒",
-            Some("cfg" | "ini" | "conf") => "🔧",
-            Some("sh" | "bash") => "🐚",
-            Some("png" | "jpg" | "jpeg" | "gif" | "svg" | "webp") => "🖼",
-            Some("gitignore" | "env") => "🙈",
-            _ => "  ",
+            Some("yaml" | "yml") => "≡",
+            Some("py") => "λ",
+            Some("js" | "ts") => "ƒ",
+            Some("txt") => "─",
+            Some("lock") => "■",
+            Some("cfg" | "ini" | "conf") => "※",
+            Some("sh" | "bash") => "$",
+            Some("png" | "jpg" | "jpeg" | "gif" | "svg" | "webp") => "◈",
+            Some("gitignore" | "env") => "○",
+            _ => "·",
         }
     }
 }
@@ -122,12 +132,18 @@ pub struct SidebarWidget {
     structure_nav_stack: Vec<(PathBuf, usize)>,
     /// Directory entries in the current listing.
     structure_entries: Vec<DirEntry>,
-    /// Currently selected entry index.
+    /// Currently selected entry index (index into filtered_entries when filter active).
     structure_selected: usize,
     /// Scroll offset for the structure entries (in entry rows).
     structure_scroll: usize,
     /// The workspace root path (used to initialize the browser).
     workspace_root: PathBuf,
+    /// Whether to show hidden files (dotfiles). Toggle with `.` key.
+    show_hidden: bool,
+    /// Whether file filter mode is active (started by pressing `/`).
+    structure_filter_active: bool,
+    /// The current filter query string.
+    structure_filter: String,
 }
 
 impl SidebarWidget {
@@ -150,6 +166,9 @@ impl SidebarWidget {
             structure_selected: 0,
             structure_scroll: 0,
             workspace_root: cwd,
+            show_hidden: false,
+            structure_filter_active: false,
+            structure_filter: String::new(),
         }
     }
 
@@ -161,6 +180,8 @@ impl SidebarWidget {
             self.structure_nav_stack.clear();
             self.structure_selected = 0;
             self.structure_scroll = 0;
+            self.structure_filter.clear();
+            self.structure_filter_active = false;
             self.refresh_structure_listing();
         }
     }
@@ -175,6 +196,61 @@ impl SidebarWidget {
         self.structure_mode
     }
 
+    /// Handle a mouse click on the sidebar in structure mode.
+    ///
+    /// Determines which entry was clicked and selects it.
+    /// If the same entry was already selected and the click is on a directory,
+    /// navigate into it (simulating a double-click/Enter).
+    pub fn click_structure_entry(&mut self, click_row: u16, _click_col: u16, area: Rect) {
+        if !self.structure_mode || self.structure_entries.is_empty() {
+            return;
+        }
+
+        let filtered = self.get_filtered_entries();
+        if filtered.is_empty() {
+            return;
+        }
+
+        // Count how many rows are rendered before the structure entries
+        // This must match the rendering logic in render()
+        let items_before = self.count_items_before_structure();
+        let first_entry_row = area.y + items_before as u16;
+
+        // Check if the click is within the structure entries area
+        if click_row < first_entry_row {
+            return;
+        }
+
+        // Calculate which entry was clicked
+        let entry_offset = (click_row - first_entry_row) as usize;
+        // Account for scroll: entries are rendered starting at structure_scroll
+        let entry_index = self.structure_scroll + entry_offset;
+
+        if entry_index < filtered.len() {
+            let was_selected = self.structure_selected;
+            self.structure_selected = entry_index;
+            self.ensure_selected_visible();
+
+            // If clicking on the already-selected directory, enter it
+            // (this acts like a double-click / "open" action)
+            if was_selected == entry_index {
+                if let Some(entry) = filtered.get(entry_index) {
+                    if entry.is_dir {
+                        let new_path = self.structure_cwd.join(&entry.name);
+                        self.structure_nav_stack
+                            .push((self.structure_cwd.clone(), self.structure_selected));
+                        self.structure_cwd = new_path;
+                        self.structure_selected = 0;
+                        self.structure_scroll = 0;
+                        self.structure_filter.clear();
+                        self.structure_filter_active = false;
+                        self.refresh_structure_listing();
+                    }
+                }
+            }
+        }
+    }
+
     /// Set the workspace root path for the file browser.
     pub fn set_workspace_root(&mut self, path: PathBuf) {
         self.workspace_root = path;
@@ -182,7 +258,7 @@ impl SidebarWidget {
 
     /// Refresh the directory listing from `structure_cwd`.
     fn refresh_structure_listing(&mut self) {
-        self.structure_entries = read_dir_sorted(&self.structure_cwd);
+        self.structure_entries = read_dir_sorted(&self.structure_cwd, self.show_hidden);
         // Clamp selection
         if !self.structure_entries.is_empty() {
             self.structure_selected = self
@@ -247,10 +323,9 @@ impl SidebarWidget {
 
         // Structure section
         if self.structure_mode {
-            rows += 1; // header
-            rows += 1; // breadcrumb path line
-            rows += 1; // spacer after breadcrumb
-            rows += self.structure_entries.len().max(1); // entries (at least 1 for "empty" msg)
+            rows += 1; // header (includes breadcrumb or filter)
+            let filtered_count = self.get_filtered_entries().len();
+            rows += filtered_count.max(1); // entries (at least 1 for "empty"/"no matches" msg)
             rows += 1; // spacer after entries
         } else if !self.structure.is_empty() {
             rows += 1; // header
@@ -352,21 +427,47 @@ impl Widget for SidebarWidget {
 
         // Structure section
         if self.structure_mode {
-            items.push(SidebarItem::Header("Structure".to_string()));
-            // Breadcrumb path
-            let path_display = self.format_breadcrumb(max_width);
-            items.push(SidebarItem::Breadcrumb(path_display));
-            items.push(SidebarItem::Spacer);
+            // Merge breadcrumb into header so entries start right after it,
+            // matching the non-interactive layout (no 2-row shift).
+            let hidden_indicator = if self.show_hidden { " ·" } else { "" };
+            let path_display = self.format_breadcrumb(max_width.saturating_sub(14));
+            let header = if self.structure_filter_active || !self.structure_filter.is_empty() {
+                let filter_display = if self.structure_filter.len() > max_width.saturating_sub(6) {
+                    format!(
+                        "…{}",
+                        &self.structure_filter[self
+                            .structure_filter
+                            .len()
+                            .saturating_sub(max_width.saturating_sub(8))..]
+                    )
+                } else {
+                    self.structure_filter.clone()
+                };
+                format!(
+                    "Filter: {}{}",
+                    filter_display,
+                    if self.structure_filter_active {
+                        "▏"
+                    } else {
+                        ""
+                    }
+                )
+            } else {
+                format!("Structure{} ─ {}", hidden_indicator, path_display)
+            };
+            items.push(SidebarItem::Header(header));
 
-            if self.structure_entries.is_empty() {
+            let filtered = self.get_filtered_entries();
+
+            if filtered.is_empty() {
                 items.push(SidebarItem::StructureEntry {
                     icon: "  ".to_string(),
-                    name: "(empty)".to_string(),
+                    name: "(no matches)".to_string(),
                     is_dir: false,
                     selected: false,
                 });
             } else {
-                for (i, entry) in self.structure_entries.iter().enumerate() {
+                for (i, entry) in filtered.iter().enumerate() {
                     items.push(SidebarItem::StructureEntry {
                         icon: entry.icon().to_string(),
                         name: entry.name.clone(),
@@ -456,7 +557,7 @@ impl Widget for SidebarWidget {
                 SidebarItem::Entry { icon, name, is_dir } => {
                     let suffix = if *is_dir { "/" } else { "" };
                     let display = format!("{} {}{}", icon, name, suffix);
-                    let truncated = if display.len() > max_width {
+                    let truncated = if display.chars().count() > max_width {
                         format!("{}…", truncate_str(&display, max_width.saturating_sub(1)))
                     } else {
                         display
@@ -466,14 +567,26 @@ impl Widget for SidebarWidget {
                     } else {
                         Color::Ansi(252)
                     };
+                    let text = format!("  {}", truncated);
                     screen.write_str(
                         screen_row,
                         area.x + 2,
-                        &format!("  {}", truncated),
+                        &text,
                         fg,
                         styles::SIDEBAR_BG,
                         Style::default(),
                     );
+                    // Clear remaining cells on this row to prevent stale characters
+                    let end_col = area.x + 2 + text.chars().count() as u16;
+                    let right_bound = area.x + area.width.saturating_sub(1);
+                    for col in end_col..right_bound {
+                        if let Some(cell) = screen.get_mut(screen_row, col) {
+                            cell.char = ' ';
+                            cell.fg = styles::SIDEBAR_FG;
+                            cell.bg = styles::SIDEBAR_BG;
+                            cell.style = Style::default();
+                        }
+                    }
                 }
                 SidebarItem::StructureEntry {
                     icon,
@@ -484,7 +597,7 @@ impl Widget for SidebarWidget {
                     structure_entry_screen_rows.push(screen_row);
                     let suffix = if *is_dir { "/" } else { "" };
                     let display = format!("{} {}{}", icon, name, suffix);
-                    let truncated = if display.len() > max_width {
+                    let truncated = if display.chars().count() > max_width {
                         format!("{}…", truncate_str(&display, max_width.saturating_sub(1)))
                     } else {
                         display
@@ -494,16 +607,20 @@ impl Widget for SidebarWidget {
                         // Highlighted row: inverted or accent background
                         let sel_bg = Color::Ansi(240); // slightly lighter than sidebar bg
                         let sel_fg = Color::WHITE;
-                        // Fill the entire row with selection background
+                        // Fill the entire row with selection background first
                         for col in 0..area.width.saturating_sub(2) {
                             if let Some(cell) = screen.get_mut(screen_row, area.x + 1 + col) {
+                                cell.char = ' ';
+                                cell.fg = sel_fg;
                                 cell.bg = sel_bg;
+                                cell.style = Style::default();
                             }
                         }
+                        let text = format!("▶ {}", truncated);
                         screen.write_str(
                             screen_row,
                             area.x + 2,
-                            &format!("▶ {}", truncated),
+                            &text,
                             sel_fg,
                             sel_bg,
                             Style::bold(),
@@ -514,28 +631,31 @@ impl Widget for SidebarWidget {
                         } else {
                             Color::Ansi(252)
                         };
+                        let text = format!("  {}", truncated);
                         screen.write_str(
                             screen_row,
                             area.x + 2,
-                            &format!("  {}", truncated),
+                            &text,
                             fg,
                             styles::SIDEBAR_BG,
                             Style::default(),
                         );
+                        // Clear remaining cells on this row to prevent stale characters
+                        let end_col = area.x + 2 + text.chars().count() as u16;
+                        let right_bound = area.x + area.width.saturating_sub(1);
+                        for col in end_col..right_bound {
+                            if let Some(cell) = screen.get_mut(screen_row, col) {
+                                cell.char = ' ';
+                                cell.fg = styles::SIDEBAR_FG;
+                                cell.bg = styles::SIDEBAR_BG;
+                                cell.style = Style::default();
+                            }
+                        }
                     }
                 }
-                SidebarItem::Breadcrumb(path) => {
-                    screen.write_str(
-                        screen_row,
-                        area.x + 2,
-                        path,
-                        Color::Ansi(178), // warm yellow for path
-                        styles::SIDEBAR_BG,
-                        Style::dim(),
-                    );
-                }
                 SidebarItem::Skill(name) => {
-                    let display = format!("⚡ {}", name);
+                    let display = format!("✦ {}", name);
+                    let end_col = area.x + 2 + display.chars().count() as u16;
                     screen.write_str(
                         screen_row,
                         area.x + 2,
@@ -544,6 +664,16 @@ impl Widget for SidebarWidget {
                         styles::SIDEBAR_BG,
                         Style::bold(),
                     );
+                    // Clear remaining cells on this row
+                    let right_bound = area.x + area.width.saturating_sub(1);
+                    for col in end_col..right_bound {
+                        if let Some(cell) = screen.get_mut(screen_row, col) {
+                            cell.char = ' ';
+                            cell.fg = styles::SIDEBAR_FG;
+                            cell.bg = styles::SIDEBAR_BG;
+                            cell.style = Style::default();
+                        }
+                    }
                 }
                 SidebarItem::Spacer => {
                     // Just a blank row — background already filled
@@ -672,6 +802,93 @@ impl Widget for SidebarWidget {
 impl SidebarWidget {
     /// Handle keyboard events in interactive structure mode.
     fn handle_structure_event(&mut self, event: &Event) -> Action {
+        // If filter mode is active, intercept all key events for the filter
+        if self.structure_filter_active {
+            if let Event::Key(key) = event {
+                match key {
+                    KeyEvent {
+                        key: Key::Escape,
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        // Escape: close filter mode (keep the filter applied)
+                        self.structure_filter_active = false;
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::Enter,
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        // Enter: close filter and enter directory if selected
+                        self.structure_filter_active = false;
+                        if let Some(entry) =
+                            self.get_filtered_entries().get(self.structure_selected)
+                        {
+                            if entry.is_dir {
+                                let new_path = self.structure_cwd.join(&entry.name);
+                                self.structure_nav_stack
+                                    .push((self.structure_cwd.clone(), self.structure_selected));
+                                self.structure_cwd = new_path;
+                                self.structure_selected = 0;
+                                self.structure_scroll = 0;
+                                self.structure_filter.clear();
+                                self.refresh_structure_listing();
+                            }
+                        }
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::Backspace,
+                        ..
+                    } => {
+                        if self.structure_filter.pop().is_none()
+                            && !self.structure_filter.is_empty()
+                        {
+                            // nothing
+                        }
+                        self.structure_selected = 0;
+                        self.structure_scroll = 0;
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::Char(ch),
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        self.structure_filter.push(*ch);
+                        self.structure_selected = 0;
+                        self.structure_scroll = 0;
+                        return Action::None;
+                    }
+                    // Let Up/Down through for navigating filtered results
+                    KeyEvent {
+                        key: Key::Up,
+                        modifiers,
+                    } if !modifiers.alt && !modifiers.ctrl => {
+                        if self.structure_selected > 0 {
+                            self.structure_selected -= 1;
+                        }
+                        self.ensure_selected_visible();
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::Down,
+                        modifiers,
+                    } if !modifiers.alt && !modifiers.ctrl => {
+                        let filtered = self.get_filtered_entries();
+                        if !filtered.is_empty() && self.structure_selected < filtered.len() - 1 {
+                            self.structure_selected += 1;
+                        }
+                        self.ensure_selected_visible();
+                        return Action::None;
+                    }
+                    _ => {
+                        // Other keys are ignored during filter mode
+                        return Action::None;
+                    }
+                }
+            }
+            return Action::None;
+        }
+
         if let Event::Key(key) = event {
             match key {
                 // Up arrow: move selection up
@@ -690,9 +907,8 @@ impl SidebarWidget {
                     key: Key::Down,
                     modifiers,
                 } if !modifiers.alt && !modifiers.ctrl => {
-                    if !self.structure_entries.is_empty()
-                        && self.structure_selected < self.structure_entries.len() - 1
-                    {
+                    let filtered = self.get_filtered_entries();
+                    if !filtered.is_empty() && self.structure_selected < filtered.len() - 1 {
                         self.structure_selected += 1;
                     }
                     self.ensure_selected_visible();
@@ -703,15 +919,16 @@ impl SidebarWidget {
                     key: Key::Enter,
                     modifiers,
                 } if !modifiers.alt && !modifiers.ctrl => {
-                    if let Some(entry) = self.structure_entries.get(self.structure_selected) {
+                    let filtered = self.get_filtered_entries();
+                    if let Some(entry) = filtered.get(self.structure_selected) {
                         if entry.is_dir {
                             let new_path = self.structure_cwd.join(&entry.name);
-                            // Save current position in nav stack
                             self.structure_nav_stack
                                 .push((self.structure_cwd.clone(), self.structure_selected));
                             self.structure_cwd = new_path;
                             self.structure_selected = 0;
                             self.structure_scroll = 0;
+                            self.structure_filter.clear();
                             self.refresh_structure_listing();
                         }
                     }
@@ -726,6 +943,7 @@ impl SidebarWidget {
                         self.structure_cwd = prev_cwd;
                         self.structure_selected = prev_selected;
                         self.structure_scroll = 0;
+                        self.structure_filter.clear();
                         self.refresh_structure_listing();
                         Action::None
                     } else {
@@ -734,11 +952,32 @@ impl SidebarWidget {
                         Action::ExitStructureMode
                     }
                 }
+                // `/`: enter filter mode
+                KeyEvent {
+                    key: Key::Char('/'),
+                    modifiers,
+                } if !modifiers.ctrl && !modifiers.alt => {
+                    self.structure_filter_active = true;
+                    self.structure_filter.clear();
+                    self.structure_selected = 0;
+                    self.structure_scroll = 0;
+                    Action::None
+                }
+                // `.`: toggle hidden files
+                KeyEvent {
+                    key: Key::Char('.'),
+                    modifiers,
+                } if !modifiers.ctrl && !modifiers.alt => {
+                    self.show_hidden = !self.show_hidden;
+                    self.structure_selected = 0;
+                    self.structure_scroll = 0;
+                    self.refresh_structure_listing();
+                    Action::None
+                }
                 // PageUp: scroll up in entries
                 KeyEvent {
                     key: Key::PageUp, ..
                 } => {
-                    // Move selection up by ~10
                     let step = 10.min(self.structure_selected);
                     self.structure_selected -= step;
                     self.ensure_selected_visible();
@@ -748,8 +987,9 @@ impl SidebarWidget {
                 KeyEvent {
                     key: Key::PageDown, ..
                 } => {
-                    if !self.structure_entries.is_empty() {
-                        let max_sel = self.structure_entries.len() - 1;
+                    let filtered = self.get_filtered_entries();
+                    if !filtered.is_empty() {
+                        let max_sel = filtered.len() - 1;
                         self.structure_selected = (self.structure_selected + 10).min(max_sel);
                         self.ensure_selected_visible();
                     }
@@ -763,8 +1003,9 @@ impl SidebarWidget {
                 }
                 // End: jump to last entry
                 KeyEvent { key: Key::End, .. } => {
-                    if !self.structure_entries.is_empty() {
-                        self.structure_selected = self.structure_entries.len() - 1;
+                    let filtered = self.get_filtered_entries();
+                    if !filtered.is_empty() {
+                        self.structure_selected = filtered.len() - 1;
                         self.ensure_selected_visible();
                     }
                     Action::None
@@ -776,6 +1017,19 @@ impl SidebarWidget {
         }
     }
 
+    /// Get the filtered list of entries based on the current filter query.
+    fn get_filtered_entries(&self) -> Vec<DirEntry> {
+        if self.structure_filter.is_empty() {
+            return self.structure_entries.clone();
+        }
+        let filter_lower = self.structure_filter.to_lowercase();
+        self.structure_entries
+            .iter()
+            .filter(|e| e.name.to_lowercase().contains(&filter_lower))
+            .cloned()
+            .collect()
+    }
+
     /// Adjust scroll offset so the selected entry is visible.
     fn ensure_selected_visible(&mut self) {
         let visible_entry_rows = 12; // conservative estimate
@@ -783,6 +1037,12 @@ impl SidebarWidget {
             self.structure_scroll = self.structure_selected;
         } else if self.structure_selected >= self.structure_scroll + visible_entry_rows {
             self.structure_scroll = self.structure_selected - visible_entry_rows + 1;
+        }
+
+        // Clamp selected to filtered entries length
+        let filtered = self.get_filtered_entries();
+        if !filtered.is_empty() && self.structure_selected >= filtered.len() {
+            self.structure_selected = filtered.len() - 1;
         }
 
         // Convert structure_scroll to global scroll_offset.
@@ -820,9 +1080,7 @@ impl SidebarWidget {
         }
         count += 1; // spacer before structure
         if self.structure_mode {
-            count += 1; // Header("Structure")
-            count += 1; // Breadcrumb
-            count += 1; // spacer after breadcrumb
+            count += 1; // Header("Structure ─ ..." or "Filter: ...")
         }
         count
     }
@@ -865,6 +1123,7 @@ impl SidebarWidget {
         title: &str,
     ) -> u16 {
         let header = format!("┌─ {} ", title);
+        let header_width = header.chars().count();
         screen.write_str(
             row,
             col,
@@ -874,11 +1133,11 @@ impl SidebarWidget {
             Style::bold(),
         );
         // Fill remaining space with ─
-        let remaining = max_width.saturating_sub(header.len());
+        let remaining = max_width.saturating_sub(header_width);
         if remaining > 0 {
             screen.write_str(
                 row,
-                col + header.len() as u16,
+                col + header_width as u16,
                 &"─".repeat(remaining),
                 styles::SIDEBAR_BORDER,
                 styles::SIDEBAR_BG,
@@ -898,6 +1157,7 @@ impl SidebarWidget {
         value: &str,
         value_color: Color,
     ) -> u16 {
+        let label_width = label.chars().count();
         screen.write_str(
             row,
             col,
@@ -906,9 +1166,9 @@ impl SidebarWidget {
             styles::SIDEBAR_BG,
             Style::dim(),
         );
-        let value_col = col + label.len() as u16 + 1;
-        let available = max_width.saturating_sub(label.len() + 1);
-        let display = if value.len() > available {
+        let value_col = col + label_width as u16 + 1;
+        let available = max_width.saturating_sub(label_width + 1);
+        let display = if value.chars().count() > available {
             format!("{}…", truncate_str(value, available.saturating_sub(1)))
         } else {
             value.to_string()
@@ -921,6 +1181,17 @@ impl SidebarWidget {
             styles::SIDEBAR_BG,
             Style::default(),
         );
+        // Clear remaining cells on this row to prevent stale characters
+        let end_col = value_col + display.chars().count() as u16;
+        let right_bound = col + max_width as u16;
+        for c in end_col..right_bound {
+            if let Some(cell) = screen.get_mut(row, c) {
+                cell.char = ' ';
+                cell.fg = styles::SIDEBAR_FG;
+                cell.bg = styles::SIDEBAR_BG;
+                cell.style = Style::default();
+            }
+        }
         row + 1
     }
 }
@@ -944,7 +1215,6 @@ enum SidebarItem {
         is_dir: bool,
         selected: bool,
     },
-    Breadcrumb(String),
     Skill(String),
     Spacer,
 }
@@ -1073,7 +1343,7 @@ mod tests {
     fn test_read_dir_sorted() {
         // Test that read_dir_sorted doesn't panic on current directory
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let entries = read_dir_sorted(&cwd);
+        let entries = read_dir_sorted(&cwd, false);
         // Just verify it returns something (or empty if no access)
         // Entries should be sorted: dirs first, then files
         let mut last_was_dir = true;
@@ -1093,5 +1363,164 @@ mod tests {
         let breadcrumb = sidebar.format_breadcrumb(30);
         // At least it shouldn't panic
         assert!(!breadcrumb.is_empty() || breadcrumb == ".");
+    }
+
+    // ── File filter tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_file_filter_basic() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.enter_structure_mode();
+        // Add some entries manually
+        sidebar.structure_entries = vec![
+            DirEntry {
+                name: "Cargo.toml".to_string(),
+                is_dir: false,
+            },
+            DirEntry {
+                name: "src".to_string(),
+                is_dir: true,
+            },
+            DirEntry {
+                name: "README.md".to_string(),
+                is_dir: false,
+            },
+            DirEntry {
+                name: "tests".to_string(),
+                is_dir: true,
+            },
+        ];
+        // Filter by "cargo"
+        sidebar.structure_filter = "cargo".to_string();
+        let filtered = sidebar.get_filtered_entries();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Cargo.toml");
+    }
+
+    #[test]
+    fn test_file_filter_case_insensitive() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.structure_entries = vec![
+            DirEntry {
+                name: "Cargo.toml".to_string(),
+                is_dir: false,
+            },
+            DirEntry {
+                name: "README.md".to_string(),
+                is_dir: false,
+            },
+        ];
+        sidebar.structure_filter = "CARGO".to_string();
+        let filtered = sidebar.get_filtered_entries();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "Cargo.toml");
+    }
+
+    #[test]
+    fn test_file_filter_empty_shows_all() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.structure_entries = vec![
+            DirEntry {
+                name: "a.rs".to_string(),
+                is_dir: false,
+            },
+            DirEntry {
+                name: "b.rs".to_string(),
+                is_dir: false,
+            },
+        ];
+        sidebar.structure_filter = String::new();
+        let filtered = sidebar.get_filtered_entries();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_file_filter_no_matches() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.structure_entries = vec![DirEntry {
+            name: "a.rs".to_string(),
+            is_dir: false,
+        }];
+        sidebar.structure_filter = "zzz".to_string();
+        let filtered = sidebar.get_filtered_entries();
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_file_filter_slash_enters_filter_mode() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.enter_structure_mode();
+        assert!(!sidebar.structure_filter_active);
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('/'),
+            modifiers: crate::tui::event::Modifiers::new(),
+        });
+        sidebar.handle_event(&event);
+        assert!(sidebar.structure_filter_active);
+        assert!(sidebar.structure_filter.is_empty());
+    }
+
+    #[test]
+    fn test_file_filter_escape_closes_filter() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.enter_structure_mode();
+        sidebar.structure_filter_active = true;
+        sidebar.structure_filter = "test".to_string();
+        let event = Event::Key(KeyEvent {
+            key: Key::Escape,
+            modifiers: crate::tui::event::Modifiers::new(),
+        });
+        sidebar.handle_event(&event);
+        assert!(!sidebar.structure_filter_active);
+        // Filter text is kept (so results remain visible)
+        assert_eq!(sidebar.structure_filter, "test");
+    }
+
+    #[test]
+    fn test_toggle_hidden_files() {
+        let mut sidebar = SidebarWidget::new();
+        assert!(!sidebar.show_hidden);
+        sidebar.enter_structure_mode();
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('.'),
+            modifiers: crate::tui::event::Modifiers::new(),
+        });
+        sidebar.handle_event(&event);
+        assert!(sidebar.show_hidden);
+        sidebar.handle_event(&event);
+        assert!(!sidebar.show_hidden);
+    }
+
+    #[test]
+    fn test_filter_type_chars() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.enter_structure_mode();
+        sidebar.structure_filter_active = true;
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('r'),
+            modifiers: crate::tui::event::Modifiers::new(),
+        });
+        sidebar.handle_event(&event);
+        assert_eq!(sidebar.structure_filter, "r");
+        let event2 = Event::Key(KeyEvent {
+            key: Key::Char('s'),
+            modifiers: crate::tui::event::Modifiers::new(),
+        });
+        sidebar.handle_event(&event2);
+        assert_eq!(sidebar.structure_filter, "rs");
+    }
+
+    #[test]
+    fn test_filter_backspace() {
+        let mut sidebar = SidebarWidget::new();
+        sidebar.enter_structure_mode();
+        sidebar.structure_filter_active = true;
+        sidebar.structure_filter = "abc".to_string();
+        let event = Event::Key(KeyEvent {
+            key: Key::Backspace,
+            modifiers: crate::tui::event::Modifiers::new(),
+        });
+        sidebar.handle_event(&event);
+        assert_eq!(sidebar.structure_filter, "ab");
     }
 }

@@ -464,6 +464,250 @@ pub fn show_edit_diff<W: Write>(
     Ok(())
 }
 
+/// Render a [`DiffLine`] sequence into a plain-text string (no ANSI codes),
+/// suitable for display in the TUI cell-based renderer.
+///
+/// Returns a string with lines prefixed by `  ` (keep), `- ` (remove), or `+ ` (add),
+/// and line numbers if requested.
+pub fn render_diff_plain(
+    old_lines: &[&str],
+    new_lines: &[&str],
+    diff: &[DiffLine],
+    show_line_numbers: bool,
+) -> String {
+    if diff.is_empty() {
+        return String::new();
+    }
+
+    let max_line = old_lines.len().max(new_lines.len()).max(1);
+    let num_width = if show_line_numbers {
+        max_line.to_string().len().max(2)
+    } else {
+        0
+    };
+
+    let mut result = String::new();
+    let mut old_num: usize = 0;
+    let mut new_num: usize = 0;
+
+    // Find change positions to determine hunks with context
+    let change_indices: Vec<usize> = diff
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| matches!(l, DiffLine::Remove(_) | DiffLine::Add(_)).then_some(i))
+        .collect();
+
+    if change_indices.is_empty() {
+        return result;
+    }
+
+    // Merge overlapping/adjacent hunks
+    let mut hunk_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut hunk_start = change_indices[0].saturating_sub(DIFF_CONTEXT_LINES);
+    let mut hunk_end = (change_indices[0] + DIFF_CONTEXT_LINES + 1).min(diff.len());
+
+    for &idx in &change_indices[1..] {
+        let ns = idx.saturating_sub(DIFF_CONTEXT_LINES);
+        let ne = (idx + DIFF_CONTEXT_LINES + 1).min(diff.len());
+        if ns <= hunk_end {
+            hunk_end = hunk_end.max(ne);
+        } else {
+            hunk_ranges.push((hunk_start, hunk_end));
+            hunk_start = ns;
+            hunk_end = ne;
+        }
+    }
+    hunk_ranges.push((hunk_start, hunk_end));
+
+    for (hunk_idx, &(start, end)) in hunk_ranges.iter().enumerate() {
+        // Separator between hunks
+        if hunk_idx > 0 {
+            result.push_str("  ┈\n");
+        }
+
+        // Count line numbers up to the start of this hunk
+        for item in diff.iter().take(start) {
+            match item {
+                DiffLine::Keep(_) => {
+                    old_num += 1;
+                    new_num += 1;
+                }
+                DiffLine::Remove(_) => {
+                    old_num += 1;
+                }
+                DiffLine::Add(_) => {
+                    new_num += 1;
+                }
+            }
+        }
+
+        for i in start..end {
+            if i >= diff.len() {
+                break;
+            }
+            match &diff[i] {
+                DiffLine::Keep(line) => {
+                    old_num += 1;
+                    new_num += 1;
+                    if show_line_numbers {
+                        result.push_str(&format!(
+                            "  {:>width$} │ {}\n",
+                            old_num,
+                            line,
+                            width = num_width
+                        ));
+                    } else {
+                        result.push_str(&format!("    {}\n", line));
+                    }
+                }
+                DiffLine::Remove(line) => {
+                    old_num += 1;
+                    if show_line_numbers {
+                        result.push_str(&format!(
+                            "-  {:>width$} │ {}\n",
+                            old_num,
+                            line,
+                            width = num_width
+                        ));
+                    } else {
+                        result.push_str(&format!("-   {}\n", line));
+                    }
+                }
+                DiffLine::Add(line) => {
+                    new_num += 1;
+                    if show_line_numbers {
+                        result.push_str(&format!(
+                            "+  {:>width$} │ {}\n",
+                            new_num,
+                            line,
+                            width = num_width
+                        ));
+                    } else {
+                        result.push_str(&format!("+   {}\n", line));
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Compute a unified diff between old and new content and return it as
+/// a plain-text string (no ANSI codes). Returns an empty string if the
+/// contents are identical.
+pub fn compute_edit_diff_plain(old_content: &str, new_content: &str) -> String {
+    let old_lines: Vec<&str> = old_content.lines().collect();
+    let new_lines: Vec<&str> = new_content.lines().collect();
+    let diff = compute_diff(&old_lines, &new_lines);
+
+    if diff.iter().all(|l| matches!(l, DiffLine::Keep(_))) {
+        return String::new();
+    }
+
+    render_diff_plain(&old_lines, &new_lines, &diff, true)
+}
+
+/// Compute a diff for a write operation (file creation or modification) and
+/// return it as a plain-text string (no ANSI codes).
+pub fn compute_write_diff_plain(path: &str, new_content: &str) -> String {
+    let existing = std::fs::read_to_string(path);
+
+    match existing {
+        Ok(old_content) => {
+            let old_lines: Vec<&str> = old_content.lines().collect();
+            let new_lines: Vec<&str> = new_content.lines().collect();
+            let diff = compute_diff(&old_lines, &new_lines);
+
+            if diff.iter().all(|l| matches!(l, DiffLine::Keep(_))) {
+                return String::new();
+            }
+
+            render_diff_plain(&old_lines, &new_lines, &diff, true)
+        }
+        Err(_) => {
+            // New file — show all lines as additions
+            let new_lines: Vec<&str> = new_content.lines().collect();
+            let num_width = new_lines.len().to_string().len().max(2);
+            let mut result = String::new();
+            for (i, line) in new_lines.iter().enumerate() {
+                result.push_str(&format!(
+                    "+  {:>width$} │ {}\n",
+                    i + 1,
+                    line,
+                    width = num_width
+                ));
+            }
+            result
+        }
+    }
+}
+
+/// Compute a diff for an edit operation and return it as a plain-text string
+/// (no ANSI codes). Reads the current file content to locate the edit.
+pub fn compute_edit_diff_from_path(path: &str, old_str: &str, new_str: &str) -> String {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find the line number of old_str
+    let offset = match content.find(old_str) {
+        Some(o) => o,
+        None => return String::new(),
+    };
+    let line_number = content[..offset].matches('\n').count();
+
+    let old_lines: Vec<&str> = old_str.lines().collect();
+    let new_lines: Vec<&str> = new_str.lines().collect();
+
+    // Show context (2 lines before and after)
+    let before_ctx = 2usize;
+    let after_ctx = 2usize;
+    let start_line = line_number.saturating_sub(before_ctx);
+    let end_line = (line_number + old_lines.len() + after_ctx).min(lines.len());
+    let num_width = end_line.to_string().len().max(2);
+
+    let mut result = String::new();
+
+    // Context lines before
+    for (i, line) in lines.iter().enumerate().take(line_number).skip(start_line) {
+        result.push_str(&format!(
+            "  {:>width$} │ {}\n",
+            i + 1,
+            line,
+            width = num_width
+        ));
+    }
+
+    // Removed lines (old)
+    for line in old_lines.iter() {
+        result.push_str(&format!("-       │ {}\n", line));
+    }
+
+    // Added lines (new)
+    for line in new_lines.iter() {
+        result.push_str(&format!("+       │ {}\n", line));
+    }
+
+    // Context lines after
+    let after_start = line_number + old_lines.len();
+    for i in after_start..end_line {
+        if i < lines.len() {
+            result.push_str(&format!(
+                "  {:>width$} │ {}\n",
+                i + 1,
+                lines[i],
+                width = num_width
+            ));
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

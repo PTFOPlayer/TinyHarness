@@ -93,6 +93,13 @@ impl ToolOutputWidget {
         }
     }
 
+    /// Uncollapse all results (expand everything for viewing).
+    pub fn un_collapse_all(&mut self) {
+        for result in &mut self.results {
+            result.collapsed = false;
+        }
+    }
+
     /// Render a collapsed result (single line header).
     fn render_collapsed(&self, result: &ToolResult, row: u16, screen: &mut Screen, width: u16) {
         let status_icon = match &result.status {
@@ -221,7 +228,7 @@ impl ToolOutputWidget {
         let content_bg = if result.is_error {
             Color::Ansi(52) // dark red bg
         } else {
-            Color::Ansi(235) // dark bg
+            Color::Default
         };
 
         let lines: Vec<&str> = result.content.lines().collect();
@@ -260,12 +267,14 @@ impl ToolOutputWidget {
                 Style::default(),
             );
 
-            // Fill the rest of the line with background
-            let end_col = 3 + display.len() as u16;
-            if end_col < width {
-                for c in end_col..width {
-                    if let Some(cell) = screen.get_mut(current_row, c) {
-                        cell.bg = content_bg;
+            // Fill the rest of the line with background (only for errors)
+            if result.is_error {
+                let end_col = 3 + display.len() as u16;
+                if end_col < width {
+                    for c in end_col..width {
+                        if let Some(cell) = screen.get_mut(current_row, c) {
+                            cell.bg = content_bg;
+                        }
                     }
                 }
             }

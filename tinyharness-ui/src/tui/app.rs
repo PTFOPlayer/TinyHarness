@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use super::TuiAgentEvent;
 use super::backend::Backend;
-use super::event::{Event, EventParser, Key, KeyEvent, MouseEvent};
+use super::cell::Style;
+use super::event::{Event, EventParser, Key, KeyEvent, MouseButton, MouseEvent};
 use super::layout::{Constraint, Direction, Layout, Rect};
 use super::screen::Screen;
 use super::terminal::{Size, Terminal};
 use super::widget::{Action, Widget};
-use super::widgets::conversation::{ConversationLine, ConversationWidget};
+use super::widgets::conversation::{ContextWarningLevel, ConversationLine, ConversationWidget};
 use super::widgets::input_bar::InputBarWidget;
 use super::widgets::sidebar::SidebarWidget;
 use super::widgets::spinner::SpinnerWidget;
@@ -122,6 +123,10 @@ pub struct TuiApp<B: Backend> {
     confirming: bool,
     /// Stored answers for the current question (to resolve number selections).
     pending_question_answers: Vec<String>,
+    /// Whether the help overlay is currently visible.
+    help_visible: bool,
+    /// Whether the tool output panel is visible (toggled with Ctrl+T).
+    tool_output_visible: bool,
 }
 
 impl<B: Backend> TuiApp<B> {
@@ -165,6 +170,8 @@ impl<B: Backend> TuiApp<B> {
             thinking_text: String::new(),
             confirming: false,
             pending_question_answers: Vec::new(),
+            help_visible: false,
+            tool_output_visible: false,
         })
     }
 
@@ -294,6 +301,7 @@ impl<B: Backend> TuiApp<B> {
         self.conversation.push(ConversationLine::ConfirmPrompt {
             name: name.to_string(),
             args_summary: args_summary.to_string(),
+            diff_preview: None,
         });
     }
 
@@ -306,7 +314,9 @@ impl<B: Backend> TuiApp<B> {
     // ── Layout ───────────────────────────────────────────────────────────
 
     /// Compute the layout for the current terminal size.
-    fn compute_layout(&self) -> (Rect, Rect, Rect, Rect, Rect) {
+    ///
+    /// Returns: (status_area, conv_area, sidebar_area, input_area, main_area, tool_output_area)
+    fn compute_layout(&self) -> (Rect, Rect, Rect, Rect, Rect, Rect) {
         let size = self.terminal.size();
         let total = Rect::new(0, 0, size.cols, size.rows);
 
@@ -321,25 +331,47 @@ impl<B: Backend> TuiApp<B> {
         let main_area = vertical_areas[1];
         let input_area = vertical_areas[2];
 
+        // If tool output panel is visible, split main area vertically:
+        // conversation (top 60%) | tool output (bottom 40%)
+        let (conv_area, tool_output_area) = if self.tool_output_visible {
+            let tool_split = Layout::new(Direction::Vertical).constraints(vec![
+                Constraint::Percentage(60), // conversation
+                Constraint::Percentage(40), // tool output
+            ]);
+            let split_areas = tool_split.split(main_area);
+            (split_areas[0], split_areas[1])
+        } else {
+            (main_area, Rect::new(0, 0, 0, 0))
+        };
+
         if self.state.sidebar_visible {
             // Horizontal split of main area: conversation | sidebar
+            // The sidebar shares the full main area height (including tool output)
             let horizontal = Layout::new(Direction::Horizontal).constraints(vec![
                 Constraint::Percentage(100), // conversation
                 Constraint::Length(25),      // sidebar
             ]);
-            let horizontal_areas = horizontal.split(main_area);
-            let conv_area = horizontal_areas[0];
+            let horizontal_areas = horizontal.split(conv_area);
+            let inner_conv = horizontal_areas[0];
             let sidebar_area = horizontal_areas[1];
 
-            (status_area, conv_area, sidebar_area, input_area, main_area)
+            (
+                status_area,
+                inner_conv,
+                sidebar_area,
+                input_area,
+                main_area,
+                tool_output_area,
+            )
         } else {
             // No sidebar — conversation takes the full main area
             (
                 status_area,
-                main_area,
+                conv_area,
                 Rect::new(0, 0, 0, 0),
                 input_area,
                 main_area,
+                tool_output_area,
             )
         }
     }
@@ -348,6 +380,25 @@ impl<B: Backend> TuiApp<B> {
 
     /// Handle a single event and return any action.
     fn handle_event(&mut self, event: &Event) -> Action {
+        // If help overlay is visible, any key dismisses it
+        if self.help_visible {
+            if let Event::Key(KeyEvent {
+                key: Key::Char('h'),
+                modifiers,
+            }) = event
+            {
+                if modifiers.ctrl {
+                    self.help_visible = false;
+                    return Action::None;
+                }
+            }
+            // Any other key also dismisses the help overlay
+            if let Event::Key(_) = event {
+                self.help_visible = false;
+                return Action::None;
+            }
+        }
+
         // Global keybindings (always active regardless of focus)
         if let Event::Key(key) = event {
             match key {
@@ -357,9 +408,9 @@ impl<B: Backend> TuiApp<B> {
                     modifiers,
                 } if modifiers.ctrl => {
                     if self.state.streaming {
-                        // Interrupt streaming
+                        // Interrupt streaming — notify the agent loop
                         self.set_streaming(false);
-                        return Action::None;
+                        return Action::Interrupt;
                     }
                     return Action::Quit;
                 }
@@ -388,6 +439,43 @@ impl<B: Backend> TuiApp<B> {
                     }
                     return Action::None;
                 }
+                // Ctrl+F: toggle search in conversation
+                KeyEvent {
+                    key: Key::Char('f'),
+                    modifiers,
+                } if modifiers.ctrl => {
+                    self.conversation.toggle_search();
+                    if self.conversation.is_search_active() {
+                        self.set_focus(Focus::Conversation);
+                    }
+                    return Action::None;
+                }
+                // F1 or Ctrl+H: toggle help overlay
+                KeyEvent {
+                    key: Key::F(1),
+                    modifiers,
+                } if !modifiers.ctrl && !modifiers.alt => {
+                    self.help_visible = !self.help_visible;
+                    return Action::None;
+                }
+                KeyEvent {
+                    key: Key::Char('h'),
+                    modifiers,
+                } if modifiers.ctrl => {
+                    self.help_visible = !self.help_visible;
+                    return Action::None;
+                }
+                // Ctrl+T: toggle tool output panel
+                KeyEvent {
+                    key: Key::Char('t'),
+                    modifiers,
+                } if modifiers.ctrl => {
+                    self.tool_output_visible = !self.tool_output_visible;
+                    if self.tool_output_visible {
+                        self.tool_output.un_collapse_all();
+                    }
+                    return Action::None;
+                }
                 _ => {}
             }
         }
@@ -400,28 +488,20 @@ impl<B: Backend> TuiApp<B> {
             return Action::None;
         }
 
-        // Mouse scroll and PageUp/PageDown/Home/End go to the focused scrollable widget
-        if let Event::Mouse(MouseEvent::ScrollUp { .. }) = event {
-            match self.focus {
-                Focus::Sidebar | Focus::Structure => {
-                    self.sidebar.scroll_up(3);
-                }
-                _ => {
-                    self.conversation.scroll_up(3);
-                }
-            }
+        // Mouse scroll events go to the widget under the mouse cursor,
+        // not just the focused widget. This makes scroll feel natural.
+        if let Event::Mouse(MouseEvent::ScrollUp { row, col }) = event {
+            self.handle_mouse_scroll(*row, *col, 3);
             return Action::None;
         }
-        if let Event::Mouse(MouseEvent::ScrollDown { .. }) = event {
-            match self.focus {
-                Focus::Sidebar | Focus::Structure => {
-                    self.sidebar.scroll_down(3);
-                }
-                _ => {
-                    self.conversation.scroll_down(3);
-                }
-            }
+        if let Event::Mouse(MouseEvent::ScrollDown { row, col }) = event {
+            self.handle_mouse_scroll(*row, *col, -3);
             return Action::None;
+        }
+
+        // Mouse click events: switch focus to the clicked widget
+        if let Event::Mouse(MouseEvent::Press { row, col, button }) = event {
+            return self.handle_mouse_click(*row, *col, *button);
         }
 
         // Scroll-related key events go to the focused scrollable widget
@@ -511,7 +591,16 @@ impl<B: Backend> TuiApp<B> {
 
     /// Cycle focus between widgets.
     fn cycle_focus(&mut self, forward: bool) {
-        let order = [Focus::InputBar, Focus::Conversation, Focus::Sidebar];
+        let order: Vec<Focus> = if self.tool_output_visible {
+            vec![
+                Focus::InputBar,
+                Focus::Conversation,
+                Focus::ToolOutput,
+                Focus::Structure,
+            ]
+        } else {
+            vec![Focus::InputBar, Focus::Conversation, Focus::Structure]
+        };
         let current = order.iter().position(|&f| f == self.focus).unwrap_or(0);
         let next = if forward {
             (current + 1) % order.len()
@@ -530,26 +619,108 @@ impl<B: Backend> TuiApp<B> {
             Focus::InputBar => "input",
             Focus::Conversation => "chat",
             Focus::ToolOutput => "tools",
-            Focus::Sidebar => "sidebar",
+            Focus::Sidebar => "files", // sidebar focus always activates the file browser
             Focus::Structure => "files",
         };
         self.status_bar.set_focus_label(label);
-        // When entering structure focus, ensure sidebar is visible and refresh directory
-        if focus == Focus::Structure {
+        // When focusing the sidebar, automatically enter structure (file browser) mode
+        if focus == Focus::Sidebar || focus == Focus::Structure {
             self.sidebar.visible = true;
             self.state.sidebar_visible = true;
             self.sidebar.enter_structure_mode();
-        }
-        if self.focus != Focus::Structure {
+        } else {
             self.sidebar.exit_structure_mode();
         }
+    }
+
+    // ── Mouse handling ──────────────────────────────────────────────────
+
+    /// Handle a mouse click: switch focus to the clicked widget and
+    /// perform widget-specific click actions (cursor positioning, etc.).
+    fn handle_mouse_click(&mut self, row: u16, col: u16, button: MouseButton) -> Action {
+        let (status_area, conv_area, sidebar_area, input_area, _main_area, _tool_area) =
+            self.compute_layout();
+
+        // Determine which widget area was clicked
+        if Self::rect_contains(status_area, row, col) {
+            // Click on status bar — no action, but don't unfocus
+            return Action::None;
+        }
+
+        if Self::rect_contains(input_area, row, col) {
+            // Click on input bar — focus it and position cursor
+            if self.focus != Focus::InputBar {
+                self.set_focus(Focus::InputBar);
+            }
+            if button == MouseButton::Left {
+                self.input_bar.click_to_cursor(row, col, input_area);
+            }
+            return Action::None;
+        }
+
+        if self.state.sidebar_visible
+            && !sidebar_area.is_empty()
+            && Self::rect_contains(sidebar_area, row, col)
+        {
+            // Click on sidebar — always focus structure (file browser) mode
+            if self.focus != Focus::Structure {
+                self.set_focus(Focus::Structure);
+            }
+            // Handle the click to select/navigate entries
+            if button == MouseButton::Left {
+                self.sidebar.click_structure_entry(row, col, sidebar_area);
+            }
+            return Action::None;
+        }
+
+        if Self::rect_contains(conv_area, row, col) {
+            // Click on conversation area — focus it
+            if self.focus != Focus::Conversation {
+                self.set_focus(Focus::Conversation);
+            }
+            return Action::None;
+        }
+
+        Action::None
+    }
+
+    /// Handle a mouse scroll event: scroll the widget under the mouse cursor.
+    fn handle_mouse_scroll(&mut self, row: u16, _col: u16, delta: i32) {
+        let (status_area, conv_area, sidebar_area, input_area, _main_area, _tool_area) =
+            self.compute_layout();
+
+        let n = delta.unsigned_abs() as usize;
+
+        if Self::rect_contains(sidebar_area, row, 0) && self.state.sidebar_visible {
+            // Scroll the sidebar
+            if delta > 0 {
+                self.sidebar.scroll_up(n);
+            } else {
+                self.sidebar.scroll_down(n);
+            }
+        } else if Self::rect_contains(conv_area, row, 0) {
+            // Scroll the conversation
+            if delta > 0 {
+                self.conversation.scroll_up(n);
+            } else {
+                self.conversation.scroll_down(n);
+            }
+        }
+        // Don't scroll status bar or input bar
+        let _ = (status_area, input_area);
+    }
+
+    /// Check if a screen position (row, col) falls within a Rect.
+    fn rect_contains(rect: Rect, row: u16, col: u16) -> bool {
+        row >= rect.y && row < rect.y + rect.height && col >= rect.x && col < rect.x + rect.width
     }
 
     // ── Rendering ────────────────────────────────────────────────────────
 
     /// Render all widgets to the screen buffer.
     fn render_frame(&mut self) {
-        let (status_area, conv_area, sidebar_area, input_area, _main_area) = self.compute_layout();
+        let (status_area, conv_area, sidebar_area, input_area, _main_area, _tool_area) =
+            self.compute_layout();
 
         // Clear the screen
         self.screen.clear();
@@ -559,6 +730,9 @@ impl<B: Backend> TuiApp<B> {
         self.conversation.render(conv_area, &mut self.screen);
         if self.state.sidebar_visible && !sidebar_area.is_empty() {
             self.sidebar.render(sidebar_area, &mut self.screen);
+        }
+        if self.tool_output_visible && !_tool_area.is_empty() {
+            self.tool_output.render(_tool_area, &mut self.screen);
         }
         self.input_bar.render(input_area, &mut self.screen);
 
@@ -574,6 +748,213 @@ impl<B: Backend> TuiApp<B> {
             let spinner_area = Rect::new(spinner_x, spinner_y, actual_width, 1);
             self.spinner.render(spinner_area, &mut self.screen);
         }
+
+        // Render help overlay if visible
+        if self.help_visible {
+            self.render_help_overlay(conv_area);
+        }
+    }
+
+    /// Render the help overlay on top of the conversation area.
+    ///
+    /// Shows a centered box with keyboard shortcuts, drawn over whatever
+    /// is currently rendered. Any key press dismisses the overlay.
+    fn render_help_overlay(&mut self, area: Rect) {
+        use super::cell::Color;
+
+        let lines = [
+            "",
+            "  Keyboard Shortcuts",
+            "  ─────────────────────────────────────────────────",
+            "",
+            "  Global:",
+            "    Ctrl+C         Quit (or interrupt streaming)",
+            "    Ctrl+D          Quit",
+            "    Ctrl+S          Toggle sidebar",
+            "    Ctrl+T          Toggle tool output panel",
+            "    Ctrl+P          Focus file browser",
+            "    Ctrl+F          Search in conversation",
+            "    Ctrl+H / F1     Toggle this help",
+            "    Tab             Cycle focus forward",
+            "    Shift+Tab       Cycle focus backward",
+            "",
+            "  Input Bar:",
+            "    Enter           Send message",
+            "    Shift+Enter     Insert newline",
+            "    Escape          Clear input / Quit if empty",
+            "    Up/Down         History navigation",
+            "    Ctrl+A          Move to start of line",
+            "    Ctrl+E          Move to end of line",
+            "    Ctrl+U          Clear line before cursor",
+            "    Ctrl+K          Clear line after cursor",
+            "    Ctrl+W          Delete word backward",
+            "    Ctrl+Y          Yank (paste) from kill ring",
+            "    Ctrl+Left/Right Move by word",
+            "    Alt+B / Alt+F   Move back/forward by word",
+            "    Alt+Backspace   Delete word backward",
+            "    Tab             Complete / command or cycle focus",
+            "",
+            "  Conversation:",
+            "    PageUp/Down     Scroll by page",
+            "    Alt+Up/Down     Scroll by 3 lines",
+            "    Home/End        Scroll to top/bottom",
+            "    Ctrl+F          Search (Enter/Shift+Enter to navigate)",
+            "    Escape          Close search",
+            "",
+            "  File Browser (sidebar):",
+            "    Up/Down         Move selection",
+            "    Enter           Enter directory",
+            "    Escape          Go back / exit",
+            "    PageUp/Down     Scroll by page",
+            "    Home/End         First/last entry",
+            "    /               Filter files by name",
+            "",
+            "  Confirm Prompt:",
+            "    y               Approve tool call",
+            "    n               Deny tool call",
+            "    a               Approve all future calls",
+            "    Escape          Deny",
+            "",
+        ];
+
+        let box_width = 52u16;
+        let box_height = (lines.len() as u16).min(area.height.saturating_sub(2));
+        let box_x = area.x + (area.width.saturating_sub(box_width)) / 2;
+        let box_y = area.y + (area.height.saturating_sub(box_height)) / 2;
+
+        let overlay_bg = Color::Ansi(235); // dark gray
+        let border_fg = Color::Ansi(244);
+        let title_fg = Color::YELLOW;
+        let section_fg = Color::CYAN;
+        let key_fg = Color::WHITE;
+        let desc_fg = Color::Ansi(252);
+
+        // Draw background fill
+        for row in box_y..box_y + box_height {
+            for col in box_x..box_x + box_width {
+                if let Some(cell) = self.screen.get_mut(row, col) {
+                    cell.char = ' ';
+                    cell.fg = desc_fg;
+                    cell.bg = overlay_bg;
+                    cell.style = Style::default();
+                }
+            }
+        }
+
+        // Draw border
+        // Top
+        if let Some(cell) = self.screen.get_mut(box_y, box_x) {
+            cell.char = '┌';
+            cell.fg = border_fg;
+            cell.bg = overlay_bg;
+        }
+        for col in box_x + 1..box_x + box_width - 1 {
+            if let Some(cell) = self.screen.get_mut(box_y, col) {
+                cell.char = '─';
+                cell.fg = border_fg;
+                cell.bg = overlay_bg;
+            }
+        }
+        if let Some(cell) = self.screen.get_mut(box_y, box_x + box_width - 1) {
+            cell.char = '┐';
+            cell.fg = border_fg;
+            cell.bg = overlay_bg;
+        }
+        // Bottom
+        if let Some(cell) = self.screen.get_mut(box_y + box_height - 1, box_x) {
+            cell.char = '└';
+            cell.fg = border_fg;
+            cell.bg = overlay_bg;
+        }
+        for col in box_x + 1..box_x + box_width - 1 {
+            if let Some(cell) = self.screen.get_mut(box_y + box_height - 1, col) {
+                cell.char = '─';
+                cell.fg = border_fg;
+                cell.bg = overlay_bg;
+            }
+        }
+        if let Some(cell) = self
+            .screen
+            .get_mut(box_y + box_height - 1, box_x + box_width - 1)
+        {
+            cell.char = '┘';
+            cell.fg = border_fg;
+            cell.bg = overlay_bg;
+        }
+        // Sides
+        for row in box_y + 1..box_y + box_height - 1 {
+            if let Some(cell) = self.screen.get_mut(row, box_x) {
+                cell.char = '│';
+                cell.fg = border_fg;
+                cell.bg = overlay_bg;
+            }
+            if let Some(cell) = self.screen.get_mut(row, box_x + box_width - 1) {
+                cell.char = '│';
+                cell.fg = border_fg;
+                cell.bg = overlay_bg;
+            }
+        }
+
+        // Draw text lines
+        let content_x = box_x + 1;
+        let content_width = (box_width as usize).saturating_sub(2);
+        for (i, line) in lines.iter().enumerate() {
+            let row = box_y + 1 + i as u16;
+            if row >= box_y + box_height - 1 {
+                break;
+            }
+
+            let (fg, style) = if line.starts_with("  Keyboard Shortcuts") {
+                (title_fg, Style::bold())
+            } else if line.starts_with("  ────") {
+                (border_fg, Style::default())
+            } else if line.starts_with("  Global:")
+                || line.starts_with("  Input Bar:")
+                || line.starts_with("  Conversation:")
+                || line.starts_with("  File Browser")
+                || line.starts_with("  Confirm Prompt:")
+            {
+                (section_fg, Style::bold())
+            } else if line.contains("Ctrl+")
+                || line.contains("Shift+")
+                || line.contains("Alt+")
+                || line.contains("Tab")
+                || line.contains("Enter")
+                || line.contains("Escape")
+                || line.contains("PageUp")
+                || line.contains("Home")
+                || line.contains("End")
+                || line.contains("Up/Down")
+                || line.contains("/")
+            {
+                // Lines with shortcuts — render key part in white, desc in gray
+                (key_fg, Style::default())
+            } else {
+                (desc_fg, Style::default())
+            };
+
+            let display = if line.len() > content_width {
+                use crate::tui::widget::truncate_str;
+                format!("{}…", truncate_str(line, content_width.saturating_sub(1)))
+            } else {
+                line.to_string()
+            };
+
+            self.screen
+                .write_str(row, content_x, &display, fg, overlay_bg, style);
+        }
+
+        // Dismiss hint at the very bottom
+        let hint_row = box_y + box_height - 2;
+        let hint = "  Press any key to close";
+        self.screen.write_str(
+            hint_row,
+            content_x,
+            hint,
+            Color::Ansi(244),
+            overlay_bg,
+            Style::dim(),
+        );
     }
 
     /// Diff the current screen against the previous frame and write changes.
@@ -656,8 +1037,6 @@ impl<B: Backend> TuiApp<B> {
         // Initial render
         self.render_frame();
         self.flush_diff()?;
-        // Copy screen to prev after first render
-        self.prev_screen = self.screen.clone();
 
         while self.running {
             // Poll for UI events with a short timeout for smooth animation
@@ -787,6 +1166,9 @@ impl<B: Backend> TuiApp<B> {
                 let _ = self
                     .user_action_tx
                     .send(super::TuiUserAction::QuestionAnswer(answer));
+            }
+            Action::Interrupt => {
+                let _ = self.user_action_tx.send(super::TuiUserAction::Interrupt);
             }
             Action::ExitStructureMode => {
                 // Exit structure mode — return focus to input bar
@@ -918,6 +1300,17 @@ impl<B: Backend> TuiApp<B> {
                 self.state.token_limit = limit;
                 self.status_bar.set_token_count(count, limit);
             }
+            TuiAgentEvent::ContextWarning {
+                percentage,
+                critical,
+            } => {
+                let level = if critical {
+                    ContextWarningLevel::Critical(percentage)
+                } else {
+                    ContextWarningLevel::Warning(percentage)
+                };
+                self.conversation.set_context_warning(level);
+            }
             TuiAgentEvent::SystemMessage(msg) => {
                 self.push_system_message(&msg);
             }
@@ -925,23 +1318,27 @@ impl<B: Backend> TuiApp<B> {
                 name,
                 args_summary,
                 needs_approval: _,
+                diff_preview,
             } => {
                 // Show a confirmation prompt in the conversation and switch
                 // the input bar to confirmation mode. The agent loop will
                 // block until we send a ConfirmResponse back.
-                self.push_confirm_prompt(&name, &args_summary);
+                self.conversation.push(ConversationLine::ConfirmPrompt {
+                    name: name.clone(),
+                    args_summary: args_summary.clone(),
+                    diff_preview: diff_preview.clone(),
+                });
                 self.confirming = true;
                 self.input_bar.set_confirming(true);
                 self.set_focus(Focus::InputBar);
             }
             TuiAgentEvent::Question { question, answers } => {
-                // Show the question in the conversation and enter question mode.
+                // Show the question in the conversation with styled answers.
                 // The user can type a number or custom text, then press Enter.
-                let mut display = format!("❓ {}", question);
-                for (i, a) in answers.iter().enumerate() {
-                    display.push_str(&format!("\n    {}. {}", i + 1, a));
-                }
-                self.push_system_message(&display);
+                self.conversation.push(ConversationLine::Question {
+                    question: question.clone(),
+                    answers: answers.clone(),
+                });
                 // Enter question mode in the input bar
                 self.input_bar.set_questioning(true, answers.len());
                 self.set_focus(Focus::InputBar);
@@ -1192,11 +1589,11 @@ mod tests {
         app.cycle_focus(true);
         assert_eq!(app.focus, Focus::Conversation);
         app.cycle_focus(true);
-        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.focus, Focus::Structure);
         app.cycle_focus(true);
         assert_eq!(app.focus, Focus::InputBar);
         app.cycle_focus(false);
-        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.focus, Focus::Structure);
     }
 
     #[test]
@@ -1210,7 +1607,7 @@ mod tests {
     #[test]
     fn test_app_compute_layout() {
         let app = make_app();
-        let (status, conv, sidebar, input, _main) = app.compute_layout();
+        let (status, conv, sidebar, input, _main, _tool) = app.compute_layout();
         assert_eq!(status.height, 1);
         assert_eq!(input.height, 3);
         assert!(conv.height > 0);
@@ -1221,7 +1618,7 @@ mod tests {
     fn test_app_compute_layout_no_sidebar() {
         let mut app = make_app();
         app.state.sidebar_visible = false;
-        let (_status, conv, sidebar, _input, _main) = app.compute_layout();
+        let (_status, conv, sidebar, _input, _main, _tool) = app.compute_layout();
         assert!(conv.width > 0);
         assert_eq!(sidebar.width, 0);
     }
@@ -1308,4 +1705,263 @@ mod tests {
         // Receiver should eventually get a Disconnected error
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
     }
+
+    // ── Mouse tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_app_rect_contains() {
+        let rect = Rect::new(5, 3, 20, 10);
+        assert!(TuiApp::<TestBackend>::rect_contains(rect, 3, 5)); // top-left
+        assert!(TuiApp::<TestBackend>::rect_contains(rect, 12, 24)); // bottom-right
+        assert!(!TuiApp::<TestBackend>::rect_contains(rect, 2, 5)); // above
+        assert!(!TuiApp::<TestBackend>::rect_contains(rect, 13, 5)); // below
+        assert!(!TuiApp::<TestBackend>::rect_contains(rect, 3, 4)); // left
+        assert!(!TuiApp::<TestBackend>::rect_contains(rect, 3, 25)); // right
+    }
+
+    #[test]
+    fn test_app_mouse_click_conversation() {
+        let mut app = make_app();
+        assert_eq!(app.focus, Focus::InputBar);
+        // Click in the conversation area (row 2, col 0 — within main area)
+        let (_, conv_area, _, _, _, _) = app.compute_layout();
+        let event = Event::Mouse(MouseEvent::Press {
+            row: conv_area.y,
+            col: conv_area.x,
+            button: MouseButton::Left,
+        });
+        app.handle_event(&event);
+        assert_eq!(app.focus, Focus::Conversation);
+    }
+
+    #[test]
+    fn test_app_mouse_click_input_bar() {
+        let mut app = make_app();
+        // Focus conversation first
+        app.set_focus(Focus::Conversation);
+        assert_eq!(app.focus, Focus::Conversation);
+        // Click in the input bar area (near bottom)
+        let (_, _, _, input_area, _, _) = app.compute_layout();
+        let input_row = input_area.y + 1; // middle of input bar
+        let event = Event::Mouse(MouseEvent::Press {
+            row: input_row,
+            col: input_area.x,
+            button: MouseButton::Left,
+        });
+        app.handle_event(&event);
+        assert_eq!(app.focus, Focus::InputBar);
+    }
+
+    #[test]
+    fn test_app_mouse_click_sidebar() {
+        let mut app = make_app();
+        assert!(app.state.sidebar_visible);
+        // Click in the sidebar area (rightmost columns) — should focus Structure
+        let (_, _, sidebar_area, _, _, _) = app.compute_layout();
+        if !sidebar_area.is_empty() {
+            let sidebar_row = sidebar_area.y + 2;
+            let sidebar_col = sidebar_area.x + 2;
+            let event = Event::Mouse(MouseEvent::Press {
+                row: sidebar_row,
+                col: sidebar_col,
+                button: MouseButton::Left,
+            });
+            app.handle_event(&event);
+            assert_eq!(app.focus, Focus::Structure);
+            assert!(app.sidebar.is_structure_mode());
+        }
+    }
+
+    #[test]
+    fn test_app_mouse_scroll_conversation() {
+        let mut app = make_app();
+        for i in 0..30 {
+            app.push_user_message(&format!("Message {}", i));
+        }
+        // Scroll up in the conversation area
+        let (_, conv_area, _, _, _, _) = app.compute_layout();
+        let conv_row = conv_area.y + 5;
+        let event = Event::Mouse(MouseEvent::ScrollUp {
+            row: conv_row,
+            col: conv_area.x,
+        });
+        app.handle_event(&event);
+        // Verify the event was handled (no panic) and scroll was applied
+        // by scrolling down and checking it doesn't crash
+        let event2 = Event::Mouse(MouseEvent::ScrollDown {
+            row: conv_row,
+            col: conv_area.x,
+        });
+        app.handle_event(&event2);
+    }
+
+    #[test]
+    fn test_app_mouse_scroll_sidebar() {
+        let mut app = make_app();
+        app.sidebar.structure = (0..30).map(|i| format!("file_{}.rs", i)).collect();
+        // Scroll up in the sidebar area
+        let (_, _, sidebar_area, _, _, _) = app.compute_layout();
+        if !sidebar_area.is_empty() {
+            let sidebar_row = sidebar_area.y + 3;
+            let event = Event::Mouse(MouseEvent::ScrollUp {
+                row: sidebar_row,
+                col: sidebar_area.x + 2,
+            });
+            app.handle_event(&event);
+        }
+    }
+
+    // ── Feature 3: Ctrl+C sends Interrupt ──────────────────────────────
+
+    #[test]
+    fn test_ctrl_c_sends_interrupt_while_streaming() {
+        let mut app = make_app();
+        app.state.streaming = true;
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('c'),
+            modifiers: Modifiers::ctrl(),
+        });
+        let action = app.handle_event(&event);
+        assert!(matches!(action, Action::Interrupt));
+        assert!(!app.state.streaming);
+    }
+
+    #[test]
+    fn test_ctrl_c_quits_when_not_streaming() {
+        let mut app = make_app();
+        assert!(!app.state.streaming);
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('c'),
+            modifiers: Modifiers::ctrl(),
+        });
+        let action = app.handle_event(&event);
+        assert!(matches!(action, Action::Quit));
+    }
+
+    #[test]
+    fn test_interrupt_action_sends_user_action() {
+        let mut app = make_app();
+        app.handle_action(Action::Interrupt);
+        // Should not panic
+    }
+
+    // ── Feature 2: Help overlay ────────────────────────────────────────
+
+    #[test]
+    fn test_help_overlay_toggle_ctrl_h() {
+        let mut app = make_app();
+        assert!(!app.help_visible);
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('h'),
+            modifiers: Modifiers::ctrl(),
+        });
+        app.handle_event(&event);
+        assert!(app.help_visible);
+        app.handle_event(&event);
+        assert!(!app.help_visible);
+    }
+
+    #[test]
+    fn test_help_overlay_toggle_f1() {
+        let mut app = make_app();
+        let event = Event::Key(KeyEvent {
+            key: Key::F(1),
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert!(app.help_visible);
+        // Any key dismisses
+        let dismiss = Event::Key(KeyEvent {
+            key: Key::Char('a'),
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&dismiss);
+        assert!(!app.help_visible);
+    }
+
+    #[test]
+    fn test_help_overlay_dismisses_on_any_key() {
+        let mut app = make_app();
+        app.help_visible = true;
+        let event = Event::Key(KeyEvent {
+            key: Key::Enter,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert!(!app.help_visible);
+    }
+
+    #[test]
+    fn test_help_overlay_renders() {
+        let mut app = make_app();
+        app.help_visible = true;
+        app.render_frame();
+        // Should not panic
+    }
+
+    // ── Feature 4: Tool output panel ───────────────────────────────────
+
+    #[test]
+    fn test_tool_output_toggle_ctrl_t() {
+        let mut app = make_app();
+        assert!(!app.tool_output_visible);
+        let event = Event::Key(KeyEvent {
+            key: Key::Char('t'),
+            modifiers: Modifiers::ctrl(),
+        });
+        app.handle_event(&event);
+        assert!(app.tool_output_visible);
+        app.handle_event(&event);
+        assert!(!app.tool_output_visible);
+    }
+
+    #[test]
+    fn test_tool_output_layout_with_panel_visible() {
+        let mut app = make_app();
+        app.tool_output_visible = true;
+        let (.., tool_area) = app.compute_layout();
+        assert!(!tool_area.is_empty());
+        assert!(tool_area.height > 0);
+    }
+
+    #[test]
+    fn test_tool_output_layout_without_panel() {
+        let mut app = make_app();
+        assert!(!app.tool_output_visible);
+        let (.., tool_area) = app.compute_layout();
+        assert!(tool_area.is_empty());
+    }
+
+    #[test]
+    fn test_tool_output_cycle_focus_includes_tool_output() {
+        let mut app = make_app();
+        app.tool_output_visible = true;
+        app.cycle_focus(true);
+        assert_eq!(app.focus, Focus::Conversation);
+        app.cycle_focus(true);
+        assert_eq!(app.focus, Focus::ToolOutput);
+        app.cycle_focus(true);
+        assert_eq!(app.focus, Focus::Structure);
+        app.cycle_focus(true);
+        assert_eq!(app.focus, Focus::InputBar);
+    }
+
+    #[test]
+    fn test_tool_output_renders_when_visible() {
+        let mut app = make_app();
+        app.tool_output_visible = true;
+        app.tool_output.push(ToolResult {
+            name: "read".to_string(),
+            args_summary: "src/main.rs".to_string(),
+            content: "fn main() {}".to_string(),
+            is_error: false,
+            collapsed: true,
+            status: ToolStatus::Success { duration_ms: 42 },
+        });
+        app.render_frame();
+        // Should not panic
+    }
+
+    // ── Input bar editing shortcuts tests are in input_bar.rs ───────────
+    // (they access private fields directly)
 }

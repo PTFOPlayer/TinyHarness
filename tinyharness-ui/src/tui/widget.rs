@@ -48,6 +48,8 @@ pub enum Action {
     ExitStructureMode,
     /// User answered a question with their input text.
     AnswerQuestion(String),
+    /// User requested to interrupt the current generation (Ctrl+C while streaming).
+    Interrupt,
     /// No action — the event was handled internally.
     None,
 }

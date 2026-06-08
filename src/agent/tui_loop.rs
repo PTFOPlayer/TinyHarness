@@ -22,7 +22,7 @@ use tinyharness_lib::{
     config::load_settings,
     provider::{Message, Provider, Role},
     session::Session,
-    token::ContextWindowSize,
+    token::{ContextWindowSize, check_context_warning},
     tools::{SignalEvent, ToolManager},
 };
 use tinyharness_ui::output::Output;
@@ -31,7 +31,7 @@ use tinyharness_ui::tui::{TuiAgentEvent, TuiUserAction};
 use crate::commands::compact::execute_compact;
 use crate::commands::{CommandContext, CommandResult, build_registry};
 
-use super::display::format_args_summary;
+use super::display::format_args_summary_tui;
 use super::safety::is_safe_command;
 
 /// Strip common ANSI SGR escape sequences from a string.
@@ -43,6 +43,20 @@ fn strip_ansi_sgr(s: &str) -> String {
     // Strip CSI sequences: ESC [ ... m  (SGR) and ESC [ ... letter (other CSI)
     let re = regex::Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").unwrap();
     re.replace_all(s, "").to_string()
+}
+
+/// Check context window usage and send a warning event if thresholds are exceeded.
+fn send_context_warning_if_needed(
+    token_count: u32,
+    context_size: ContextWindowSize,
+    agent_event_tx: &mpsc::Sender<TuiAgentEvent>,
+) {
+    if let Some(warning) = check_context_warning(token_count, context_size) {
+        let _ = agent_event_tx.send(TuiAgentEvent::ContextWarning {
+            percentage: warning.percentage(),
+            critical: warning.is_critical(),
+        });
+    }
 }
 
 /// A writer that captures output into a shared buffer, allowing the captured
@@ -168,6 +182,7 @@ pub async fn run_tui_agent_loop(
             count: usage.total_tokens as u64,
             limit: Some(context_size.tokens() as u64),
         });
+        send_context_warning_if_needed(usage.total_tokens, context_size, &agent_event_tx);
     }
 
     // Handle initial prompt (from --prompt flag)
@@ -497,6 +512,11 @@ async fn process_user_message(
                                         count: usage.total_tokens as u64,
                                         limit: Some(context_size.tokens() as u64),
                                     });
+                                    send_context_warning_if_needed(
+                                        usage.total_tokens,
+                                        context_size,
+                                        agent_event_tx,
+                                    );
                                 }
                             }
 
@@ -905,11 +925,15 @@ async fn handle_tui_tool_calls(
                 } else {
                     // Unsafe run command — still require confirmation even in auto-accept mode
                     // Ask the user via the TUI confirmation flow
-                    let args_summary = format_args_summary(&call.function.arguments);
+                    let args_summary =
+                        format_args_summary_tui(&call.function.name, &call.function.arguments);
+                    let diff_preview =
+                        compute_diff_preview(&call.function.name, &call.function.arguments);
                     let _ = agent_event_tx.send(TuiAgentEvent::ConfirmTool {
                         name: call.function.name.clone(),
                         args_summary: args_summary.clone(),
                         needs_approval: true,
+                        diff_preview,
                     });
                     // Wait for user response
                     loop {
@@ -954,11 +978,14 @@ async fn handle_tui_tool_calls(
             (true, true)
         } else {
             // Needs confirmation — ask the user via the TUI confirmation flow
-            let args_summary = format_args_summary(&call.function.arguments);
+            let args_summary =
+                format_args_summary_tui(&call.function.name, &call.function.arguments);
+            let diff_preview = compute_diff_preview(&call.function.name, &call.function.arguments);
             let _ = agent_event_tx.send(TuiAgentEvent::ConfirmTool {
                 name: call.function.name.clone(),
                 args_summary: args_summary.clone(),
                 needs_approval: true,
+                diff_preview,
             });
             // Wait for user response
             loop {
@@ -993,7 +1020,8 @@ async fn handle_tui_tool_calls(
         };
 
         if !approved {
-            let args_summary = format_args_summary(&call.function.arguments);
+            let args_summary =
+                format_args_summary_tui(&call.function.name, &call.function.arguments);
             messages.push(Message {
                 role: Role::System,
                 content: format!(
@@ -1008,7 +1036,7 @@ async fn handle_tui_tool_calls(
         }
 
         // Notify TUI about tool call
-        let args_summary = format_args_summary(&call.function.arguments);
+        let args_summary = format_args_summary_tui(&call.function.name, &call.function.arguments);
         let _ = agent_event_tx.send(TuiAgentEvent::ToolCall {
             name: call.function.name.clone(),
             args_summary: args_summary.clone(),
@@ -1022,9 +1050,67 @@ async fn handle_tui_tool_calls(
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         let is_error = result.starts_with("Error:");
+
+        // For edit/write tools, compute a diff and include it in the TUI display
+        let display_content = if !is_error {
+            match call.function.name.as_str() {
+                "edit" => {
+                    let path = call
+                        .function
+                        .arguments
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let old_str = call
+                        .function
+                        .arguments
+                        .get("old_str")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let new_str = call
+                        .function
+                        .arguments
+                        .get("new_str")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let diff = tinyharness_ui::ui::diff::compute_edit_diff_from_path(
+                        path, old_str, new_str,
+                    );
+                    if diff.is_empty() {
+                        result.clone()
+                    } else {
+                        format!("{}\n{}", diff.trim_end(), result)
+                    }
+                }
+                "write" => {
+                    let path = call
+                        .function
+                        .arguments
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let content = call
+                        .function
+                        .arguments
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let diff = tinyharness_ui::ui::diff::compute_write_diff_plain(path, content);
+                    if diff.is_empty() {
+                        result.clone()
+                    } else {
+                        format!("{}\n{}", diff.trim_end(), result)
+                    }
+                }
+                _ => result.clone(),
+            }
+        } else {
+            result.clone()
+        };
+
         let _ = agent_event_tx.send(TuiAgentEvent::ToolResult {
             name: call.function.name.clone(),
-            content: result.clone(),
+            content: display_content,
             is_error,
         });
 
@@ -1100,6 +1186,40 @@ async fn handle_tui_tool_calls(
     }
 
     true
+}
+
+/// Compute a plain-text diff preview for a destructive tool call (edit/write).
+///
+/// Returns `Some(diff_string)` for edit and write tools, `None` otherwise.
+/// The diff is computed *before* the tool is executed so the user can review
+/// the pending changes before confirming.
+fn compute_diff_preview(tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
+    match tool_name {
+        "edit" => {
+            let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let old_str = arguments
+                .get("old_str")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new_str = arguments
+                .get("new_str")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let diff =
+                tinyharness_ui::ui::diff::compute_edit_diff_from_path(path, old_str, new_str);
+            if diff.is_empty() { None } else { Some(diff) }
+        }
+        "write" => {
+            let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let content = arguments
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let diff = tinyharness_ui::ui::diff::compute_write_diff_plain(path, content);
+            if diff.is_empty() { None } else { Some(diff) }
+        }
+        _ => None,
+    }
 }
 
 /// Result from executing a generic tool call in TUI mode.
