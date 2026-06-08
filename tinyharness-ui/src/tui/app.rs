@@ -125,6 +125,10 @@ pub struct TuiApp<B: Backend> {
     pending_question_answers: Vec<String>,
     /// Whether the help overlay is currently visible.
     help_visible: bool,
+    /// Scroll offset for the help overlay (in lines).
+    help_scroll: usize,
+    /// Number of lines in the help content (cached to avoid recomputing).
+    help_line_count: usize,
     /// Whether the tool output panel is visible (toggled with Ctrl+T).
     tool_output_visible: bool,
 }
@@ -171,6 +175,8 @@ impl<B: Backend> TuiApp<B> {
             confirming: false,
             pending_question_answers: Vec::new(),
             help_visible: false,
+            help_scroll: 0,
+            help_line_count: 0,
             tool_output_visible: false,
         })
     }
@@ -380,23 +386,119 @@ impl<B: Backend> TuiApp<B> {
 
     /// Handle a single event and return any action.
     fn handle_event(&mut self, event: &Event) -> Action {
-        // If help overlay is visible, any key dismisses it
+        // If help overlay is visible, handle scrolling and dismiss keys
         if self.help_visible {
-            if let Event::Key(KeyEvent {
-                key: Key::Char('h'),
-                modifiers,
-            }) = event
-            {
-                if modifiers.ctrl {
-                    self.help_visible = false;
-                    return Action::None;
+            if let Event::Key(key) = event {
+                match key {
+                    // Ctrl+H / F1 close the overlay
+                    KeyEvent {
+                        key: Key::Char('h'),
+                        modifiers,
+                    } if modifiers.ctrl => {
+                        self.help_visible = false;
+                        self.help_scroll = 0;
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::F(1),
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        self.help_visible = false;
+                        self.help_scroll = 0;
+                        return Action::None;
+                    }
+                    // Escape closes the overlay (explicit, not via catch-all)
+                    KeyEvent {
+                        key: Key::Escape,
+                        ..
+                    } => {
+                        self.help_visible = false;
+                        self.help_scroll = 0;
+                        return Action::None;
+                    }
+                    // Ctrl+C passes through as quit/interrupt even when help is open
+                    KeyEvent {
+                        key: Key::Char('c'),
+                        modifiers,
+                    } if modifiers.ctrl => {
+                        self.help_visible = false;
+                        self.help_scroll = 0;
+                        // Fall through to global handler below
+                    }
+                    // Ctrl+D passes through as quit even when help is open
+                    KeyEvent {
+                        key: Key::Char('d'),
+                        modifiers,
+                    } if modifiers.ctrl => {
+                        self.help_visible = false;
+                        self.help_scroll = 0;
+                        // Fall through to global handler below
+                    }
+                    // Scroll up
+                    KeyEvent {
+                        key: Key::Up,
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        self.help_scroll = self.help_scroll.saturating_sub(1);
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::Char('k'),
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        self.help_scroll = self.help_scroll.saturating_sub(1);
+                        return Action::None;
+                    }
+                    // Scroll down
+                    KeyEvent {
+                        key: Key::Down,
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        self.help_scroll = self.help_scroll.saturating_add(1);
+                        return Action::None;
+                    }
+                    KeyEvent {
+                        key: Key::Char('j'),
+                        modifiers,
+                    } if !modifiers.ctrl && !modifiers.alt => {
+                        self.help_scroll = self.help_scroll.saturating_add(1);
+                        return Action::None;
+                    }
+                    // Page up
+                    KeyEvent {
+                        key: Key::PageUp, ..
+                    } => {
+                        self.help_scroll = self.help_scroll.saturating_sub(10);
+                        return Action::None;
+                    }
+                    // Page down
+                    KeyEvent {
+                        key: Key::PageDown, ..
+                    } => {
+                        self.help_scroll = self.help_scroll.saturating_add(10);
+                        return Action::None;
+                    }
+                    // Home — scroll to top
+                    KeyEvent { key: Key::Home, .. } => {
+                        self.help_scroll = 0;
+                        return Action::None;
+                    }
+                    // End — scroll to bottom
+                    KeyEvent { key: Key::End, .. } => {
+                        let content_height = self.help_content_height();
+                        let max_scroll = self.help_line_count.saturating_sub(content_height);
+                        self.help_scroll = max_scroll;
+                        return Action::None;
+                    }
+                    // Any other key dismisses the overlay
+                    _ => {
+                        self.help_visible = false;
+                        self.help_scroll = 0;
+                        return Action::None;
+                    }
                 }
             }
-            // Any other key also dismisses the help overlay
-            if let Event::Key(_) = event {
-                self.help_visible = false;
-                return Action::None;
-            }
+            // Allow mouse scroll events to pass through to the help overlay handler below
         }
 
         // Global keybindings (always active regardless of focus)
@@ -446,7 +548,11 @@ impl<B: Backend> TuiApp<B> {
                 } if modifiers.ctrl => {
                     self.conversation.toggle_search();
                     if self.conversation.is_search_active() {
+                        // Enter conversation focus for search input
                         self.set_focus(Focus::Conversation);
+                    } else {
+                        // Search closed — return to input bar
+                        self.set_focus(Focus::InputBar);
                     }
                     return Action::None;
                 }
@@ -456,6 +562,7 @@ impl<B: Backend> TuiApp<B> {
                     modifiers,
                 } if !modifiers.ctrl && !modifiers.alt => {
                     self.help_visible = !self.help_visible;
+                    self.help_scroll = 0;
                     return Action::None;
                 }
                 KeyEvent {
@@ -463,6 +570,7 @@ impl<B: Backend> TuiApp<B> {
                     modifiers,
                 } if modifiers.ctrl => {
                     self.help_visible = !self.help_visible;
+                    self.help_scroll = 0;
                     return Action::None;
                 }
                 // Ctrl+T: toggle tool output panel
@@ -485,16 +593,33 @@ impl<B: Backend> TuiApp<B> {
             self.screen.resize(*cols, *rows);
             self.prev_screen.resize(*cols, *rows);
             self.terminal.update_size();
+            // Clamp help scroll to valid range after resize
+            if self.help_visible {
+                let content_height = self.help_content_height();
+                let max_scroll = self.help_line_count.saturating_sub(content_height);
+                if self.help_scroll > max_scroll {
+                    self.help_scroll = max_scroll;
+                }
+            }
             return Action::None;
         }
 
         // Mouse scroll events go to the widget under the mouse cursor,
         // not just the focused widget. This makes scroll feel natural.
+        // If help overlay is visible, scroll that instead.
         if let Event::Mouse(MouseEvent::ScrollUp { row, col }) = event {
+            if self.help_visible {
+                self.help_scroll = self.help_scroll.saturating_sub(3);
+                return Action::None;
+            }
             self.handle_mouse_scroll(*row, *col, 3);
             return Action::None;
         }
         if let Event::Mouse(MouseEvent::ScrollDown { row, col }) = event {
+            if self.help_visible {
+                self.help_scroll = self.help_scroll.saturating_add(3);
+                return Action::None;
+            }
             self.handle_mouse_scroll(*row, *col, -3);
             return Action::None;
         }
@@ -566,7 +691,17 @@ impl<B: Backend> TuiApp<B> {
                 }
                 action
             }
-            Focus::Conversation => self.conversation.handle_event(event),
+            Focus::Conversation => {
+                // Conversation focus is only used for search mode.
+                // When not searching, fall back to input bar behavior.
+                if self.conversation.is_search_active() {
+                    self.conversation.handle_event(event)
+                } else {
+                    // Search was closed — switch back to input bar
+                    self.set_focus(Focus::InputBar);
+                    self.input_bar.handle_event(event)
+                }
+            }
             Focus::ToolOutput => self.tool_output.handle_event(event),
             Focus::Sidebar => self.sidebar.handle_event(event),
             Focus::Structure => {
@@ -590,16 +725,23 @@ impl<B: Backend> TuiApp<B> {
     }
 
     /// Cycle focus between widgets.
+    ///
+    /// The conversation and input bar are treated as a unified unit —
+    /// typing happens in the input bar and scroll keys always affect the
+    /// conversation. The focus cycle is:
+    ///   InputBar → ToolOutput (if visible) → Structure
+    ///
+    /// Conversation focus is only entered for search mode (Ctrl+F) and
+    /// is automatically exited when search is closed.
     fn cycle_focus(&mut self, forward: bool) {
         let order: Vec<Focus> = if self.tool_output_visible {
             vec![
                 Focus::InputBar,
-                Focus::Conversation,
                 Focus::ToolOutput,
                 Focus::Structure,
             ]
         } else {
-            vec![Focus::InputBar, Focus::Conversation, Focus::Structure]
+            vec![Focus::InputBar, Focus::Structure]
         };
         let current = order.iter().position(|&f| f == self.focus).unwrap_or(0);
         let next = if forward {
@@ -611,16 +753,19 @@ impl<B: Backend> TuiApp<B> {
     }
 
     /// Set focus to a specific widget.
+    ///
+    /// When focusing InputBar, the conversation is still scrollable via
+    /// scroll keys — they're treated as a unified unit. Conversation focus
+    /// is only used for search mode.
     fn set_focus(&mut self, focus: Focus) {
         self.focus = focus;
-        self.input_bar.set_focus(focus == Focus::InputBar);
+        // Input bar is focused whenever we're in InputBar focus (unified with conversation)
+        self.input_bar.set_focus(matches!(focus, Focus::InputBar | Focus::Conversation));
         // Update the status bar focus indicator
         let label = match focus {
-            Focus::InputBar => "input",
-            Focus::Conversation => "chat",
+            Focus::InputBar | Focus::Conversation => "input",
             Focus::ToolOutput => "tools",
-            Focus::Sidebar => "files", // sidebar focus always activates the file browser
-            Focus::Structure => "files",
+            Focus::Sidebar | Focus::Structure => "files",
         };
         self.status_bar.set_focus_label(label);
         // When focusing the sidebar, automatically enter structure (file browser) mode
@@ -674,9 +819,15 @@ impl<B: Backend> TuiApp<B> {
         }
 
         if Self::rect_contains(conv_area, row, col) {
-            // Click on conversation area — focus it
-            if self.focus != Focus::Conversation {
-                self.set_focus(Focus::Conversation);
+            // Click on conversation area — don't change focus.
+            // The input bar and conversation are a unified unit; typing always
+            // goes to the input bar while scroll keys always affect the conversation.
+            // Only switch to conversation focus if search is active (for cursor
+            // positioning in the search bar).
+            if self.conversation.is_search_active() {
+                if self.focus != Focus::Conversation {
+                    self.set_focus(Focus::Conversation);
+                }
             }
             return Action::None;
         }
@@ -755,14 +906,12 @@ impl<B: Backend> TuiApp<B> {
         }
     }
 
-    /// Render the help overlay on top of the conversation area.
+    /// Returns the static help content lines as a slice.
     ///
-    /// Shows a centered box with keyboard shortcuts, drawn over whatever
-    /// is currently rendered. Any key press dismisses the overlay.
-    fn render_help_overlay(&mut self, area: Rect) {
-        use super::cell::Color;
-
-        let lines = [
+    /// Extracted from `render_help_overlay` to avoid recreating the array
+    /// every frame and to allow reuse for scroll calculations.
+    fn help_content() -> &'static [&'static str] {
+        &[
             "",
             "  Keyboard Shortcuts",
             "  ─────────────────────────────────────────────────",
@@ -794,11 +943,11 @@ impl<B: Backend> TuiApp<B> {
             "    Alt+Backspace   Delete word backward",
             "    Tab             Complete / command or cycle focus",
             "",
-            "  Conversation:",
-            "    PageUp/Down     Scroll by page",
-            "    Alt+Up/Down     Scroll by 3 lines",
-            "    Home/End        Scroll to top/bottom",
-            "    Ctrl+F          Search (Enter/Shift+Enter to navigate)",
+            "  Navigation:",
+            "    PageUp/Down     Scroll conversation by page",
+            "    Alt+Up/Down     Scroll conversation by 3 lines",
+            "    Home/End        Scroll to top/bottom of conversation",
+            "    Ctrl+F          Search in conversation",
             "    Escape          Close search",
             "",
             "  File Browser (sidebar):",
@@ -815,12 +964,61 @@ impl<B: Backend> TuiApp<B> {
             "    a               Approve all future calls",
             "    Escape          Deny",
             "",
-        ];
+        ]
+    }
+
+    /// Calculate the available content height for the help overlay based on
+    /// the current terminal size. Returns 0 if there's not enough space.
+    fn help_content_height(&self) -> usize {
+        let size = self.terminal.size();
+        // Available area: total height minus status bar (1) and input bar (3)
+        let area_height = size.rows.saturating_sub(4); // 1 status + 3 input
+        // Reserve 2 lines for top/bottom borders, 1 for the hint row
+        let content_height = area_height.saturating_sub(3);
+        content_height as usize
+    }
+
+    /// Render the help overlay on top of the conversation area.
+    ///
+    /// Shows a centered box with keyboard shortcuts, drawn over whatever
+    /// is currently rendered. Supports scrolling when the terminal is too
+    /// small to show all content. Up/Down/PgUp/PgDn/Home/End scroll,
+    /// Escape or Ctrl+H/F1 close, any other key dismisses.
+    fn render_help_overlay(&mut self, area: Rect) {
+        use super::cell::Color;
+
+        let lines = Self::help_content();
+        // Cache the line count for scroll clamping
+        self.help_line_count = lines.len();
 
         let box_width = 52u16;
-        let box_height = (lines.len() as u16).min(area.height.saturating_sub(2));
+        // Don't render if there's no usable space
+        if area.height < 4 {
+            return;
+        }
+
+        // Reserve: 2 lines for top/bottom borders, 1 for hint row at bottom
+        let max_content = area.height.saturating_sub(3) as usize; // 2 border + 1 hint
+        let content_height = max_content.min(lines.len());
+        if content_height == 0 {
+            return;
+        }
+
+        // Reserve one extra row at the bottom for the dismiss/scroll hint
+        let visible_content_lines = content_height.saturating_sub(1);
+        if visible_content_lines == 0 {
+            return;
+        }
+
+        let box_height = content_height as u16 + 2; // +2 for top/bottom border
         let box_x = area.x + (area.width.saturating_sub(box_width)) / 2;
         let box_y = area.y + (area.height.saturating_sub(box_height)) / 2;
+
+        // Clamp scroll so we don't scroll past the end
+        let max_scroll = lines.len().saturating_sub(visible_content_lines);
+        if self.help_scroll > max_scroll {
+            self.help_scroll = max_scroll;
+        }
 
         let overlay_bg = Color::Ansi(235); // dark gray
         let border_fg = Color::Ansi(244);
@@ -828,6 +1026,7 @@ impl<B: Backend> TuiApp<B> {
         let section_fg = Color::CYAN;
         let key_fg = Color::WHITE;
         let desc_fg = Color::Ansi(252);
+        let dim_fg = Color::Ansi(244);
 
         // Draw background fill
         for row in box_y..box_y + box_height {
@@ -895,12 +1094,19 @@ impl<B: Backend> TuiApp<B> {
             }
         }
 
-        // Draw text lines
+        // Draw text lines (scrolled)
         let content_x = box_x + 1;
         let content_width = (box_width as usize).saturating_sub(2);
-        for (i, line) in lines.iter().enumerate() {
+
+        for (i, line) in lines
+            .iter()
+            .skip(self.help_scroll)
+            .take(visible_content_lines)
+            .enumerate()
+        {
             let row = box_y + 1 + i as u16;
-            if row >= box_y + box_height - 1 {
+            if row >= box_y + box_height - 2 {
+                // Leave room for the hint row
                 break;
             }
 
@@ -927,7 +1133,6 @@ impl<B: Backend> TuiApp<B> {
                 || line.contains("Up/Down")
                 || line.contains("/")
             {
-                // Lines with shortcuts — render key part in white, desc in gray
                 (key_fg, Style::default())
             } else {
                 (desc_fg, Style::default())
@@ -944,17 +1149,44 @@ impl<B: Backend> TuiApp<B> {
                 .write_str(row, content_x, &display, fg, overlay_bg, style);
         }
 
-        // Dismiss hint at the very bottom
+        // Draw dismiss/scroll hint at the bottom of the box (inside the border)
         let hint_row = box_y + box_height - 2;
-        let hint = "  Press any key to close";
+        let can_scroll_up = self.help_scroll > 0;
+        let can_scroll_down = self.help_scroll < max_scroll;
+        let hint = if can_scroll_up || can_scroll_down {
+            "  ↑↓ scroll · Esc to close"
+        } else {
+            "  Press Esc to close"
+        };
         self.screen.write_str(
             hint_row,
             content_x,
             hint,
-            Color::Ansi(244),
+            dim_fg,
             overlay_bg,
             Style::dim(),
         );
+
+        // Draw scroll position indicator inside the right border area
+        // (placed between the border and content, not overlapping the border)
+        if can_scroll_up || can_scroll_down {
+            let scroll_char = if can_scroll_up && can_scroll_down {
+                '↕'
+            } else if can_scroll_up {
+                '↑'
+            } else {
+                '↓'
+            };
+            let indicator_y = box_y + box_height / 2;
+            // Draw inside the right border: column box_x + box_width - 2
+            // (one column inside from the right border │)
+            if let Some(cell) = self.screen.get_mut(indicator_y, box_x + box_width - 2) {
+                cell.char = scroll_char;
+                cell.fg = border_fg;
+                cell.bg = overlay_bg;
+                cell.style = Style::default();
+            }
+        }
     }
 
     /// Diff the current screen against the previous frame and write changes.
@@ -1585,9 +1817,8 @@ mod tests {
     #[test]
     fn test_app_cycle_focus() {
         let mut app = make_app();
+        // Cycle: InputBar → Structure → InputBar (without tool output)
         assert_eq!(app.focus, Focus::InputBar);
-        app.cycle_focus(true);
-        assert_eq!(app.focus, Focus::Conversation);
         app.cycle_focus(true);
         assert_eq!(app.focus, Focus::Structure);
         app.cycle_focus(true);
@@ -1599,8 +1830,14 @@ mod tests {
     #[test]
     fn test_app_set_focus() {
         let mut app = make_app();
+        // InputBar focus keeps the input bar focused
+        app.set_focus(Focus::InputBar);
+        assert!(app.input_bar.focused());
+        // Conversation focus also keeps input bar focused (unified)
         app.set_focus(Focus::Conversation);
-        assert_eq!(app.focus, Focus::Conversation);
+        assert!(app.input_bar.focused());
+        // Structure focus removes input bar focus
+        app.set_focus(Focus::Structure);
         assert!(!app.input_bar.focused());
     }
 
@@ -1669,9 +1906,9 @@ mod tests {
             modifiers: Modifiers::new(),
         });
         let action = app.handle_event(&event);
-        // The action should cycle focus forward
+        // The action should cycle focus forward (InputBar → Structure)
         app.handle_action(action);
-        assert_eq!(app.focus, Focus::Conversation);
+        assert_eq!(app.focus, Focus::Structure);
     }
 
     #[test]
@@ -1723,7 +1960,8 @@ mod tests {
     fn test_app_mouse_click_conversation() {
         let mut app = make_app();
         assert_eq!(app.focus, Focus::InputBar);
-        // Click in the conversation area (row 2, col 0 — within main area)
+        // Click in the conversation area — should NOT change focus
+        // (input bar and conversation are a unified unit)
         let (_, conv_area, _, _, _, _) = app.compute_layout();
         let event = Event::Mouse(MouseEvent::Press {
             row: conv_area.y,
@@ -1731,16 +1969,13 @@ mod tests {
             button: MouseButton::Left,
         });
         app.handle_event(&event);
-        assert_eq!(app.focus, Focus::Conversation);
+        assert_eq!(app.focus, Focus::InputBar);
     }
 
     #[test]
     fn test_app_mouse_click_input_bar() {
         let mut app = make_app();
-        // Focus conversation first
-        app.set_focus(Focus::Conversation);
-        assert_eq!(app.focus, Focus::Conversation);
-        // Click in the input bar area (near bottom)
+        // Click in the input bar area (near bottom) — should focus input bar
         let (_, _, _, input_area, _, _) = app.compute_layout();
         let input_row = input_area.y + 1; // middle of input bar
         let event = Event::Mouse(MouseEvent::Press {
@@ -1899,6 +2134,119 @@ mod tests {
         // Should not panic
     }
 
+    #[test]
+    fn test_help_overlay_scroll_up_down() {
+        let mut app = make_app();
+        app.help_visible = true;
+        assert_eq!(app.help_scroll, 0);
+        // Scroll down
+        let event = Event::Key(KeyEvent {
+            key: Key::Down,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 1);
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 2);
+        // Scroll up
+        let event = Event::Key(KeyEvent {
+            key: Key::Up,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 1);
+        // Can't scroll past top
+        app.help_scroll = 0;
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_help_overlay_scroll_page() {
+        let mut app = make_app();
+        app.help_visible = true;
+        assert_eq!(app.help_scroll, 0);
+        // Page down
+        let event = Event::Key(KeyEvent {
+            key: Key::PageDown,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 10);
+        // Page up
+        let event = Event::Key(KeyEvent {
+            key: Key::PageUp,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_help_overlay_home_end() {
+        let mut app = make_app();
+        app.help_visible = true;
+        assert_eq!(app.help_scroll, 0);
+        // Scroll down first
+        app.help_scroll = 5;
+        // Home
+        let event = Event::Key(KeyEvent {
+            key: Key::Home,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 0);
+        // End — scroll to bottom
+        // First trigger a render to populate help_line_count
+        app.render_frame();
+        let event = Event::Key(KeyEvent {
+            key: Key::End,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        // help_scroll should be set to max_scroll (clamped to content)
+        // In a 24-row terminal, with status(1)+input(3)=4, area=20,
+        // content_height ≈ 17, help_content has 52 lines, so max_scroll ≈ 35
+        // Just verify scroll moved forward from 0
+        assert!(app.help_scroll > 0);
+    }
+
+    #[test]
+    fn test_help_overlay_escape_dismisses() {
+        let mut app = make_app();
+        app.help_visible = true;
+        app.help_scroll = 5;
+        let event = Event::Key(KeyEvent {
+            key: Key::Escape,
+            modifiers: Modifiers::new(),
+        });
+        app.handle_event(&event);
+        assert!(!app.help_visible);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_help_overlay_mouse_scroll() {
+        let mut app = make_app();
+        app.help_visible = true;
+        assert_eq!(app.help_scroll, 0);
+        // Scroll down with mouse
+        let event = Event::Mouse(MouseEvent::ScrollDown { row: 5, col: 5 });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 3);
+        // Scroll up with mouse
+        let event = Event::Mouse(MouseEvent::ScrollUp { row: 5, col: 5 });
+        app.handle_event(&event);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn test_help_content_static() {
+        let lines = TuiApp::<TestBackend>::help_content();
+        assert!(!lines.is_empty());
+        assert!(lines.len() > 30); // Should have all shortcut sections
+    }
+
     // ── Feature 4: Tool output panel ───────────────────────────────────
 
     #[test]
@@ -1936,8 +2284,7 @@ mod tests {
     fn test_tool_output_cycle_focus_includes_tool_output() {
         let mut app = make_app();
         app.tool_output_visible = true;
-        app.cycle_focus(true);
-        assert_eq!(app.focus, Focus::Conversation);
+        // Cycle: InputBar → ToolOutput → Structure → InputBar
         app.cycle_focus(true);
         assert_eq!(app.focus, Focus::ToolOutput);
         app.cycle_focus(true);
