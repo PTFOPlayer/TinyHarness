@@ -27,9 +27,8 @@ async_command!(
         let provider = ctx.provider.clone();
         let workspace_ctx = ctx.workspace_ctx.clone();
         async move {
-            let mut out = Output::stdout();
             let mut p = provider.lock().await;
-            let result = execute_init(&mut out, &mut *p, &workspace_ctx, messages).await?;
+            let result = execute_init(&mut ctx.output, &mut *p, &workspace_ctx, messages).await?;
             Ok(CommandResult::Init(result))
         }
     }

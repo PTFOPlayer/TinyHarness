@@ -18,9 +18,8 @@ async_command!(
         let focus = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
-            let mut out = Output::stdout();
             let mut p = provider.lock().await;
-            match execute_compact(&mut out, &mut *p, messages, &focus).await {
+            match execute_compact(&mut ctx.output, &mut *p, messages, &focus).await {
                 Ok(tokens) => {
                     ctx.compaction_token_usage = tokens;
                     Ok(CommandResult::Ok)

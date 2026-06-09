@@ -405,6 +405,29 @@ pub fn build_registry() -> CommandRegistry {
     // Exit alias: /quit → /exit
     reg.register_alias("/quit", "/exit", None, "Exit the application");
 
+    // ── Subcommand completions for tab-completion ─────────────────────────
+
+    reg.register_subcommands(
+        "/command",
+        vec![
+            "add",
+            "deny",
+            "help",
+            "list",
+            "rm",
+            "reset",
+            "resetdeny",
+            "undeny",
+        ],
+    );
+    reg.register_subcommands("/session", vec!["delete"]);
+    reg.register_subcommands("/mode", vec!["agent", "casual", "planning", "research"]);
+    reg.register_subcommands("/settings", vec!["all"]);
+    reg.register_subcommands("/autoaccept", vec!["off", "on"]);
+    reg.register_subcommands("/apikey", vec!["clear"]);
+    reg.register_subcommands("/showthink", vec!["off", "on"]);
+    reg.register_subcommands("/think", vec!["high", "low", "medium", "off"]);
+
     // ── Help (registered last, after descriptions are frozen) ─────────────
 
     reg.freeze_descriptions();

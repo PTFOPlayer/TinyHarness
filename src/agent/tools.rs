@@ -5,7 +5,6 @@ use tokio::sync::Mutex;
 use tinyharness_lib::{
     config::load_settings,
     image::ImageAttachment,
-    mode::AgentMode,
     provider::{Message, Role, ToolCall},
     session::Session,
     tools::SignalEvent,
@@ -13,27 +12,14 @@ use tinyharness_lib::{
 };
 
 use crate::commands::CommandContext;
-use crate::commands::compact::execute_compact;
 use tinyharness_ui::style::*;
 use tinyharness_ui::ui::confirm::Confirmation;
 
-use super::safety::is_safe_command;
-
-/// Result from executing a generic tool call.
-struct GenericToolResult {
-    /// Formatted content for batching into the conversation message.
-    content: String,
-    /// If this was an auditable tool (run/write/edit), the tool name.
-    audit_tool_name: Option<String>,
-    /// For auditable tools: the primary argument (command for "run", path for "write"/"edit").
-    audit_detail: Option<String>,
-    /// Duration of the tool execution in milliseconds.
-    duration_ms: u64,
-    /// Whether the tool returned an error.
-    is_error: bool,
-    /// Images loaded by the tool (e.g. when reading an image file).
-    images: Vec<ImageAttachment>,
-}
+use super::confirm::ConfirmationDecision;
+use super::signal::{self, SignalResult};
+use super::tool_result::{
+    GenericToolResult, audit_info_for_tool, batch_tool_results, log_tool_audit,
+};
 
 /// Handle tool calls from the assistant response.
 ///
@@ -94,53 +80,21 @@ pub async fn handle_tool_calls<W: Write>(
             if let Some(event) =
                 tool_manager.parse_signal_event(&call.function.name, &call.function.arguments)
             {
-                match event {
-                    SignalEvent::SwitchMode { mode } => {
-                        handle_switch_mode(mode, ctx, messages, session, stdout)?;
-                    }
+                // Question signal requires user interaction — handle it directly
+                // since the shared signal module can't do CLI I/O.
+                match &event {
                     SignalEvent::Question { question, answers } => {
-                        handle_question(&question, &answers, messages, session, stdout)?;
+                        handle_question_cli(question, answers, messages, session, stdout)?;
                     }
-                    SignalEvent::AutoCompact { focus } => {
-                        handle_auto_compact(
-                            &focus,
-                            messages,
-                            session,
-                            ctx,
-                            stdout,
-                            std::sync::Arc::clone(&provider),
-                        )
-                        .await?;
-                    }
-                    SignalEvent::InvokeSkill { skill_name } => {
-                        // Clone skill info to avoid borrowing ctx while calling it mutably
-                        let skill_result = {
-                            let registry = &ctx.skill_registry;
-                            registry
-                                .get(&skill_name)
-                                .map(|s| (s.name.clone(), s.description.clone()))
-                        };
-                        handle_invoke_skill(
-                            &skill_name,
-                            &skill_result,
-                            ctx,
-                            messages,
-                            session,
-                            stdout,
-                        )?;
+                    _ => {
+                        let result =
+                            signal::handle_signal_event(&event, messages, session, ctx, &provider)
+                                .await;
+                        render_signal_result_cli(&result, stdout)?;
                     }
                 }
             } else {
-                messages.push(Message {
-                    role: Role::Tool,
-                    content: format!(
-                        "Error: Could not parse arguments for signal tool '{}'.",
-                        call.function.name
-                    ),
-                    tool_calls: vec![],
-                    images: vec![],
-                });
-                session.append_message(messages.last().expect("just pushed a message"));
+                signal::apply_signal_parse_error(&call.function.name, messages, session);
             }
             continue;
         }
@@ -153,16 +107,41 @@ pub async fn handle_tool_calls<W: Write>(
         let safe_commands = settings.get_safe_commands();
         let denied_commands = settings.get_denied_commands();
 
-        // Confirmation step
-        let (approved, auto_accepted) = confirm_tool_call(
+        // Confirmation step using shared decision logic
+        let decision = super::confirm::decide_tool_confirmation(
             call,
-            needs_confirmation,
-            auto_accept,
-            stdout,
+            *auto_accept,
             auto_accept_safe_commands,
             &safe_commands,
             &denied_commands,
-        )?;
+            needs_confirmation,
+        );
+
+        let (approved, auto_accepted) = match decision {
+            ConfirmationDecision::AutoApproved { auto_accepted: aa } => (true, aa),
+            ConfirmationDecision::NeedsConfirmation => {
+                match tinyharness_ui::ui::confirm::prompt_tool_confirmation(stdout, call)? {
+                    Confirmation::No => {
+                        stdout.write_all(
+                            format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes(),
+                        )?;
+                        stdout.flush()?;
+                        (false, false)
+                    }
+                    Confirmation::AutoAccept => {
+                        *auto_accept = true;
+                        writeln!(
+                            stdout,
+                            "  {}Auto-accept enabled for the rest of this turn{}",
+                            GREEN, RESET
+                        )?;
+                        (true, true)
+                    }
+                    Confirmation::Yes => (true, false),
+                }
+            }
+            ConfirmationDecision::Denied => (false, false),
+        };
 
         if !approved {
             let args_summary = super::display::format_args_summary(&call.function.arguments);
@@ -182,123 +161,200 @@ pub async fn handle_tool_calls<W: Write>(
         let result = execute_generic_tool(call, tool_manager, stdout, auto_accepted).await;
 
         // Log to audit if this was an auditable tool (run/write/edit)
-        if let Some(ref tool_name) = result.audit_tool_name {
-            let exit_code = if result.is_error { -1 } else { 0 };
-            let session_id = session.id().to_string();
-            crate::commands::audit::log_command(
-                &session_id,
-                tool_name,
-                result.audit_detail.as_deref().unwrap_or(""),
-                exit_code,
-                auto_accepted,
-                result.duration_ms,
-            );
-        }
+        log_tool_audit(
+            session.id(),
+            call,
+            auto_accepted,
+            result.duration_ms,
+            result.is_error,
+        );
 
         generic_tool_results.push(result);
     }
 
     // Batch all generic tool results into a single message
-    if !generic_tool_results.is_empty() {
-        let batched_content = if generic_tool_results.len() == 1 {
-            generic_tool_results[0].content.clone()
-        } else {
-            format!(
-                "Multiple tool results ({} total):\n\n{}",
-                generic_tool_results.len(),
-                generic_tool_results
-                    .iter()
-                    .map(|r| r.content.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n\n---\n\n")
-            )
-        };
-
-        // Collect images from all tool results (e.g. read tool on image files)
-        let all_images: Vec<ImageAttachment> = generic_tool_results
-            .into_iter()
-            .flat_map(|r| r.images)
-            .collect();
-
-        messages.push(Message {
-            role: Role::Tool,
-            content: format!(
-                "Tool results:\n{}\n\nUse these results to continue helping the user.",
-                batched_content
-            ),
-            tool_calls: vec![],
-            images: all_images,
-        });
+    if let Some(msg) = batch_tool_results(generic_tool_results) {
+        messages.push(msg);
         session.append_message(messages.last().expect("just pushed a message"));
     }
 
     Ok(true)
 }
 
-/// Determine whether a tool call is allowed to proceed.
-/// Returns `(approved, auto_accepted)` where:
-/// - `approved` is true if the call should proceed
-/// - `auto_accepted` is true if it was auto-accepted (no "Executing" header needed)
-fn confirm_tool_call<W: Write>(
-    call: &ToolCall,
-    needs_confirmation: bool,
-    auto_accept: &mut bool,
+/// Handle the question signal in CLI mode: display options and prompt user.
+fn handle_question_cli<W: Write>(
+    question: &str,
+    answers: &[String],
+    messages: &mut Vec<Message>,
+    session: &mut Session,
     stdout: &mut W,
-    auto_accept_safe_commands: bool,
-    safe_commands: &[String],
-    denied_commands: &[String],
-) -> Result<(bool, bool), Box<dyn std::error::Error>> {
-    if !needs_confirmation {
-        return Ok((true, false));
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Validate
+    if let Some(error) = signal::validate_question(question, answers) {
+        signal::apply_question_error(error, messages, session);
+        return Ok(());
     }
 
-    // Check for auto-accept mode (but still validate run commands)
-    if *auto_accept {
-        if call.function.name == "run" {
-            if let Some(cmd_value) = call.function.arguments.get("command")
-                && let Some(cmd_str) = cmd_value.as_str()
-                && is_safe_command(cmd_str, safe_commands, denied_commands)
-            {
-                return Ok((true, true));
-            }
-            // Unsafe run command - still require confirmation even in auto-accept mode
+    // Display the question and options
+    writeln!(
+        stdout,
+        "\n{}  ┌─── {}❓ Question {}─────{}",
+        BOLD, CYAN, BOLD, RESET
+    )?;
+    writeln!(stdout, "  │ {}{}{}", BOLD, question, RESET)?;
+    writeln!(stdout, "  │")?;
+    for (i, answer) in answers.iter().enumerate() {
+        writeln!(
+            stdout,
+            "  │   {}{}.{}) {} {}{}",
+            GREEN,
+            i + 1,
+            RESET,
+            BOLD,
+            answer,
+            RESET
+        )?;
+    }
+    writeln!(stdout, "  │")?;
+    writeln!(
+        stdout,
+        "  │   {}Enter anything else to skip with a custom answer{}",
+        DIM, RESET
+    )?;
+    writeln!(stdout, "  └{}──────────────────────────────{}", BOLD, RESET)?;
+
+    let answer_count = answers.len();
+    write!(
+        stdout,
+        "  {}Your choice (1-{} or type to skip): {}",
+        BOLD, answer_count, RESET
+    )?;
+    stdout.flush()?;
+
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
+    let input = input.trim();
+
+    // Determine if the user selected an option or skipped with custom input
+    let (selected_answer, is_skip) = if input.is_empty() {
+        ("Skipped (no answer provided)".to_string(), true)
+    } else if let Ok(num) = input.parse::<usize>() {
+        if num >= 1 && num <= answer_count {
+            (answers[num - 1].clone(), false)
         } else {
-            // Other tools can be auto-accepted
-            return Ok((true, true));
+            (format!("Skipped (user entered: {})", input), true)
         }
-    }
+    } else {
+        let input_lower = input.to_lowercase();
+        match answers.iter().find(|a| a.to_lowercase() == input_lower) {
+            Some(a) => (a.clone(), false),
+            None => (input.to_string(), true),
+        }
+    };
 
-    // Check for auto-accept of safe commands (configurable via settings)
-    if auto_accept_safe_commands
-        && call.function.name == "run"
-        && let Some(cmd_value) = call.function.arguments.get("command")
-        && let Some(cmd_str) = cmd_value.as_str()
-        && is_safe_command(cmd_str, safe_commands, denied_commands)
-    {
-        return Ok((true, true));
+    if is_skip {
+        writeln!(
+            stdout,
+            "  {}⊘{} Skipped with: {}{}{}",
+            ORANGE, RESET, BOLD, selected_answer, RESET
+        )?;
+    } else {
+        writeln!(
+            stdout,
+            "  {}✓{} Selected: {}{}{}",
+            GREEN, RESET, BOLD, selected_answer, RESET
+        )?;
     }
+    stdout.flush()?;
 
-    match tinyharness_ui::ui::confirm::prompt_tool_confirmation(stdout, call)? {
-        Confirmation::No => {
-            stdout.write_all(format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes())?;
-            stdout.flush()?;
-            Ok((false, false))
-        }
-        Confirmation::AutoAccept => {
-            *auto_accept = true;
-            writeln!(
-                stdout,
-                "  {}Auto-accept enabled for the rest of this turn{}",
-                GREEN, RESET
-            )?;
-            Ok((true, true))
-        }
-        Confirmation::Yes => Ok((true, false)),
-    }
+    signal::apply_question_answer(question, &selected_answer, is_skip, messages, session);
+    Ok(())
 }
 
-/// Execute a generic tool call, display the result summary, and record the
-/// tool result as a message in the conversation.
+/// Render a signal result to CLI stdout with ANSI styling.
+fn render_signal_result_cli<W: Write>(
+    result: &SignalResult,
+    stdout: &mut W,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match result {
+        SignalResult::SwitchMode {
+            old_mode,
+            new_mode,
+            already_in,
+        } => {
+            if *already_in {
+                writeln!(
+                    stdout,
+                    "  {ORANGE}Already in '{new_mode}' mode. No change was made.{RESET}",
+                )?;
+            } else {
+                writeln!(
+                    stdout,
+                    "\n{}{}🔄 Mode switched: {} → {}{}",
+                    BOLD, BLUE, old_mode, new_mode, RESET
+                )?;
+            }
+            stdout.flush()?;
+        }
+        SignalResult::AutoCompact {
+            focus: _,
+            success,
+            error,
+        } => {
+            if *success {
+                writeln!(
+                    stdout,
+                    "\n{}  {}▶ auto_compact{} Compacting conversation history...",
+                    DIM, CYAN, RESET
+                )?;
+            } else if let Some(e) = error {
+                writeln!(stdout, "\n{}⚠ Auto-compact failed: {}{}", RED, e, RESET)?;
+            }
+            stdout.flush()?;
+        }
+        SignalResult::InvokeSkill {
+            name,
+            description,
+            already_active,
+            found,
+        } => {
+            if *already_active {
+                writeln!(
+                    stdout,
+                    "\n{}⚠ Skill '{}' is already active.{}",
+                    ORANGE, name, RESET
+                )?;
+            } else if *found {
+                writeln!(
+                    stdout,
+                    "\n{}{}⚡ Skill activated: {}{}{} — {}{}",
+                    BOLD, CYAN, BOLD, name, RESET, description, RESET
+                )?;
+            } else {
+                writeln!(
+                    stdout,
+                    "\n{}⚠ Skill '{}' not found — it may have been removed.{}",
+                    RED, name, RESET
+                )?;
+            }
+            stdout.flush()?;
+        }
+        SignalResult::Question { .. } => {
+            // Question is handled separately via handle_question_cli
+        }
+        SignalResult::ParseError { tool_name } => {
+            writeln!(
+                stdout,
+                "\n{}⚠ Could not parse arguments for signal tool '{}'.{}",
+                RED, tool_name, RESET
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Format a duration in milliseconds as a human-readable string.
 /// Under 1 second: "42ms", 1-59 seconds: "1.2s", 60+ seconds: "1m 23s"
 fn format_duration(ms: u64) -> String {
@@ -494,33 +550,7 @@ async fn execute_generic_tool<W: Write>(
     stdout.flush().unwrap();
 
     // Capture audit-relevant info before returning
-    let (audit_tool_name, audit_detail) = match call.function.name.as_str() {
-        "run" => (
-            Some("run".to_string()),
-            call.function
-                .arguments
-                .get("command")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        ),
-        "write" => (
-            Some("write".to_string()),
-            call.function
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        ),
-        "edit" => (
-            Some("edit".to_string()),
-            call.function
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        ),
-        _ => (None, None),
-    };
+    let (audit_tool_name, audit_detail) = audit_info_for_tool(call);
     let is_error = result.starts_with("Error:");
 
     // For read tool on image files, load the image data for the model to view.
@@ -559,335 +589,4 @@ async fn execute_generic_tool<W: Write>(
         is_error,
         images,
     }
-}
-
-/// Handle the switch_mode signal: update context and system prompt.
-fn handle_switch_mode<W: Write>(
-    new_mode: AgentMode,
-    ctx: &mut CommandContext,
-    messages: &mut Vec<Message>,
-    session: &mut Session,
-    stdout: &mut W,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let old_mode = ctx.current_mode;
-    match ctx.switch_mode(new_mode, messages) {
-        Ok(()) => {
-            session.set_mode(new_mode);
-
-            writeln!(
-                stdout,
-                "\n{}{}🔄 Mode switched: {} → {}{}",
-                BOLD, BLUE, old_mode, new_mode, RESET
-            )?;
-            stdout.flush()?;
-
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!(
-                    "SUCCESS: Mode switched from '{}' to '{}'. The assistant is now in {} mode and will use the appropriate toolset and behavior.",
-                    old_mode, new_mode, new_mode
-                ),
-                tool_calls: vec![], images: vec![],
-            });
-            session.append_message(messages.last().expect("just pushed a message"));
-        }
-        Err(msg) => {
-            writeln!(stdout, "  {}{}{}", ORANGE, msg, RESET)?;
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!("Already in '{}' mode. No change was made.", new_mode),
-                tool_calls: vec![],
-                images: vec![],
-            });
-            session.append_message(messages.last().expect("just pushed a message"));
-        }
-    }
-    Ok(())
-}
-
-/// Handle the question signal: display options and prompt user for a choice.
-fn handle_question<W: Write>(
-    question_text: &str,
-    answers: &[String],
-    messages: &mut Vec<Message>,
-    session: &mut Session,
-    stdout: &mut W,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if question_text.is_empty() {
-        messages.push(Message {
-            role: Role::Tool,
-            content: "Error: 'question' argument is required for the question tool.".to_string(),
-            tool_calls: vec![],
-            images: vec![],
-        });
-        session.append_message(messages.last().expect("just pushed a message"));
-        return Ok(());
-    }
-
-    if answers.is_empty() {
-        messages.push(Message {
-            role: Role::Tool,
-            content:
-                "Error: 'answers' argument must contain at least one option for the question tool."
-                    .to_string(),
-            tool_calls: vec![],
-            images: vec![],
-        });
-        session.append_message(messages.last().expect("just pushed a message"));
-        return Ok(());
-    }
-
-    // Display the question and options
-    writeln!(
-        stdout,
-        "\n{}  ┌─── {}❓ Question {}─────{}",
-        BOLD, CYAN, BOLD, RESET
-    )?;
-    writeln!(stdout, "  │ {}{}{}", BOLD, question_text, RESET)?;
-    writeln!(stdout, "  │")?;
-    for (i, answer) in answers.iter().enumerate() {
-        writeln!(
-            stdout,
-            "  │   {}{}.{}) {} {}{}",
-            GREEN,
-            i + 1,
-            RESET,
-            BOLD,
-            answer,
-            RESET
-        )?;
-    }
-    writeln!(stdout, "  │")?;
-    writeln!(
-        stdout,
-        "  │   {}Enter anything else to skip with a custom answer{}",
-        DIM, RESET
-    )?;
-    writeln!(stdout, "  └{}──────────────────────────────{}", BOLD, RESET)?;
-
-    let answer_count = answers.len();
-    write!(
-        stdout,
-        "  {}Your choice (1-{} or type to skip): {}",
-        BOLD, answer_count, RESET
-    )?;
-    stdout.flush()?;
-
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read line");
-    let input = input.trim();
-
-    // Determine if the user selected an option or skipped with custom input
-    let (selected_answer, is_skip) = if input.is_empty() {
-        ("Skipped (no answer provided)".to_string(), true)
-    } else if let Ok(num) = input.parse::<usize>() {
-        if num >= 1 && num <= answer_count {
-            (answers[num - 1].clone(), false)
-        } else {
-            // Out-of-range number: treat as a skip with free-form input
-            (format!("Skipped (user entered: {})", input), true)
-        }
-    } else {
-        let input_lower = input.to_lowercase();
-        match answers.iter().find(|a| a.to_lowercase() == input_lower) {
-            Some(a) => (a.clone(), false),
-            None => (input.to_string(), true), // Free-form answer (skip)
-        }
-    };
-
-    if is_skip {
-        writeln!(
-            stdout,
-            "  {}⊘{} Skipped with: {}{}{}",
-            ORANGE, RESET, BOLD, selected_answer, RESET
-        )?;
-    } else {
-        writeln!(
-            stdout,
-            "  {}✓{} Selected: {}{}{}",
-            GREEN, RESET, BOLD, selected_answer, RESET
-        )?;
-    }
-    stdout.flush()?;
-
-    let result_content = if is_skip {
-        format!(
-            "User skipped the provided options for the question '{}' and entered a custom answer: '{}'.\n\nUse this answer to continue helping the user.",
-            question_text, selected_answer
-        )
-    } else {
-        format!(
-            "User answered the question '{}' with: '{}'.\n\nUse this answer to continue helping the user.",
-            question_text, selected_answer
-        )
-    };
-
-    messages.push(Message {
-        role: Role::Tool,
-        content: result_content,
-        tool_calls: vec![],
-        images: vec![],
-    });
-    session.append_message(messages.last().expect("just pushed a message"));
-    Ok(())
-}
-
-/// Handle the auto_compact signal: trigger conversation compaction.
-async fn handle_auto_compact<W: Write>(
-    focus: &str,
-    messages: &mut Vec<Message>,
-    session: &mut Session,
-    ctx: &mut CommandContext,
-    stdout: &mut W,
-    provider: std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    writeln!(
-        stdout,
-        "\n{}  {}▶ auto_compact{} Compacting conversation history...",
-        DIM, CYAN, RESET
-    )?;
-    stdout.flush()?;
-
-    let mut provider_guard = provider.lock().await;
-
-    match execute_compact(&mut ctx.output, &mut *provider_guard, messages, focus).await {
-        Ok(token_usage) => {
-            // Propagate token usage the same way /compact does:
-            // 1) store in CommandContext so the agent loop updates the display
-            // 2) persist in session metadata so it survives restarts
-            if let Some(usage) = token_usage.clone() {
-                ctx.compaction_token_usage = Some(usage.clone());
-                session.set_token_usage(usage);
-            }
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!(
-                    "Conversation compacted successfully. Focus: '{}'.",
-                    if focus.is_empty() {
-                        "general summary"
-                    } else {
-                        focus
-                    }
-                ),
-                tool_calls: vec![],
-                images: vec![],
-            });
-            session.append_message(messages.last().expect("just pushed a message"));
-        }
-        Err(e) => {
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!(
-                    "Auto-compact failed: {}. The conversation was not modified.",
-                    e
-                ),
-                tool_calls: vec![],
-                images: vec![],
-            });
-            session.append_message(messages.last().expect("just pushed a message"));
-        }
-    }
-
-    Ok(())
-}
-
-/// Handle the invoke_skill signal: activate a skill by name.
-///
-/// When the model invokes a skill, we look it up in the skill registry,
-/// display a confirmation message, track it as active, and refresh the
-/// system prompt to include the skill's instructions.
-///
-/// `skill_result` is `Some((name, description))` if the skill was found,
-/// or `None` if not found. This avoids borrowing the context while also
-/// calling it mutably.
-fn handle_invoke_skill<W: Write>(
-    skill_name: &str,
-    skill_result: &Option<(String, String)>,
-    ctx: &mut CommandContext,
-    messages: &mut Vec<Message>,
-    session: &mut Session,
-    stdout: &mut W,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match skill_result {
-        Some((name, description)) => {
-            // Prevent duplicate activation
-            if ctx
-                .active_skills
-                .iter()
-                .any(|s| s.eq_ignore_ascii_case(name))
-            {
-                writeln!(
-                    stdout,
-                    "\n{}⚠ Skill '{}' is already active.{}",
-                    ORANGE, name, RESET
-                )?;
-                stdout.flush()?;
-
-                messages.push(Message {
-                    role: Role::Tool,
-                    content: format!(
-                        "Skill '{}' is already active. Its instructions are already in effect.",
-                        name
-                    ),
-                    tool_calls: vec![],
-                    images: vec![],
-                });
-                session.append_message(messages.last().expect("just pushed a message"));
-                return Ok(());
-            }
-
-            writeln!(
-                stdout,
-                "\n{}{}⚡ Skill activated: {}{}{} — {}{}",
-                BOLD, CYAN, BOLD, name, RESET, description, RESET
-            )?;
-            stdout.flush()?;
-
-            // Track the active skill
-            ctx.active_skills.push(name.clone());
-
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!(
-                    "SUCCESS: Skill '{}' activated. The skill's instructions are now in effect.",
-                    name
-                ),
-                tool_calls: vec![],
-                images: vec![],
-            });
-            session.append_message(messages.last().expect("just pushed a message"));
-
-            // Refresh system prompt to include the active skill
-            ctx.refresh_system_prompt(messages);
-        }
-        None => {
-            let available = ctx
-                .skill_registry
-                .skills
-                .iter()
-                .map(|s| s.name.clone())
-                .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(
-                stdout,
-                "\n{}⚠ Skill '{}' not found.{} Use {}/skills{} to list available skills.",
-                ORANGE, skill_name, RESET, BOLD, RESET
-            )?;
-            stdout.flush()?;
-
-            messages.push(Message {
-                role: Role::Tool,
-                content: format!(
-                    "Error: Skill '{}' not found. Available skills: {}. Use /skills to list them.",
-                    skill_name, available
-                ),
-                tool_calls: vec![],
-                images: vec![],
-            });
-            session.append_message(messages.last().expect("just pushed a message"));
-        }
-    }
-    Ok(())
 }

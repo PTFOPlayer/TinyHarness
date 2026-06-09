@@ -50,12 +50,23 @@ tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rust
 │   ├── mode.rs               AgentMode enum, prompt assembly
 │   └── prompts/              Hardcoded default system prompts (.md files)
 │
-tinyharness-ui/               UI library — terminal output abstractions
+tinyharness-ui/               UI library — terminal output abstractions + experimental TUI
 ├── src/
 │   ├── lib.rs                Module declarations
 │   ├── output.rs             Structured output writer
 │   ├── style.rs              ANSI color constants, spinner frames
-│   └── ui/                   confirm.rs, diff.rs, input.rs, wrap.rs
+│   ├── ui/                   confirm.rs, diff.rs, input.rs, wrap.rs
+│   └── tui/                  ⚠️ Experimental TUI subsystem
+│       ├── mod.rs             Agent integration types (TuiAgentEvent, TuiUserAction)
+│       ├── app.rs             Main TUI application loop
+│       ├── backend.rs         Backend trait (StdioBackend + TestBackend)
+│       ├── cell.rs            Color/style for screen buffer (raw ANSI, no framework)
+│       ├── event.rs           Keyboard/mouse/paste events
+│       ├── layout.rs          Constraint-based layout
+│       ├── screen.rs          Differential rendering screen buffer
+│       ├── terminal.rs        Raw terminal control, alternate screen
+│       ├── widget.rs          Widget trait, Action enum
+│       └── widgets/           conversation, input_bar, sidebar, spinner, status_bar, tool_output
 │
 docs/                         User-facing documentation
 └── todo/                     Enhancement tracking (local only, not committed)
@@ -64,7 +75,7 @@ docs/                         User-facing documentation
 ### Crate Rules
 
 - **`tinyharness-lib`**: Must not use terminal I/O, ANSI escape codes, or `rustyline`. Uses `tracing` for logging.
-- **`tinyharness-ui`**: Terminal UI abstractions — ANSI colors, confirmation prompts, diff display, word wrapping.
+- **`tinyharness-ui`**: Terminal UI abstractions — ANSI colors, confirmation prompts, diff display, word wrapping. Includes an experimental TUI subsystem (`tui/` module) built from scratch with raw ANSI escape sequences (no ratatui/crossterm). The TUI is feature-gated behind the `tui` Cargo feature.
 - **`src/` (binary)**: Wires everything together. Handles I/O, user interaction, and the agent loop.
 
 ---

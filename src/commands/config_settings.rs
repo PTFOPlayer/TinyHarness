@@ -18,11 +18,10 @@ async_command!(
         let arg = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
-            let mut out = Output::stdout();
             if arg.is_empty() {
                 let settings = load_settings();
                 let _ = writeln!(
-                    out,
+                    ctx.output,
                     "{BOLD}Current timeout: {BLUE}{}s{RESET}",
                     settings.ollama_timeout_secs,
                 );
@@ -36,7 +35,7 @@ async_command!(
                     save_settings(&settings);
                     let mut p = provider.lock().await;
                     p.set_timeout(secs);
-                    let _ = writeln!(out, "{BOLD}Timeout set to {BLUE}{secs}s.{RESET}",);
+                    let _ = writeln!(ctx.output, "{BOLD}Timeout set to {BLUE}{secs}s.{RESET}",);
                     Ok(CommandResult::Ok)
                 }
                 Ok(_) => Err("Timeout must be a positive number of seconds.".to_string()),
@@ -60,11 +59,10 @@ async_command!(
         let arg = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
-            let mut out = Output::stdout();
             if arg.is_empty() {
                 let settings = load_settings();
                 let _ = writeln!(
-                    out,
+                    ctx.output,
                     "{BOLD}Current max retries: {BLUE}{}{RESET}",
                     settings.ollama_max_retries,
                 );
@@ -78,7 +76,7 @@ async_command!(
                     save_settings(&settings);
                     let mut p = provider.lock().await;
                     p.set_retries(count);
-                    let _ = writeln!(out, "{BOLD}Max retries set to {BLUE}{count}.{RESET}",);
+                    let _ = writeln!(ctx.output, "{BOLD}Max retries set to {BLUE}{count}.{RESET}",);
                     Ok(CommandResult::Ok)
                 }
                 Err(_) => Err(format!(
@@ -200,11 +198,10 @@ async_command!(
         let arg = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
-            let mut out = Output::stdout();
             if arg.is_empty() {
                 let settings = load_settings();
                 let _ = writeln!(
-                    out,
+                    ctx.output,
                     "{BOLD}Current think level: {BLUE}{}{RESET}",
                     settings.ollama_think_type,
                 );
@@ -223,7 +220,10 @@ async_command!(
             let mut p = provider.lock().await;
             p.set_think_type(think_type);
 
-            let _ = writeln!(out, "{BOLD}Think level set to {BLUE}{think_type}.{RESET}",);
+            let _ = writeln!(
+                ctx.output,
+                "{BOLD}Think level set to {BLUE}{think_type}.{RESET}",
+            );
 
             Ok(CommandResult::Ok)
         }

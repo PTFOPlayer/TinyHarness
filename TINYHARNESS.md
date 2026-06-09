@@ -1,6 +1,6 @@
 # TinyHarness
 
-Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM) and built-in tool calling.
+Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM), built-in tool calling, and an experimental terminal UI (TUI).
 
 ## Commands
 
@@ -11,13 +11,14 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 - Formatting: `cargo fmt --all`
 - Install: `make install` (builds release + copies to `~/.local/bin`)
 - Run: `cargo run` (Ollama default) or `cargo run -- --llama-cpp` / `--vllm`
+- TUI (experimental): `cargo run -- --tui`
 
 ## Workspace Structure
 
 Three crates in a Cargo workspace:
 
 - **`tinyharness-lib`** — Core library: providers, tools, sessions, context, skills, tokens. No terminal I/O.
-- **`tinyharness-ui`** — UI library: ANSI output, confirmation prompts, diff display, command input.
+- **`tinyharness-ui`** — UI library: ANSI output, confirmation prompts, diff display, command input, experimental TUI subsystem.
 - **`TinyHarness`** — Binary CLI: agent loop, slash commands, tool dispatch, setup.
 
 ### Key `tinyharness-lib` modules
@@ -33,6 +34,7 @@ Three crates in a Cargo workspace:
 ### Binary crate structure
 
 - `src/agent/` — Agent loop, tool execution, safety checks, display, multi-line input, provider setup
+- `src/agent/tui_loop.rs` — Background agent loop for TUI mode (communicates with TUI via mpsc channels)
 - `src/commands/` — 22+ slash commands (mode, model, sessions, compact, init, context, files, image, skill, settings, help, etc.), `CommandRegistry` and `async_command!` macro
 
 ## Code Conventions

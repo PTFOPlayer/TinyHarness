@@ -251,6 +251,7 @@ All CLI flags override settings:
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
 | `--config` | Runs interactive setup, saves, exits |
 | `-p`, `--prompt <text>` | Sends initial prompt then enters interactive mode |
+| `--tui` | Launch the experimental terminal UI (split-pane TUI) |
 
 ---
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rustyline::{
     Completer, Helper, Highlighter, Hinter,
     completion::Completer,
@@ -7,70 +9,6 @@ use rustyline::{
 };
 
 use crate::style::*;
-
-/// All known command names (primary + aliases), used for completion and hints.
-/// This must be kept in sync with the command registry in `commands/mod.rs`.
-const COMMAND_NAMES: &[&str] = &[
-    "/add",
-    "/agent",
-    "/apikey",
-    "/audit",
-    "/autoaccept",
-    "/casual",
-    "/clear",
-    "/command",
-    "/compact",
-    "/context",
-    "/contextlimit",
-    "/drop",
-    "/dropall",
-    "/exit",
-    "/files",
-    "/help",
-    "/init",
-    "/mode",
-    "/model",
-    "/plan",
-    "/quit",
-    "/refresh",
-    "/rename",
-    "/retries",
-    "/research",
-    "/session",
-    "/sessions",
-    "/settings",
-    "/showthink",
-    "/skill",
-    "/skills",
-    "/think",
-    "/timeout",
-    "/unload",
-    "/use",
-];
-
-/// Subcommand completions for commands that take arguments.
-fn subcommand_completions(cmd: &str) -> Vec<&'static str> {
-    match cmd {
-        "/command" => vec![
-            "add",
-            "deny",
-            "help",
-            "list",
-            "rm",
-            "reset",
-            "resetdeny",
-            "undeny",
-        ],
-        "/session" => vec!["delete"],
-        "/mode" => vec!["agent", "casual", "planning", "research"],
-        "/settings" => vec!["all"],
-        "/autoaccept" => vec!["off", "on"],
-        "/apikey" => vec!["clear"],
-        "/showthink" => vec!["off", "on"],
-        "/think" => vec!["high", "low", "medium", "off"],
-        _ => vec![],
-    }
-}
 
 #[derive(Completer, Helper, Highlighter, Hinter)]
 pub struct CommandHelper {
@@ -112,23 +50,50 @@ impl Validator for CommandHelper {
     }
 }
 
-impl Default for CommandHelper {
-    fn default() -> Self {
+impl CommandHelper {
+    /// Create a `CommandHelper` with no command data (no completions or hints).
+    pub fn new() -> Self {
         Self {
-            completer: CommandCompleter,
-            hinter: CommandHinter,
+            completer: CommandCompleter {
+                command_names: Vec::new(),
+                subcommands: HashMap::new(),
+            },
+            hinter: CommandHinter {
+                command_names: Vec::new(),
+                subcommands: HashMap::new(),
+            },
+            highlighter: CommandHighlighter,
+        }
+    }
+
+    /// Create a `CommandHelper` populated with command names and subcommand
+    /// completions, typically sourced from the binary's `CommandRegistry`.
+    ///
+    /// - `command_names`: all slash-command names (primary + aliases), e.g. `"/help"`, `"/quit"`.
+    /// - `subcommands`: mapping from command name to its argument completions,
+    ///   e.g. `"/mode" → ["agent", "casual", "planning", "research"]`.
+    pub fn with_commands(
+        command_names: Vec<String>,
+        subcommands: HashMap<String, Vec<String>>,
+    ) -> Self {
+        Self {
+            completer: CommandCompleter {
+                command_names: command_names.clone(),
+                subcommands: subcommands.clone(),
+            },
+            hinter: CommandHinter {
+                command_names,
+                subcommands,
+            },
             highlighter: CommandHighlighter,
         }
     }
 }
 
-impl CommandHelper {
-    pub fn new() -> Self {
-        Self::default()
-    }
+pub struct CommandCompleter {
+    command_names: Vec<String>,
+    subcommands: HashMap<String, Vec<String>>,
 }
-
-pub struct CommandCompleter;
 
 impl Completer for CommandCompleter {
     type Candidate = String;
@@ -149,7 +114,11 @@ impl Completer for CommandCompleter {
         if let Some(space_pos) = prefix.find(' ') {
             let cmd = &prefix[..space_pos].to_lowercase();
             let sub_prefix = prefix[space_pos + 1..].trim_start().to_lowercase();
-            let subs = subcommand_completions(cmd);
+            let subs = self
+                .subcommands
+                .get(cmd)
+                .map(|s| s.as_slice())
+                .unwrap_or(&[]);
 
             if !subs.is_empty() {
                 let matches: Vec<String> = subs
@@ -170,11 +139,12 @@ impl Completer for CommandCompleter {
 
         // Top-level command completion
         let cmd_prefix = prefix.to_lowercase();
-        let matches: Vec<String> = COMMAND_NAMES
+        let matches: Vec<String> = self
+            .command_names
             .iter()
-            .filter(|name| name.starts_with(&cmd_prefix))
+            .filter(|name| name.to_lowercase().starts_with(&cmd_prefix))
             .take(3)
-            .map(|s| s.to_string())
+            .cloned()
             .collect();
 
         if matches.is_empty() {
@@ -185,7 +155,10 @@ impl Completer for CommandCompleter {
     }
 }
 
-pub struct CommandHinter;
+pub struct CommandHinter {
+    command_names: Vec<String>,
+    subcommands: HashMap<String, Vec<String>>,
+}
 
 impl Hinter for CommandHinter {
     type Hint = String;
@@ -199,10 +172,14 @@ impl Hinter for CommandHinter {
         if let Some(space_pos) = line.find(' ') {
             let cmd = &line[..space_pos].to_lowercase();
             let sub_prefix = line[space_pos + 1..].trim_start().to_lowercase();
-            let subs = subcommand_completions(cmd);
+            let subs = self
+                .subcommands
+                .get(cmd)
+                .map(|s| s.as_slice())
+                .unwrap_or(&[]);
 
             if !subs.is_empty() {
-                let matches: Vec<&&str> = subs
+                let matches: Vec<&String> = subs
                     .iter()
                     .filter(|s| s.starts_with(&sub_prefix))
                     .take(5)
@@ -223,18 +200,19 @@ impl Hinter for CommandHinter {
                 }
 
                 // Multiple matches or partial match — show options
-                let suggestions: Vec<&str> = matches.iter().map(|s| **s).collect();
+                let suggestions: Vec<&str> = matches.iter().map(|s| s.as_str()).collect();
                 return Some(format!("  ({})", suggestions.join(" | ")));
             }
         }
 
         // Top-level command hinting
         let prefix = line.to_lowercase();
-        let matches: Vec<&str> = COMMAND_NAMES
+        let matches: Vec<&str> = self
+            .command_names
             .iter()
-            .filter(|name| name.starts_with(&prefix))
+            .filter(|name| name.to_lowercase().starts_with(&prefix))
             .take(3)
-            .copied()
+            .map(|s| s.as_str())
             .collect();
 
         if matches.is_empty() {

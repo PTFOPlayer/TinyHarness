@@ -1,8 +1,13 @@
+pub mod command_result;
+pub mod confirm;
 pub mod display;
 pub mod input;
 pub mod safety;
 pub mod setup;
+pub mod signal;
+pub mod tool_result;
 pub mod tools;
+pub mod tui_loop;
 
 use std::{
     error::Error,
@@ -18,16 +23,15 @@ use tokio::sync::Mutex;
 
 use tinyharness_lib::{
     config::load_settings,
-    context::WorkspaceContext,
     mode::AgentMode,
     provider::{Message, Provider, Role},
-    session::{Session, SessionStore},
+    session::Session,
     token::ContextWindowSize,
     tools::ToolManager,
 };
 use tinyharness_ui::output::Output;
 
-use crate::commands::{CommandContext, CommandResult, build_registry, init};
+use crate::commands::{CommandContext, CommandResult, build_registry};
 use tinyharness_ui::style::*;
 use tinyharness_ui::ui::input::CommandHelper;
 
@@ -95,7 +99,14 @@ pub async fn run_agent_loop(
         &mut stdout,
     )?;
 
-    let helper = CommandHelper::new();
+    let helper = CommandHelper::with_commands(
+        registry
+            .command_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        registry.subcommands(),
+    );
     let history_dir = std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".local/share/tinyharness"))
         .unwrap_or_else(|_| std::path::PathBuf::from(".tinyharness_history"));
@@ -224,166 +235,52 @@ pub async fn run_agent_loop(
             match registry.dispatch(&user_input, ctx, messages).await {
                 Ok(CommandResult::Ok) => {
                     // Update token usage from compaction side-channel.
-                    if let Some(usage) = ctx.compaction_token_usage.take() {
-                        last_known_token_usage = Some(usage.clone());
-                        session.set_token_usage(usage);
+                    if let Some(usage) = command_result::apply_ok(ctx, session) {
+                        last_known_token_usage = Some(usage);
                     }
                 }
                 Ok(CommandResult::SwitchSession(id_prefix)) => {
-                    let store = SessionStore::default_path();
-                    match store.find_by_prefix(&id_prefix) {
-                        Ok(full_id) => {
-                            // Flush current session before switching
-                            session.flush();
-                            match store.load(&full_id) {
-                                Ok((new_session, loaded_msgs)) => {
-                                    let meta = new_session.meta();
-                                    let name = meta.name.as_deref().unwrap_or("unnamed");
-                                    let mut err_out = Output::stderr();
-                                    let _ = writeln!(
-                                        err_out,
-                                        "{BOLD}Switched to session {BLUE}{}{RESET} — {BOLD}{name}{RESET} ({} messages, {})",
-                                        &meta.id[..12],
-                                        meta.message_count,
-                                        meta.mode,
-                                    );
-                                    *session = new_session;
-                                    *messages = loaded_msgs;
-                                    // Update context mode, session ID, and token usage
-                                    // from the loaded session
-                                    ctx.current_mode = session.meta().mode;
-                                    ctx.session_id = Some(session.id().to_string());
-                                    last_known_token_usage = session.meta().token_usage.clone();
-                                    // Ensure system prompt reflects current context
-                                    ctx.refresh_system_prompt(messages);
-                                    // Print loaded conversation history
-                                    print_conversation_history(messages, &mut stdout)?;
-                                    // Warn if the loaded session is near or over the context window limit,
-                                    // using the stored provider token count from the session's metadata.
-                                    print_context_load_warning(
-                                        messages,
-                                        session.meta().token_usage.as_ref().map(|u| u.total_tokens),
-                                        &mut stdout,
-                                    )?;
-                                }
-                                Err(e) => {
-                                    let mut err_out = Output::stderr();
-                                    let _ = writeln!(err_out, "{RED}{e}{RESET}");
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let mut err_out = Output::stderr();
-                            let _ = writeln!(err_out, "{RED}{e}{RESET}");
-                        }
+                    let info =
+                        command_result::apply_switch_session(&id_prefix, ctx, messages, session);
+                    if info.is_error {
+                        let mut err_out = Output::stderr();
+                        let _ = writeln!(err_out, "{RED}{}{RESET}", info.description);
+                    } else {
+                        let mut err_out = Output::stderr();
+                        let _ = writeln!(err_out, "{BOLD}{}{RESET}", info.description);
+                        last_known_token_usage = session.meta().token_usage.clone();
+                        print_conversation_history(messages, &mut stdout)?;
+                        print_context_load_warning(
+                            messages,
+                            session.meta().token_usage.as_ref().map(|u| u.total_tokens),
+                            &mut stdout,
+                        )?;
                     }
                 }
                 Ok(CommandResult::RenameSession(new_name)) => {
-                    session.set_name(new_name.clone());
+                    let info = command_result::apply_rename_session(&new_name, session);
                     let mut err_out = Output::stderr();
-                    let _ = writeln!(err_out, "{BOLD}Session renamed to {BLUE}{new_name}{RESET}",);
+                    let _ = writeln!(err_out, "{BOLD}{}{RESET}", info.description);
                 }
                 Ok(CommandResult::Init(result)) => {
-                    // Refresh workspace context since the project instruction file may have changed
-                    ctx.workspace_ctx = WorkspaceContext::collect();
-                    ctx.refresh_system_prompt(messages);
-
+                    let info = command_result::apply_init(&result, ctx, messages);
                     let mut err_out = Output::stderr();
-                    match &result {
-                        init::InitResult::Created { path } => {
-                            let _ = writeln!(
-                                err_out,
-                                "{GREEN}  Created {BLUE}{}{GREEN} — workspace context refreshed.{RESET}",
-                                path.display(),
-                            );
-                        }
-                        init::InitResult::Updated { path } => {
-                            let _ = writeln!(
-                                err_out,
-                                "{GREEN}  Updated {BLUE}{}{GREEN} — workspace context refreshed.{RESET}",
-                                path.display(),
-                            );
-                        }
-                    }
+                    let _ = writeln!(err_out, "{GREEN}{}{RESET}", info.description);
                 }
                 Ok(CommandResult::SkillUse(skill_name)) => {
-                    // Prevent duplicate activation
-                    if ctx
-                        .active_skills
-                        .iter()
-                        .any(|s| s.eq_ignore_ascii_case(&skill_name))
-                    {
-                        let mut err_out = Output::stderr();
-                        let _ = writeln!(
-                            err_out,
-                            "{ORANGE}⚠ Skill '{skill_name}' is already active.{RESET} Use {BOLD}/unload {skill_name}{RESET} to deactivate it.",
-                        );
-                        continue;
-                    }
-                    match ctx.skill_registry.get(&skill_name) {
-                        Some(skill) => {
-                            let mut err_out = Output::stderr();
-                            let _ = writeln!(
-                                err_out,
-                                "{BOLD}⚡ Skill activated: {CYAN}{skill_name}{RESET} — {}{RESET}",
-                                skill.description,
-                            );
-                            // Track the active skill
-                            ctx.active_skills.push(skill.name.clone());
-                            // Inject a user message indicating skill activation
-                            messages.push(Message {
-                                role: Role::User,
-                                content: format!("/use {}", skill_name),
-                                tool_calls: vec![],
-                                images: vec![],
-                            });
-                            session.append_message(messages.last().expect("just pushed a message"));
-                            // Refresh system prompt to include the active skill
-                            ctx.refresh_system_prompt(messages);
-                        }
-                        None => {
-                            let mut err_out = Output::stderr();
-                            let _ = writeln!(
-                                err_out,
-                                "{RED}⚠ Skill '{skill_name}' not found — it may have been removed.{RESET}",
-                            );
-                        }
+                    let info = command_result::apply_skill_use(&skill_name, ctx, messages, session);
+                    let mut err_out = Output::stderr();
+                    if info.is_error {
+                        let _ = writeln!(err_out, "{RED}⚠ {}{RESET}", info.description);
+                    } else {
+                        let _ = writeln!(err_out, "{BOLD}⚡ {}{RESET}", info.description);
                     }
                 }
                 Ok(CommandResult::SkillUnload(skill_name)) => {
-                    // Find and remove the skill from active list
-                    let pos = ctx
-                        .active_skills
-                        .iter()
-                        .position(|s| s.eq_ignore_ascii_case(&skill_name));
-                    match pos {
-                        Some(idx) => {
-                            let removed = ctx.active_skills.remove(idx);
-                            let mut err_out = Output::stderr();
-                            let _ = writeln!(
-                                err_out,
-                                "{BOLD}Skill deactivated: {CYAN}{removed}{RESET}",
-                            );
-                            // Inject a user message indicating skill deactivation
-                            messages.push(Message {
-                                role: Role::User,
-                                content: format!("/unload {}", skill_name),
-                                tool_calls: vec![],
-                                images: vec![],
-                            });
-                            session.append_message(messages.last().expect("just pushed a message"));
-                            // Refresh system prompt to remove the skill
-                            ctx.refresh_system_prompt(messages);
-                        }
-                        None => {
-                            // Should not happen since dispatch validates this
-                            let mut err_out = Output::stderr();
-                            let _ = writeln!(
-                                err_out,
-                                "{ORANGE}⚠ Skill '{skill_name}' is not active.{RESET}",
-                            );
-                        }
-                    }
+                    let info =
+                        command_result::apply_skill_unload(&skill_name, ctx, messages, session);
+                    let mut err_out = Output::stderr();
+                    let _ = writeln!(err_out, "{BOLD}{}{RESET}", info.description);
                 }
                 Err(e) => {
                     let mut err_out = Output::stderr();
@@ -491,7 +388,7 @@ pub async fn run_agent_loop(
 
                                     // Show [thinking] header once, before the first delta
                                     if !thinking_header_shown {
-                                        write!(stdout, "{DIM}{THINK_COLOR}[thinking] ")?;
+                                        write!(stdout, "\n{DIM}{THINK_COLOR}[thinking] ")?;
                                         thinking_header_shown = true;
                                     }
 

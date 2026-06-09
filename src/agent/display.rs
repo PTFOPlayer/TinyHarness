@@ -305,6 +305,88 @@ pub fn summarize_listing_result(result: &str, tool_name: &str) -> String {
 
 /// Format tool call arguments as a compact single-line summary.
 pub fn format_args_summary(arguments: &serde_json::Value) -> String {
+    format_args_summary_impl(arguments, true)
+}
+
+/// Format tool call arguments for TUI display — shows full commands for `run`
+/// and full paths for `edit`/`write`, without truncating important args.
+pub fn format_args_summary_tui(tool_name: &str, arguments: &serde_json::Value) -> String {
+    // For run/edit/write, show the key argument in full and summarize the rest
+    match tool_name {
+        "run" => {
+            if let Some(cmd) = arguments.get("command").and_then(|v| v.as_str()) {
+                let cwd = arguments
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .map(|c| format!(", cwd={}", c))
+                    .unwrap_or_default();
+                let timeout = arguments
+                    .get("timeout")
+                    .and_then(|v| v.as_str())
+                    .map(|t| format!(", timeout={}", t))
+                    .unwrap_or_default();
+                format!("command=\"{}\"{}{}", cmd, cwd, timeout)
+            } else {
+                format_args_summary_impl(arguments, false)
+            }
+        }
+        "edit" => {
+            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                format!("path=\"{}\"", path)
+            } else {
+                format_args_summary_impl(arguments, false)
+            }
+        }
+        "write" => {
+            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                let content_len = arguments
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|c| c.len())
+                    .unwrap_or(0);
+                format!("path=\"{}\", content=({} bytes)", path, content_len)
+            } else {
+                format_args_summary_impl(arguments, false)
+            }
+        }
+        "read" => {
+            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                let from_to = arguments
+                    .get("from")
+                    .and_then(|v| v.as_str())
+                    .map(|f| {
+                        let to = arguments
+                            .get("to")
+                            .and_then(|v| v.as_str())
+                            .map(|t| format!("-{}", t))
+                            .unwrap_or_default();
+                        format!(":{}{}", f, to)
+                    })
+                    .unwrap_or_default();
+                format!("path=\"{}{}\"", path, from_to)
+            } else {
+                format_args_summary_impl(arguments, false)
+            }
+        }
+        "grep" | "glob" => {
+            // Show pattern in full, truncate if very long
+            if let Some(pattern) = arguments.get("pattern").and_then(|v| v.as_str()) {
+                let path = arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|p| format!(", path={}", p))
+                    .unwrap_or_default();
+                format!("pattern=\"{}\"{}", pattern, path)
+            } else {
+                format_args_summary_impl(arguments, false)
+            }
+        }
+        _ => format_args_summary_impl(arguments, false),
+    }
+}
+
+/// Internal implementation of argument formatting with optional truncation.
+fn format_args_summary_impl(arguments: &serde_json::Value, truncate: bool) -> String {
     match arguments {
         serde_json::Value::Object(map) => {
             let parts: Vec<String> = map
@@ -312,7 +394,7 @@ pub fn format_args_summary(arguments: &serde_json::Value) -> String {
                 .map(|(key, val)| {
                     let val_str = match val {
                         serde_json::Value::String(s) => {
-                            if s.len() > 60 {
+                            if truncate && s.len() > 60 {
                                 let truncate_at = s.floor_char_boundary(57);
                                 format!("\"{}...\"", &s[..truncate_at])
                             } else {

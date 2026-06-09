@@ -21,13 +21,19 @@ use tinyharness_lib::{
 };
 
 use crate::agent::setup as agent_setup;
-use crate::{agent::run_agent_loop, commands::CommandContext};
+use crate::agent::tui_loop::run_tui_agent_loop;
+use crate::{
+    agent::run_agent_loop,
+    commands::{CommandContext, build_registry},
+};
 use clap::Parser;
 use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
+use tinyharness_ui::tui::{StdioBackend, TuiApp, TuiGuard, spawn_stdin_reader};
 use tokio::sync::Mutex;
 
 #[derive(clap::Parser, Debug)]
+#[command(version, about = "tinyharness - ai coding harness")]
 struct Args {
     #[arg(short, long)]
     ollama: bool,
@@ -49,6 +55,9 @@ struct Args {
     /// interactive loop for follow-up turns.
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
+    /// Launch the terminal UI (TUI) mode with split panes.
+    #[arg(long)]
+    tui: bool,
 }
 
 /// Determine the provider kind from CLI flags or saved settings.
@@ -169,6 +178,142 @@ fn create_initial_session(
         images: vec![],
     }];
     (sess, msgs)
+}
+
+/// Launch the TUI (terminal UI) mode.
+///
+/// This creates a split-pane TUI with:
+/// - Status bar at the top (mode, model, tokens, session)
+/// - Conversation pane (scrollable, 70%)
+/// - Sidebar (project context, 30%)
+/// - Input bar at the bottom
+///
+/// The agent loop runs in a background tokio task, sending conversation
+/// updates to the TUI through a channel. The TUI reads events from stdin
+/// and agent events from the channel, rendering diff-based updates.
+#[allow(clippy::too_many_arguments)]
+async fn run_tui_mode(
+    provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+    tool_manager: ToolManager,
+    messages: Vec<Message>,
+    ctx: CommandContext,
+    session: Session,
+    interrupted: Arc<AtomicBool>,
+    initial_prompt: Option<String>,
+    command_names: Vec<String>,
+    subcommands: std::collections::HashMap<String, Vec<String>>,
+) -> Result<(), Box<dyn Error>> {
+    use tinyharness_ui::tui::{TuiAgentEvent, TuiUserAction};
+
+    let model_name = {
+        let p = provider.lock().await;
+        p.current_model().unwrap_or_else(|| "unknown".to_string())
+    };
+    let mode_str = ctx.current_mode.to_string();
+
+    // Create channels for TUI ↔ agent communication
+    let (user_action_tx, user_action_rx) = std::sync::mpsc::channel::<TuiUserAction>();
+    let (agent_event_tx, agent_event_rx) = std::sync::mpsc::channel::<TuiAgentEvent>();
+
+    // Create the terminal backend and TUI app
+    let backend = StdioBackend::new()?;
+    let terminal = tinyharness_ui::tui::Terminal::new(backend)?;
+    let guard = TuiGuard::new(terminal);
+    let terminal = guard.take();
+
+    let mut app = TuiApp::new(terminal, user_action_tx, agent_event_rx)?;
+    app.set_command_completions(command_names, subcommands);
+
+    // Initialize TUI state from the session context
+    {
+        let state = app.state_mut();
+        state.mode = mode_str;
+        state.model_name = model_name;
+        state.session_name = session
+            .meta()
+            .name
+            .as_deref()
+            .unwrap_or("unnamed")
+            .to_string();
+        state.message_count = messages.len().saturating_sub(1); // exclude system message
+        state.sidebar_visible = true;
+    }
+    app.sync_from_state();
+
+    // Populate sidebar with project context
+    {
+        let sidebar = app.sidebar_mut();
+        sidebar.project_name = ctx.workspace_ctx.project_name.clone();
+        sidebar.project_type = ctx.workspace_ctx.project_type.clone();
+        sidebar.git_branch = if ctx.workspace_ctx.is_git_repo {
+            std::process::Command::new("git")
+                .args(["branch", "--show-current"])
+                .output()
+                .ok()
+                .and_then(|o| {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if s.is_empty() { None } else { Some(s) }
+                })
+        } else {
+            None
+        };
+        sidebar.build_command = ctx.workspace_ctx.build_command.clone();
+        sidebar.test_command = ctx.workspace_ctx.test_command.clone();
+        sidebar.structure = ctx.workspace_ctx.structure.clone();
+    }
+
+    // If resuming a session, populate the conversation with existing messages
+    for msg in messages.iter() {
+        match msg.role {
+            Role::System => {
+                // Skip system messages in TUI display
+            }
+            Role::User => {
+                app.push_user_message(&msg.content);
+            }
+            Role::Assistant => {
+                app.push_assistant_message(&msg.content);
+            }
+            Role::Tool => {
+                // Tool results shown as tool result for now
+                app.push_tool_result("tool", &msg.content, false);
+            }
+        }
+    }
+
+    // Spawn the stdin reader thread
+    let (_tx, rx) = spawn_stdin_reader();
+
+    // Clear the interrupt flag
+    interrupted.store(false, Ordering::SeqCst);
+
+    // Spawn the background agent task — ownership is transferred
+    let agent_provider = Arc::clone(&provider);
+
+    let agent_handle = tokio::spawn(async move {
+        run_tui_agent_loop(
+            agent_provider,
+            tool_manager,
+            messages,
+            ctx,
+            session,
+            interrupted,
+            initial_prompt,
+            user_action_rx,
+            agent_event_tx,
+        )
+        .await
+    });
+
+    // Run the TUI event loop (blocks until quit)
+    app.run(rx)?;
+
+    // The user_action_rx was moved into the agent task, so dropping it is
+    // handled automatically when the task finishes or the sender is dropped.
+    // Just wait for the agent task to finish.
+    let _ = agent_handle.await;
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -353,6 +498,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ctx.current_mode = initial_mode;
     ctx.session_id = Some(session.id().to_string());
 
+    // Build the command registry to extract command names and subcommand
+    // completions for tab-completion (used by both TUI and CLI modes).
+    let reg = build_registry();
+    let command_names = reg
+        .command_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    let subcommands = reg.subcommands();
+
+    // ── TUI mode ──────────────────────────────────────────────────────────
+    if args.tui {
+        return run_tui_mode(
+            provider,
+            tool_manager,
+            messages,
+            ctx,
+            session,
+            interrupted,
+            args.prompt,
+            command_names,
+            subcommands,
+        )
+        .await;
+    }
+
+    // ── CLI mode (default) ────────────────────────────────────────────────
     run_agent_loop(
         provider,
         tool_manager,

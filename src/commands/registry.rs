@@ -312,6 +312,8 @@ pub struct CommandRegistry {
     /// Pre-computed (usage, description) pairs for /help, including aliases.
     /// Populated by [`freeze_descriptions`] after all registrations are done.
     descriptions: Vec<(&'static str, &'static str)>,
+    /// Subcommand completions for tab-completion (command name → argument completions).
+    subcommands: HashMap<String, Vec<String>>,
 }
 
 impl Default for CommandRegistry {
@@ -328,6 +330,7 @@ impl CommandRegistry {
             alias_fixed_args: HashMap::new(),
             alias_descriptions: HashMap::new(),
             descriptions: Vec::new(),
+            subcommands: HashMap::new(),
         }
     }
 
@@ -493,5 +496,19 @@ impl CommandRegistry {
     /// Check if a command name (or alias) is registered.
     pub fn contains(&self, name: &str) -> bool {
         self.commands.contains_key(name) || self.aliases.contains_key(name)
+    }
+
+    /// Get the subcommand completions map for tab-completion.
+    /// Returns a mapping from command name to its known argument completions.
+    pub fn subcommands(&self) -> HashMap<String, Vec<String>> {
+        self.subcommands.clone()
+    }
+
+    /// Register subcommand completions for a command.
+    pub fn register_subcommands(&mut self, cmd: &'static str, subs: Vec<&'static str>) {
+        self.subcommands.insert(
+            cmd.to_string(),
+            subs.iter().map(|s| s.to_string()).collect(),
+        );
     }
 }

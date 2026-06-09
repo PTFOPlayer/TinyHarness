@@ -17,21 +17,20 @@ async_command!(
         let name = raw_arg.unwrap_or("").to_string();
         let provider = ctx.provider.clone();
         async move {
-            let mut out = Output::stdout();
             if name.is_empty() {
                 let p = provider.lock().await;
-                execute_list(&mut out, &*p).await?;
+                execute_list(&mut ctx.output, &*p).await?;
 
                 if let Some(model) = p.current_model() {
-                    let _ = writeln!(out, "{BOLD}Current model: {GREEN}{model}{RESET}",);
+                    let _ = writeln!(ctx.output, "{BOLD}Current model: {GREEN}{model}{RESET}",);
                 } else {
-                    let _ = writeln!(out, "{ORANGE}No model currently selected.{RESET}");
+                    let _ = writeln!(ctx.output, "{ORANGE}No model currently selected.{RESET}");
                 }
                 return Ok(CommandResult::Ok);
             }
 
             let mut p = provider.lock().await;
-            execute_select(&mut out, &mut *p, &name).await?;
+            execute_select(&mut ctx.output, &mut *p, &name).await?;
 
             let mut settings = load_settings();
             settings.last_model = p.current_model();
