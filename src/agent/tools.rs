@@ -146,9 +146,9 @@ pub async fn handle_tool_calls<W: Write>(
         if !approved {
             let args_summary = super::display::format_args_summary(&call.function.arguments);
             messages.push(Message {
-                role: Role::System,
+                role: Role::User,
                 content: format!(
-                    "The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
+                    "[Tool denied] The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
                     call.function.name, args_summary
                 ),
                 tool_calls: vec![], images: vec![],
