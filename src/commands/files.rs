@@ -118,6 +118,14 @@ impl FileContext {
         self.pinned_files.len()
     }
 
+    /// Get a summary of pinned files as (path, line_count, byte_count) tuples.
+    pub fn pinned_file_summaries(&self) -> Vec<(&str, usize, usize)> {
+        self.pinned_files
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.lines().count(), content.len()))
+            .collect()
+    }
+
     /// Refresh all pinned files (re-read from disk).
     pub fn refresh(&mut self) -> String {
         let mut errors = Vec::new();

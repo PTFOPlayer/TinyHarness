@@ -357,8 +357,16 @@ async fn compact_cascade(
     Ok(token_usage)
 }
 
-/// Reconstruct the messages vector after compaction:
-/// [system_prompt, summary_message, ...recent_messages]
+/// Reconstruct the messages vector after compaction.
+///
+/// Merges the compaction summary into the existing system prompt rather than
+/// creating a second `Role::System` message. Many models (e.g. Qwen 3.5) use
+/// strict Jinja chat templates that raise errors like "System message must be
+/// at the beginning" when they encounter more than one system message. By
+/// appending the summary to the sole system prompt we stay compatible with
+/// those models while still preserving the information.
+///
+/// Resulting layout: [system_prompt (with summary appended), ...recent_messages]
 fn reconstruct_messages(
     out: &mut Output,
     messages: &mut Vec<Message>,
@@ -367,21 +375,24 @@ fn reconstruct_messages(
 ) {
     let mut new_messages = Vec::new();
 
-    // Keep system prompt
+    // Merge the compaction summary into the system prompt so we keep exactly
+    // one `Role::System` message. This avoids "System message must be at the
+    // beginning" errors from models with strict Jinja chat templates (e.g.
+    // Qwen 3.5).
     if let Some(sys) = ctx.system_msg.clone() {
-        new_messages.push(sys);
-    }
-
-    // Add the compaction summary as a system message
-    new_messages.push(Message {
-        role: Role::System,
-        content: format!(
-            "[Previous conversation summary]\n{}\n[End of summary — all details above have been compacted. \
+        let merged_content = format!(
+            "{}\n\n[Previous conversation summary]\n{}\n[End of summary — all details above have been compacted. \
              If the user references something from before, it may be in this summary.]",
+            sys.content.trim_end(),
             summary_content.trim()
-        ),
-        tool_calls: vec![], images: vec![],
-    });
+        );
+        new_messages.push(Message {
+            role: Role::System,
+            content: merged_content,
+            tool_calls: sys.tool_calls,
+            images: sys.images,
+        });
+    }
 
     // Keep all recent messages from keep_from onward
     for msg in messages.drain(ctx.keep_from..) {
@@ -563,13 +574,13 @@ mod tests {
         let mut out = Output::new(Box::new(Vec::new()));
         reconstruct_messages(&mut out, &mut messages, &ctx, "This is a summary.");
 
-        // Should have: system + summary + 4 recent = 6 messages
-        assert_eq!(messages.len(), 6);
+        // Should have: merged system prompt (with summary) + 4 recent = 5 messages
+        assert_eq!(messages.len(), 5);
+        // The system prompt now contains both the original content and the summary
         assert_eq!(messages[0].role, Role::System);
-        assert_eq!(messages[0].content, "You are helpful.");
-        assert_eq!(messages[1].role, Role::System);
-        assert!(messages[1].content.contains("This is a summary."));
-        assert_eq!(messages[2].content, "recent1");
-        assert_eq!(messages[5].content, "recent4");
+        assert!(messages[0].content.contains("You are helpful."));
+        assert!(messages[0].content.contains("This is a summary."));
+        assert_eq!(messages[1].content, "recent1");
+        assert_eq!(messages[4].content, "recent4");
     }
 }

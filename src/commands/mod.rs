@@ -5,6 +5,7 @@ pub mod command;
 pub mod compact;
 pub mod config_settings;
 pub mod context;
+pub mod debug;
 pub mod exit;
 pub mod files;
 pub mod help;
@@ -158,6 +159,15 @@ pub fn build_registry() -> CommandRegistry {
         "Manage auto-accepted and denied commands",
         "/command [list|add|rm|deny|undeny|reset|resetdeny|help]",
         |arg, ctx, _msg| crate::commands::command::execute(&mut ctx.output, arg.unwrap_or("")),
+    );
+
+    // ── Debug ────────────────────────────────────────────────────────────
+
+    reg.register_sync_with_usage(
+        "/debug",
+        "Dump the current conversation context to a log file",
+        "/debug [path]",
+        |arg, ctx, msg| crate::commands::debug::execute(ctx, arg, msg),
     );
 
     // ── Audit ──────────────────────────────────────────────────────────────
