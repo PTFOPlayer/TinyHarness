@@ -3,11 +3,13 @@
 // Displays tool call results in a collapsible pane. Tool results start
 // collapsed (just header line). Click or Enter to expand.
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::tui::cell::{Cell, Color, Style};
 use crate::tui::event::{Event, Key, KeyEvent, Modifiers, MouseEvent};
 use crate::tui::layout::Rect;
 use crate::tui::screen::Screen;
-use crate::tui::widget::{Action, Widget, truncate_str};
+use crate::tui::widget::{Action, Widget, truncate_str_width};
 
 /// Status of a tool call.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +132,7 @@ impl ToolOutputWidget {
         };
 
         let header_with_dur = format!("{}{}", header, duration_str);
+        let header_width = header_with_dur.width();
 
         screen.write_str(
             row,
@@ -142,12 +145,15 @@ impl ToolOutputWidget {
 
         // Show content preview (first line, truncated)
         if !result.content.is_empty() {
-            let preview_col = (header_with_dur.len() as u16 + 2).min(width.saturating_sub(20));
+            let preview_col = (header_width as u16 + 2).min(width.saturating_sub(20));
             let available = (width as usize).saturating_sub(preview_col as usize);
             if available > 10 {
                 let first_line = result.content.lines().next().unwrap_or("");
-                let preview = if first_line.len() > available.saturating_sub(3) {
-                    format!("{}…", truncate_str(first_line, available.saturating_sub(3)))
+                let preview = if first_line.width() > available.saturating_sub(3) {
+                    format!(
+                        "{}…",
+                        truncate_str_width(first_line, available.saturating_sub(3))
+                    )
                 } else {
                     first_line.to_string()
                 };
@@ -253,8 +259,8 @@ impl ToolOutputWidget {
             );
 
             let available = (width as usize).saturating_sub(4);
-            let display = if line.len() > available {
-                format!("{}…", truncate_str(line, available.saturating_sub(1)))
+            let display = if line.width() > available {
+                format!("{}…", truncate_str_width(line, available.saturating_sub(1)))
             } else {
                 line.to_string()
             };

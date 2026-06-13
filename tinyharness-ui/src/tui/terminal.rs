@@ -413,10 +413,6 @@ mod tests {
         fn new() -> Self {
             Self { buf: Vec::new() }
         }
-
-        fn into_contents(self) -> Vec<u8> {
-            self.buf
-        }
     }
 
     impl Write for TestWriter {

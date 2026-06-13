@@ -134,6 +134,8 @@ pub mod styles {
     pub const BOX_CROSS: char = '┼';
 }
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 /// Safely truncate a string to at most `max_len` bytes, respecting UTF-8
 /// char boundaries. Returns a string slice that fits within `max_len` bytes.
 ///
@@ -149,6 +151,26 @@ pub fn truncate_str(s: &str, max_len: usize) -> &str {
         boundary -= 1;
     }
     &s[..boundary]
+}
+
+/// Truncate a string so that its Unicode display width is at most `max_width`.
+///
+/// Unlike `truncate_str`, this respects terminal display columns, so CJK and
+/// emoji characters count correctly. Returns the longest prefix whose width
+/// does not exceed `max_width`.
+pub fn truncate_str_width(s: &str, max_width: usize) -> &str {
+    if s.width() <= max_width {
+        return s;
+    }
+    let mut acc = 0usize;
+    for (idx, ch) in s.char_indices() {
+        let w = ch.width().unwrap_or(1).max(1);
+        if acc + w > max_width {
+            return &s[..idx];
+        }
+        acc += w;
+    }
+    s
 }
 
 #[cfg(test)]

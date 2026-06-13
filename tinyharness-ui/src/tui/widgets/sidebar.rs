@@ -8,11 +8,47 @@
 use std::fs;
 use std::path::PathBuf;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::tui::cell::{Cell, Color, Style};
 use crate::tui::event::{Event, Key, KeyEvent};
 use crate::tui::layout::Rect;
 use crate::tui::screen::Screen;
-use crate::tui::widget::{Action, Widget, styles, truncate_str};
+use crate::tui::widget::{Action, Widget, styles, truncate_str_width};
+
+/// Truncate `s` to fit within `max_width` display columns, appending an
+/// ellipsis only if truncation occurs. Returns the original string if it fits.
+fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
+    if s.width() <= max_width {
+        return s.to_string();
+    }
+    let prefix = "…";
+    let avail = max_width.saturating_sub(prefix.width());
+    format!("{}{}", prefix, truncate_str_width(s, avail))
+}
+
+/// Truncate `s` to fit within `max_width` display columns, keeping the rightmost
+/// portion and prepending `prefix`. `prefix` is shown only if truncation occurs.
+fn truncate_to_width_with_prefix(s: &str, max_width: usize, prefix: &str) -> String {
+    if s.width() <= max_width {
+        return s.to_string();
+    }
+    let avail = max_width.saturating_sub(prefix.width());
+    if avail == 0 {
+        return prefix.to_string();
+    }
+    let mut current_width = 0usize;
+    let mut start = s.len();
+    for (idx, ch) in s.char_indices().rev() {
+        let w = ch.width().unwrap_or(1).max(1);
+        if current_width + w > avail {
+            start = idx + ch.len_utf8();
+            break;
+        }
+        current_width += w;
+    }
+    format!("{}{}", prefix, &s[start..])
+}
 
 // ── Directory entry for the file browser ──────────────────────────────────────
 
@@ -122,6 +158,8 @@ pub struct SidebarWidget {
     pub visible: bool,
     /// Vertical scroll offset in rows (0 = top).
     scroll_offset: usize,
+    /// Desired width of the sidebar in columns (can be resized).
+    pub desired_width: u16,
 
     // ── Interactive file browser state ─────────────────────────────────────
     /// Whether the sidebar is in interactive structure mode.
@@ -159,6 +197,7 @@ impl SidebarWidget {
             active_skills: Vec::new(),
             visible: true,
             scroll_offset: 0,
+            desired_width: 25,
             structure_mode: false,
             structure_cwd: cwd.clone(),
             structure_nav_stack: Vec::new(),
@@ -557,11 +596,7 @@ impl Widget for SidebarWidget {
                 SidebarItem::Entry { icon, name, is_dir } => {
                     let suffix = if *is_dir { "/" } else { "" };
                     let display = format!("{} {}{}", icon, name, suffix);
-                    let truncated = if display.chars().count() > max_width {
-                        format!("{}…", truncate_str(&display, max_width.saturating_sub(1)))
-                    } else {
-                        display
-                    };
+                    let truncated = truncate_with_ellipsis(&display, max_width);
                     let fg = if *is_dir {
                         Color::BRIGHT_CYAN
                     } else {
@@ -577,7 +612,7 @@ impl Widget for SidebarWidget {
                         Style::default(),
                     );
                     // Clear remaining cells on this row to prevent stale characters
-                    let end_col = area.x + 2 + text.chars().count() as u16;
+                    let end_col = area.x + 2 + text.width() as u16;
                     let right_bound = area.x + area.width.saturating_sub(1);
                     for col in end_col..right_bound {
                         if let Some(cell) = screen.get_mut(screen_row, col) {
@@ -597,11 +632,7 @@ impl Widget for SidebarWidget {
                     structure_entry_screen_rows.push(screen_row);
                     let suffix = if *is_dir { "/" } else { "" };
                     let display = format!("{} {}{}", icon, name, suffix);
-                    let truncated = if display.chars().count() > max_width {
-                        format!("{}…", truncate_str(&display, max_width.saturating_sub(1)))
-                    } else {
-                        display
-                    };
+                    let truncated = truncate_with_ellipsis(&display, max_width);
 
                     if *selected {
                         // Highlighted row: inverted or accent background
@@ -641,7 +672,7 @@ impl Widget for SidebarWidget {
                             Style::default(),
                         );
                         // Clear remaining cells on this row to prevent stale characters
-                        let end_col = area.x + 2 + text.chars().count() as u16;
+                        let end_col = area.x + 2 + text.width() as u16;
                         let right_bound = area.x + area.width.saturating_sub(1);
                         for col in end_col..right_bound {
                             if let Some(cell) = screen.get_mut(screen_row, col) {
@@ -655,7 +686,7 @@ impl Widget for SidebarWidget {
                 }
                 SidebarItem::Skill(name) => {
                     let display = format!("✦ {}", name);
-                    let end_col = area.x + 2 + display.chars().count() as u16;
+                    let end_col = area.x + 2 + display.width() as u16;
                     screen.write_str(
                         screen_row,
                         area.x + 2,
@@ -1087,31 +1118,13 @@ impl SidebarWidget {
 
     /// Format the current directory as a breadcrumb for display.
     fn format_breadcrumb(&self, max_width: usize) -> String {
-        // Show the path relative to workspace root, or just the last 2 components
         let path = &self.structure_cwd;
         let rel = path.strip_prefix(&self.workspace_root).unwrap_or(path);
         let display = rel.to_string_lossy().to_string();
         if display.is_empty() {
             return ".".to_string();
         }
-        // Truncate if too long
-        if display.len() > max_width {
-            let prefix = "…";
-            let avail = max_width.saturating_sub(prefix.len());
-            if avail > 0 {
-                let start = display.len().saturating_sub(avail);
-                // Find char boundary
-                let mut start = start;
-                while start < display.len() && !display.is_char_boundary(start) {
-                    start += 1;
-                }
-                format!("{}{}", prefix, &display[start..])
-            } else {
-                prefix.to_string()
-            }
-        } else {
-            display
-        }
+        truncate_to_width_with_prefix(&display, max_width, "…")
     }
 
     fn draw_section_header(
@@ -1123,7 +1136,7 @@ impl SidebarWidget {
         title: &str,
     ) -> u16 {
         let header = format!("┌─ {} ", title);
-        let header_width = header.chars().count();
+        let header_width = header.width();
         screen.write_str(
             row,
             col,
@@ -1157,7 +1170,7 @@ impl SidebarWidget {
         value: &str,
         value_color: Color,
     ) -> u16 {
-        let label_width = label.chars().count();
+        let label_width = label.width();
         screen.write_str(
             row,
             col,
@@ -1168,11 +1181,7 @@ impl SidebarWidget {
         );
         let value_col = col + label_width as u16 + 1;
         let available = max_width.saturating_sub(label_width + 1);
-        let display = if value.chars().count() > available {
-            format!("{}…", truncate_str(value, available.saturating_sub(1)))
-        } else {
-            value.to_string()
-        };
+        let display = truncate_with_ellipsis(value, available);
         screen.write_str(
             row,
             value_col,
@@ -1182,7 +1191,7 @@ impl SidebarWidget {
             Style::default(),
         );
         // Clear remaining cells on this row to prevent stale characters
-        let end_col = value_col + display.chars().count() as u16;
+        let end_col = value_col + display.width() as u16;
         let right_bound = col + max_width as u16;
         for c in end_col..right_bound {
             if let Some(cell) = screen.get_mut(row, c) {

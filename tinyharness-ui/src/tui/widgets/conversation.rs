@@ -3,11 +3,13 @@
 // Displays the conversation history in a scrollable pane with
 // color-coded messages, tool call blocks, and thinking chains.
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::tui::cell::{Cell, Color, Style};
 use crate::tui::event::{Event, Key, KeyEvent};
 use crate::tui::layout::Rect;
 use crate::tui::screen::Screen;
-use crate::tui::widget::{Action, Widget, styles, truncate_str};
+use crate::tui::widget::{Action, Widget, styles, truncate_str_width};
 
 /// A single line in the conversation display.
 #[derive(Clone, Debug)]
@@ -288,105 +290,80 @@ impl ConversationWidget {
                 // Show at most 20 lines for a tool result
                 let visible_lines = lines.iter().copied().take(20).collect::<Vec<&str>>();
                 let joined = visible_lines.join("\n");
-                return self.line_height_for_text(&joined, 4, area_width).max(1); // At least 1 row even for empty content
+                return self.line_height_for_text(&joined, area_width, 4, 4).max(1);
             }
             ConversationLine::ToolCall { name, args_summary } => {
-                let header = format!("  ── {}", name);
-                let header_len = header.len();
                 if args_summary.is_empty() {
                     return 1;
                 }
-                // Calculate wrapping for args_summary starting after the header
-                let total_text = if args_summary.is_empty() {
-                    String::new()
-                } else {
-                    args_summary.clone()
-                };
-                return self.line_height_for_text_with_offset(&total_text, header_len, area_width);
+                let header = format!("  ── {}", name);
+                let header_len = header.len();
+                return self.line_height_for_text(args_summary, area_width, header_len, header_len);
             }
             ConversationLine::Question { question, answers } => {
-                // "  ❓ " (4 chars) for question line, plus one line per answer
-                let question_rows = self.line_height_for_text(question, 4, area_width);
+                let question_rows = self.line_height_for_text(question, area_width, 4, 4);
                 let answer_rows: usize = answers
                     .iter()
                     .map(|a| {
-                        // "    N. " prefix = 6 chars for single-digit, 7 for double
                         let prefix_len = if answers.len() >= 10 { 7 } else { 6 };
-                        self.line_height_for_text(a, prefix_len, area_width)
+                        self.line_height_for_text(a, area_width, prefix_len, prefix_len)
                     })
                     .sum();
                 return question_rows + answer_rows;
             }
             ConversationLine::Separator => return 1,
             ConversationLine::ConfirmPrompt { diff_preview, .. } => {
-                // Base prompt line = 1 row
                 let mut rows = 1usize;
-                // Diff preview lines add extra rows
                 if let Some(diff) = diff_preview
                     && !diff.is_empty()
                 {
-                    let _max_content_width = (area_width as usize).saturating_sub(4);
                     for line in diff.lines() {
-                        rows += self.line_height_for_text(line, 4, area_width);
+                        rows += self.line_height_for_text(line, area_width, 4, 4);
                     }
                 }
                 return rows;
             }
         };
 
-        self.line_height_for_text(text, prefix_len, area_width)
+        self.line_height_for_text(text, area_width, prefix_len, prefix_len)
     }
 
-    /// Helper: calculate visual row count for text with a given prefix and area width.
-    fn line_height_for_text(&self, text: &str, prefix_len: usize, area_width: u16) -> usize {
-        if area_width == 0 || text.is_empty() {
-            return 1;
-        }
-
-        let wrap_col = area_width as usize;
-        let mut rows = 1usize;
-        let mut col = prefix_len;
-
-        for ch in text.chars() {
-            if ch == '\n' {
-                rows += 1;
-                col = prefix_len;
-            } else if col >= wrap_col {
-                rows += 1;
-                col = prefix_len + 1;
-            } else {
-                col += 1;
-            }
-        }
-        rows
-    }
-
-    /// Helper: calculate visual row count for text where the first line starts
-    /// at `first_line_offset` (header length) and wrapped lines indent to the
-    /// same offset. This is used for tool call args that wrap.
-    fn line_height_for_text_with_offset(
+    /// Calculate visual row count for text rendered in `area_width` columns.
+    ///
+    /// The first line starts at `start_col`; after a wrap or newline the cursor
+    /// returns to `wrap_indent`. Uses Unicode display widths.
+    fn line_height_for_text(
         &self,
         text: &str,
-        first_line_offset: usize,
         area_width: u16,
+        start_col: usize,
+        wrap_indent: usize,
     ) -> usize {
-        if area_width == 0 || text.is_empty() {
+        if area_width == 0 {
+            return 1;
+        }
+        if text.is_empty() {
             return 1;
         }
 
         let wrap_col = area_width as usize;
         let mut rows = 1usize;
-        let mut col = first_line_offset;
+        let mut col = start_col;
 
         for ch in text.chars() {
+            let w = ch.width().unwrap_or(1);
+            if w == 0 {
+                // Combining mark doesn't take up visual columns
+                continue;
+            }
             if ch == '\n' {
                 rows += 1;
-                col = first_line_offset;
-            } else if col >= wrap_col {
+                col = wrap_indent;
+            } else if col + w > wrap_col {
                 rows += 1;
-                col = first_line_offset + 1;
+                col = wrap_indent + w;
             } else {
-                col += 1;
+                col += w;
             }
         }
         rows
@@ -610,11 +587,11 @@ impl ConversationWidget {
 
                     let display = if content_line.is_empty() {
                         line_prefix.to_string()
-                    } else if content_line.len() > max_content_width {
+                    } else if content_line.width() > max_content_width {
                         format!(
                             "{}{}…",
                             line_prefix,
-                            truncate_str(content_line, max_content_width.saturating_sub(1))
+                            truncate_str_width(content_line, max_content_width.saturating_sub(1))
                         )
                     } else {
                         format!("{}{}", line_prefix, content_line)
@@ -635,7 +612,7 @@ impl ConversationWidget {
                             bg
                         };
                         let fill_end = area.x + area.width.saturating_sub(1);
-                        let end_col = area.x + display.len().min(area.width as usize - 1) as u16;
+                        let end_col = area.x + display.width().min(area.width as usize - 1) as u16;
                         if end_col < fill_end {
                             for c in end_col..fill_end {
                                 if let Some(cell) = screen.get_mut(current_row, c) {
@@ -828,11 +805,11 @@ impl ConversationWidget {
 
                         let display = if line.is_empty() {
                             prefix.to_string()
-                        } else if line.len() > max_content_width {
+                        } else if line.width() > max_content_width {
                             format!(
                                 "{}{}…",
                                 prefix,
-                                truncate_str(line, max_content_width.saturating_sub(1))
+                                truncate_str_width(line, max_content_width.saturating_sub(1))
                             )
                         } else {
                             format!("{}{}", prefix, line)
@@ -850,7 +827,7 @@ impl ConversationWidget {
                         if line_bg != Color::Default {
                             let fill_end = area.x + area.width.saturating_sub(1);
                             let end_col =
-                                area.x + display.len().min(area.width as usize - 1) as u16;
+                                area.x + display.width_cjk().min(area.width as usize - 1) as u16;
                             if end_col < fill_end {
                                 for c in end_col..fill_end {
                                     if let Some(cell) = screen.get_mut(current_row, c) {
@@ -897,8 +874,12 @@ impl ConversationWidget {
                     lines_remaining -= 1;
                 } else if skip_top > 0 {
                     // Skip question lines
-                    let q_height =
-                        self.line_height_for_text(question, question_prefix.len(), area.width);
+                    let q_height = self.line_height_for_text(
+                        question,
+                        area.width,
+                        question_prefix.len(),
+                        question_prefix.len(),
+                    );
                     if skip_top >= q_height {
                         // Question entirely skipped; adjust for remaining skip
                     }
@@ -907,7 +888,12 @@ impl ConversationWidget {
                 // Render answer lines: "    N. <answer>"
                 for (i, answer) in answers.iter().enumerate() {
                     let answer_label = format!("    {}. ", i + 1);
-                    let a_height = self.line_height_for_text(answer, answer_prefix_len, area.width);
+                    let a_height = self.line_height_for_text(
+                        answer,
+                        area.width,
+                        answer_prefix_len,
+                        answer_prefix_len,
+                    );
 
                     if skip_top > 0 {
                         // Still skipping
@@ -996,8 +982,8 @@ impl ConversationWidget {
         }
 
         // Write the warning text (truncate if wider than area)
-        let display = if msg.len() > area.width as usize {
-            truncate_str(&msg, area.width as usize).to_string()
+        let display = if msg.width() > area.width as usize {
+            truncate_str_width(&msg, area.width as usize).to_string()
         } else {
             msg
         };
@@ -1030,8 +1016,8 @@ impl ConversationWidget {
         // Search query text
         let query_text = &self.search.query;
         let max_query_width = area.width.saturating_sub(label.len() as u16 + 20); // reserve for match count
-        let display_query = if query_text.len() > max_query_width as usize {
-            truncate_str(query_text, max_query_width as usize).to_string()
+        let display_query = if query_text.width() > max_query_width as usize {
+            truncate_str_width(query_text, max_query_width as usize).to_string()
         } else {
             query_text.clone()
         };
@@ -1046,11 +1032,11 @@ impl ConversationWidget {
 
         // Cursor indicator (underline the character at cursor position or show block if at end)
         let cursor_col_in_display = if self.search.cursor > query_text.len() {
-            display_query.len()
+            display_query.width()
         } else {
             // Find the display position corresponding to the cursor byte offset
             let before_cursor = &query_text[..self.search.cursor.min(query_text.len())];
-            let display_offset = before_cursor.chars().count();
+            let display_offset = before_cursor.width();
             if display_offset > max_query_width as usize {
                 max_query_width as usize
             } else {
@@ -1165,7 +1151,7 @@ impl ConversationWidget {
                     let prefix = &text[..abs_pos];
                     let prefix_chars: Vec<char> = prefix.chars().collect();
                     let query_chars: Vec<char> = self.search.query.chars().collect();
-                    let query_len = query_chars.len();
+                    let _query_len = query_chars.len();
 
                     // Determine which visual row within this line the match starts on
                     // Use the same wrapping logic as render (simplified)
@@ -1181,11 +1167,12 @@ impl ConversationWidget {
                     // Calculate the visual row offset for the start of the match
                     let mut row_offset = 0usize;
                     let mut col = line_prefix_len;
-                    for _ in prefix_chars.iter() {
-                        col += 1;
-                        if col >= wrap_at {
+                    for ch in prefix_chars.iter() {
+                        let w = ch.width().unwrap_or(1).max(1) as usize;
+                        col += w;
+                        if col > wrap_at {
                             row_offset += 1;
-                            col = line_prefix_len;
+                            col = line_prefix_len + w;
                         }
                     }
 
@@ -1225,7 +1212,7 @@ impl ConversationWidget {
                     };
 
                     let mut highlight_col = area.x + start_col as u16;
-                    for _ in 0..query_len {
+                    for ch in query_chars.iter() {
                         if highlight_col >= area.x + area.width.saturating_sub(1) {
                             break; // Don't overwrite scrollbar
                         }
@@ -1233,7 +1220,7 @@ impl ConversationWidget {
                             cell.fg = highlight_fg;
                             cell.bg = highlight_bg;
                         }
-                        highlight_col += 1;
+                        highlight_col += ch.width().unwrap_or(1).max(1) as u16;
                     }
 
                     match_idx += 1;

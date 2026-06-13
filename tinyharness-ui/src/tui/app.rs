@@ -339,11 +339,20 @@ impl<B: Backend> TuiApp<B> {
         let size = self.terminal.size();
         let total = Rect::new(0, 0, size.cols, size.rows);
 
+        // Input bar grows up to a maximum based on content but always keeps
+        // room for the status bar, the conversation, and (optionally) the
+        // tool output panel.
+        let max_input_rows = (size.rows / 4).clamp(3, 10);
+        let input_rows = self
+            .input_bar
+            .content_height(size.cols)
+            .clamp(2, max_input_rows);
+
         // Vertical split: status bar | main area | input bar
         let vertical = Layout::new(Direction::Vertical).constraints(vec![
-            Constraint::Length(1),       // status bar
-            Constraint::Percentage(100), // main area (takes remaining)
-            Constraint::Length(3),       // input bar
+            Constraint::Length(1),          // status bar
+            Constraint::Percentage(100),    // main area (takes remaining)
+            Constraint::Length(input_rows), // input bar
         ]);
         let vertical_areas = vertical.split(total);
         let status_area = vertical_areas[0];
@@ -366,9 +375,10 @@ impl<B: Backend> TuiApp<B> {
         if self.state.sidebar_visible {
             // Horizontal split of main area: conversation | sidebar
             // The sidebar shares the full main area height (including tool output)
+            let sidebar_width = self.sidebar.desired_width.min(size.cols / 2).max(15);
             let horizontal = Layout::new(Direction::Horizontal).constraints(vec![
-                Constraint::Percentage(100), // conversation
-                Constraint::Length(25),      // sidebar
+                Constraint::Percentage(100),       // conversation
+                Constraint::Length(sidebar_width), // sidebar
             ]);
             let horizontal_areas = horizontal.split(conv_area);
             let inner_conv = horizontal_areas[0];
@@ -1849,7 +1859,8 @@ mod tests {
         let app = make_app();
         let (status, conv, sidebar, input, _main, _tool) = app.compute_layout();
         assert_eq!(status.height, 1);
-        assert_eq!(input.height, 3);
+        // Input bar is now at least 2 rows: top border + one content row.
+        assert!(input.height >= 2);
         assert!(conv.height > 0);
         assert!(sidebar.width > 0);
     }
@@ -2277,7 +2288,7 @@ mod tests {
 
     #[test]
     fn test_tool_output_layout_without_panel() {
-        let mut app = make_app();
+        let app = make_app();
         assert!(!app.tool_output_visible);
         let (.., tool_area) = app.compute_layout();
         assert!(tool_area.is_empty());

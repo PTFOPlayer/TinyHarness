@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+use unicode_width::UnicodeWidthChar;
+
 use super::cell::{Cell, Color, Style};
 use super::layout::Rect;
 
@@ -80,9 +82,37 @@ impl Screen {
         }
     }
 
+    /// Merge a zero-width combining mark into the previous cell.
+    ///
+    /// Does nothing if `col` is at the start of the current rendering run
+    /// or if `in_view` is false.
+    fn merge_combining_mark(
+        &mut self,
+        row: u16,
+        col: u16,
+        start_col: u16,
+        ch: char,
+        fg: Color,
+        bg: Color,
+        style: Style,
+        in_view: bool,
+    ) {
+        if !in_view || col <= start_col {
+            return;
+        }
+        if let Some(prev) = self.get_mut(row, col - 1) {
+            prev.char = ch;
+            prev.fg = fg;
+            prev.bg = bg;
+            prev.style = style;
+        }
+    }
+
     /// Write a string starting at the given position, with the given style.
     ///
-    /// Characters that exceed the screen width are truncated.
+    /// Characters that exceed the screen width are truncated. Each character
+    /// is placed according to its Unicode display width; zero-width chars
+    /// (e.g. combining marks) overwrite the previous cell.
     pub fn write_str(
         &mut self,
         row: u16,
@@ -97,6 +127,11 @@ impl Screen {
             if c >= self.width {
                 break;
             }
+            let width = ch.width().unwrap_or(1);
+            if width == 0 {
+                self.merge_combining_mark(row, c, col, ch, fg, bg, style, c < self.width);
+                continue;
+            }
             self.set_cell(
                 row,
                 c,
@@ -107,14 +142,14 @@ impl Screen {
                     style,
                 },
             );
-            c += 1;
+            c += width as u16;
         }
     }
 
     /// Write a string starting at the given position, truncating or wrapping.
     ///
     /// If `wrap` is true, text wraps to the next line. If false, text is
-    /// truncated at the right edge.
+    /// truncated at the right edge. Uses Unicode display widths.
     pub fn write_str_wrapped(
         &mut self,
         start_row: u16,
@@ -129,7 +164,14 @@ impl Screen {
         let mut col = start_col;
 
         for ch in text.chars() {
-            if col >= self.width {
+            let width = ch.width().unwrap_or(1);
+            if width == 0 {
+                let in_view = col < self.width && row < self.height;
+                self.merge_combining_mark(row, col, start_col, ch, fg, bg, style, in_view);
+                continue;
+            }
+            let width_u16 = width as u16;
+            if col + width_u16 > self.width {
                 if wrap && row + 1 < self.height {
                     row += 1;
                     col = 0;
@@ -152,7 +194,7 @@ impl Screen {
                     style,
                 },
             );
-            col += 1;
+            col += width_u16;
         }
 
         row
@@ -163,7 +205,7 @@ impl Screen {
     ///
     /// `wrap_col` is the maximum column number; text wraps when `col >= wrap_col`.
     /// `max_row` is the maximum row; text stops when `row > max_row`.
-    /// `left_margin` is the column where wrapped lines start.
+    /// `left_margin` is the column where wrapped lines start. Uses Unicode display widths.
     pub fn write_str_wrapped_clipped(
         &mut self,
         start_row: u16,
@@ -180,7 +222,14 @@ impl Screen {
         let mut col = start_col;
 
         for ch in text.chars() {
-            if col >= wrap_col {
+            let width = ch.width().unwrap_or(1);
+            if width == 0 {
+                let in_view = row <= max_row;
+                self.merge_combining_mark(row, col, start_col, ch, fg, bg, style, in_view);
+                continue;
+            }
+            let width_u16 = width as u16;
+            if col + width_u16 > wrap_col {
                 // Wrap to next line
                 row += 1;
                 col = left_margin;
@@ -207,7 +256,7 @@ impl Screen {
                     style,
                 },
             );
-            col += 1;
+            col += width_u16;
         }
 
         row
@@ -219,7 +268,7 @@ impl Screen {
     /// `wrap_col` is the maximum column number; text wraps when `col >= wrap_col`.
     /// `skip_rows` is the number of visual rows to skip before rendering.
     /// `max_row` is the maximum row; text stops when `row > max_row`.
-    /// `left_margin` is the column where wrapped lines start.
+    /// `left_margin` is the column where wrapped lines start. Uses Unicode display widths.
     pub fn write_str_wrapped_skip_clipped(
         &mut self,
         start_row: u16,
@@ -238,8 +287,15 @@ impl Screen {
         let mut screen_row = start_row;
 
         for ch in text.chars() {
+            let width = ch.width().unwrap_or(1);
+            if width == 0 {
+                let in_view = visual_row >= skip_rows && screen_row <= max_row;
+                self.merge_combining_mark(screen_row, col, start_col, ch, fg, bg, style, in_view);
+                continue;
+            }
+            let width_u16 = width as u16;
             // Check if we need to wrap before placing this character
-            if ch != '\n' && col >= wrap_col {
+            if ch != '\n' && col + width_u16 > wrap_col {
                 // Wrap to next visual line
                 visual_row += 1;
                 col = left_margin;
@@ -279,7 +335,7 @@ impl Screen {
                 );
             }
 
-            col += 1;
+            col += width_u16;
         }
     }
 
