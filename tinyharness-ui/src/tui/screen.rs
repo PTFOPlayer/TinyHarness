@@ -972,7 +972,9 @@ mod tests {
         assert!(diff.len() >= 2);
 
         // Check that col 0 has the wide char
-        let col0_op = diff.iter().find(|op| matches!(op, DiffOp::SetCell { col: 0, .. }));
+        let col0_op = diff
+            .iter()
+            .find(|op| matches!(op, DiffOp::SetCell { col: 0, .. }));
         assert!(col0_op.is_some());
         let DiffOp::SetCell { cell: cell0, .. } = col0_op.unwrap() else {
             panic!("expected SetCell");
@@ -981,7 +983,9 @@ mod tests {
         assert!(!cell0.wide);
 
         // Check that col 1 has the continuation marker
-        let col1_op = diff.iter().find(|op| matches!(op, DiffOp::SetCell { col: 1, .. }));
+        let col1_op = diff
+            .iter()
+            .find(|op| matches!(op, DiffOp::SetCell { col: 1, .. }));
         assert!(col1_op.is_some());
         let DiffOp::SetCell { cell: cell1, .. } = col1_op.unwrap() else {
             panic!("expected SetCell");
