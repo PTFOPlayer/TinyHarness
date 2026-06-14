@@ -59,6 +59,30 @@ Alternatively, install via Cargo:
 cargo install --path .
 ```
 
+### Installation (Nix)
+
+A Nix flake is provided for reproducible builds and dev environments.
+
+**Run once without installing:**
+
+```bash
+nix run github:PTFOPlayer/TinyHarness
+```
+
+**Build the package:**
+
+```bash
+cd TinyHarness
+nix build
+./result/bin/tinyharness
+```
+
+**Enter a development shell** (with Rust toolchain, rustfmt, and clippy pre-configured):
+
+```bash
+nix develop
+```
+
 ### Usage
 
 **Ollama** (default):
@@ -418,6 +442,14 @@ cargo test <test_name>         # Run a specific test
 cargo clippy --workspace -- -D warnings   # Lint
 cargo fmt --all -- --check     # Format check
 cargo fmt --all                # Auto-format
+```
+
+If you're using the Nix flake, prefer:
+
+```bash
+nix build                      # Build the package
+nix flake check                # Run all checks (build + fmt + clippy --deny warnings + test)
+nix develop                    # Enter dev shell with cargo/rustfmt/clippy
 ```
 
 ### Verification Steps
