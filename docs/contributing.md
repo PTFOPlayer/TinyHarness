@@ -6,7 +6,7 @@ TinyHarness is a Rust workspace with three crates and a focus on minimal depende
 
 ### Prerequisites
 
-- Rust latest stable (edition 2024)
+- Nix with flakes enabled or Rust latest stable (edition 2024)
 - An LLM backend for testing (Ollama recommended, but not required for library tests)
 
 ### Getting the Code
@@ -17,6 +17,9 @@ cd TinyHarness
 ```
 
 ### First Build
+
+>[!NOTE]
+>If you have Nix, run `nix develop`
 
 ```bash
 cargo build --workspace
@@ -116,6 +119,14 @@ Before submitting a PR, run these in order:
 2. `cargo clippy --workspace -- -D warnings` — no clippy warnings
 3. `cargo test --workspace` — all tests pass
 4. `cargo build` — clean debug build succeeds
+
+If you have Nix installed, the same checks are available as a single command:
+
+```bash
+nix flake check
+```
+
+This runs `cargo fmt --all -- --check`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace` (release), and a release build — i.e. steps 1, 2, 3, and a release variant of step 4. See the [Nix installation section](../../README.md#installation-nix) in the README for setup.
 
 ---
 
