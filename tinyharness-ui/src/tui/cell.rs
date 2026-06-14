@@ -171,12 +171,22 @@ impl Style {
 /// Each cell stores a character, foreground color, background color,
 /// and style flags. When the screen is rendered, only cells that changed
 /// from the previous frame are written to the terminal.
+///
+/// For wide (CJK/fullwidth) characters that occupy 2 columns, the first
+/// column holds the character and `wide` is false. The second column
+/// is a "continuation" cell with `wide = true`, which tells the renderer
+/// not to write it separately (the terminal already rendered it as part
+/// of the wide character).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cell {
     pub char: char,
     pub fg: Color,
     pub bg: Color,
     pub style: Style,
+    /// Whether this cell is the continuation (second column) of a wide
+    /// character. Continuation cells are skipped during rendering because
+    /// the terminal already drew them as part of the wide character.
+    pub wide: bool,
 }
 
 impl Default for Cell {
@@ -186,6 +196,7 @@ impl Default for Cell {
             fg: Color::Default,
             bg: Color::Default,
             style: Style::default(),
+            wide: false,
         }
     }
 }
@@ -206,6 +217,20 @@ impl Cell {
             fg,
             bg,
             style,
+            wide: false,
+        }
+    }
+
+    /// Create a continuation cell for a wide character's second column.
+    /// These cells are skipped during rendering since the terminal
+    /// already drew them as part of the wide character.
+    pub fn wide_continuation(fg: Color, bg: Color, style: Style) -> Self {
+        Cell {
+            char: ' ',
+            fg,
+            bg,
+            style,
+            wide: true,
         }
     }
 }

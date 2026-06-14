@@ -1052,6 +1052,7 @@ impl<B: Backend> TuiApp<B> {
             for col in box_x..box_x + box_width {
                 if let Some(cell) = self.screen.get_mut(row, col) {
                     cell.char = ' ';
+                    cell.wide = false;
                     cell.fg = desc_fg;
                     cell.bg = overlay_bg;
                     cell.style = Style::default();
@@ -1063,30 +1064,35 @@ impl<B: Backend> TuiApp<B> {
         // Top
         if let Some(cell) = self.screen.get_mut(box_y, box_x) {
             cell.char = '┌';
+            cell.wide = false;
             cell.fg = border_fg;
             cell.bg = overlay_bg;
         }
         for col in box_x + 1..box_x + box_width - 1 {
             if let Some(cell) = self.screen.get_mut(box_y, col) {
                 cell.char = '─';
+                cell.wide = false;
                 cell.fg = border_fg;
                 cell.bg = overlay_bg;
             }
         }
         if let Some(cell) = self.screen.get_mut(box_y, box_x + box_width - 1) {
             cell.char = '┐';
+            cell.wide = false;
             cell.fg = border_fg;
             cell.bg = overlay_bg;
         }
         // Bottom
         if let Some(cell) = self.screen.get_mut(box_y + box_height - 1, box_x) {
             cell.char = '└';
+            cell.wide = false;
             cell.fg = border_fg;
             cell.bg = overlay_bg;
         }
         for col in box_x + 1..box_x + box_width - 1 {
             if let Some(cell) = self.screen.get_mut(box_y + box_height - 1, col) {
                 cell.char = '─';
+                cell.wide = false;
                 cell.fg = border_fg;
                 cell.bg = overlay_bg;
             }
@@ -1096,6 +1102,7 @@ impl<B: Backend> TuiApp<B> {
             .get_mut(box_y + box_height - 1, box_x + box_width - 1)
         {
             cell.char = '┘';
+            cell.wide = false;
             cell.fg = border_fg;
             cell.bg = overlay_bg;
         }
@@ -1103,11 +1110,13 @@ impl<B: Backend> TuiApp<B> {
         for row in box_y + 1..box_y + box_height - 1 {
             if let Some(cell) = self.screen.get_mut(row, box_x) {
                 cell.char = '│';
+                cell.wide = false;
                 cell.fg = border_fg;
                 cell.bg = overlay_bg;
             }
             if let Some(cell) = self.screen.get_mut(row, box_x + box_width - 1) {
                 cell.char = '│';
+                cell.wide = false;
                 cell.fg = border_fg;
                 cell.bg = overlay_bg;
             }
@@ -1195,6 +1204,7 @@ impl<B: Backend> TuiApp<B> {
             // (one column inside from the right border │)
             if let Some(cell) = self.screen.get_mut(indicator_y, box_x + box_width - 2) {
                 cell.char = scroll_char;
+                cell.wide = false;
                 cell.fg = border_fg;
                 cell.bg = overlay_bg;
                 cell.style = Style::default();

@@ -131,6 +131,7 @@ impl Widget for StatusBarWidget {
                 fg: styles::STATUS_BAR_FG,
                 bg: styles::STATUS_BAR_BG,
                 style: Style::default(),
+                wide: false,
             },
         );
 

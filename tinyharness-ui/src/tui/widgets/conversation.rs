@@ -978,6 +978,7 @@ impl ConversationWidget {
             if let Some(cell) = screen.get_mut(row, col) {
                 cell.bg = bg;
                 cell.char = ' ';
+                cell.wide = false;
             }
         }
 
@@ -997,6 +998,7 @@ impl ConversationWidget {
             if let Some(cell) = screen.get_mut(row, col) {
                 cell.bg = styles::STATUS_BAR_BG;
                 cell.char = ' ';
+                cell.wide = false;
             }
         }
 
@@ -1253,6 +1255,7 @@ impl ConversationWidget {
         for row in area.y..area.y + area.height {
             if let Some(cell) = screen.get_mut(row, x) {
                 cell.char = '│';
+                cell.wide = false;
                 cell.fg = styles::SCROLLBAR_FG;
                 cell.bg = styles::SCROLLBAR_BG;
             }
@@ -1263,6 +1266,7 @@ impl ConversationWidget {
             if row < area.y + area.height {
                 if let Some(cell) = screen.get_mut(row, x) {
                     cell.char = '█';
+                    cell.wide = false;
                     cell.fg = styles::SCROLLBAR_FG;
                 }
             }

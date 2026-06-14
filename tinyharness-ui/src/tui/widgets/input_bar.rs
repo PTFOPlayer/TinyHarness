@@ -477,6 +477,7 @@ impl Widget for InputBarWidget {
             if self.focused && col < area.x + area.width {
                 if let Some(cell) = screen.get_mut(input_row, col) {
                     cell.char = '█';
+                    cell.wide = false;
                     cell.fg = Color::YELLOW;
                     cell.style = Style::blink();
                 }
@@ -700,6 +701,45 @@ fn render_wrapped_input(
     let prompt_width = first_col.saturating_sub(area_x);
     let rows = input_rows(content, prompt_width, area_x, available_width);
 
+    if rows.is_empty() {
+        // Empty content: draw the cursor at the prompt end on the first row,
+        // then fill the rest with background. We must start clearing at
+        // first_col (after the prompt) on the first row so we don't
+        // overwrite the prompt label that was already drawn.
+        if focused {
+            if let Some(cell) = screen.get_mut(start_row, first_col) {
+                cell.style.underline = true;
+                cell.bg = styles::INPUT_BAR_BG;
+            }
+        }
+
+        // Fill from first_col on the first row (preserving prompt area),
+        // then from area_x on subsequent rows.
+        let prompt_end = first_col + prompt_width.min(available_width);
+        let content_width = available_width.saturating_sub(prompt_width.min(available_width));
+        for c in prompt_end..prompt_end + content_width {
+            if let Some(cell) = screen.get_mut(start_row, c) {
+                cell.char = ' ';
+                cell.wide = false;
+                cell.fg = Color::Default;
+                cell.bg = styles::INPUT_BAR_BG;
+                cell.style = Style::default();
+            }
+        }
+        for r in (start_row + 1)..=max_row {
+            for c in area_x..area_x + available_width {
+                if let Some(cell) = screen.get_mut(r, c) {
+                    cell.char = ' ';
+                    cell.wide = false;
+                    cell.fg = Color::Default;
+                    cell.bg = styles::INPUT_BAR_BG;
+                    cell.style = Style::default();
+                }
+            }
+        }
+        return;
+    }
+
     for (i, row) in rows.iter().enumerate() {
         let screen_row = start_row + i as u16;
         if screen_row > max_row {
@@ -744,6 +784,7 @@ fn render_wrapped_input(
         for c in area_x..area_x + available_width {
             if let Some(cell) = screen.get_mut(r, c) {
                 cell.char = ' ';
+                cell.wide = false;
                 cell.fg = Color::Default;
                 cell.bg = styles::INPUT_BAR_BG;
                 cell.style = Style::default();

@@ -112,7 +112,9 @@ impl Screen {
     ///
     /// Characters that exceed the screen width are truncated. Each character
     /// is placed according to its Unicode display width; zero-width chars
-    /// (e.g. combining marks) overwrite the previous cell.
+    /// (e.g. combining marks) overwrite the previous cell. Wide (CJK/
+    /// fullwidth) characters that occupy 2 columns get a continuation
+    /// cell marked at `col+1` so the renderer can skip it.
     pub fn write_str(
         &mut self,
         row: u16,
@@ -140,8 +142,12 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
+            if width > 1 && c + 1 < self.width {
+                self.set_cell(row, c + 1, Cell::wide_continuation(fg, bg, style));
+            }
             c += width as u16;
         }
     }
@@ -192,8 +198,12 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
+            if width > 1 && col + 1 < self.width {
+                self.set_cell(row, col + 1, Cell::wide_continuation(fg, bg, style));
+            }
             col += width_u16;
         }
 
@@ -254,8 +264,12 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
+            if width > 1 && col + 1 < self.width {
+                self.set_cell(row, col + 1, Cell::wide_continuation(fg, bg, style));
+            }
             col += width_u16;
         }
 
@@ -331,8 +345,12 @@ impl Screen {
                         fg,
                         bg,
                         style,
+                        wide: false,
                     },
                 );
+                if width > 1 && col + 1 < self.width {
+                    self.set_cell(screen_row, col + 1, Cell::wide_continuation(fg, bg, style));
+                }
             }
 
             col += width_u16;
@@ -369,6 +387,7 @@ impl Screen {
                     fg,
                     bg,
                     style: Style::default(),
+                    wide: false,
                 },
             );
         }
@@ -393,6 +412,7 @@ impl Screen {
                     fg,
                     bg,
                     style: Style::default(),
+                    wide: false,
                 },
             );
         }
@@ -418,6 +438,7 @@ impl Screen {
                 fg,
                 bg,
                 style,
+                wide: false,
             },
         );
         self.set_cell(
@@ -428,6 +449,7 @@ impl Screen {
                 fg,
                 bg,
                 style,
+                wide: false,
             },
         );
         self.set_cell(
@@ -438,6 +460,7 @@ impl Screen {
                 fg,
                 bg,
                 style,
+                wide: false,
             },
         );
         self.set_cell(
@@ -448,6 +471,7 @@ impl Screen {
                 fg,
                 bg,
                 style,
+                wide: false,
             },
         );
 
@@ -461,6 +485,7 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
             self.set_cell(
@@ -471,6 +496,7 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
         }
@@ -485,6 +511,7 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
             self.set_cell(
@@ -495,6 +522,7 @@ impl Screen {
                     fg,
                     bg,
                     style,
+                    wide: false,
                 },
             );
         }
@@ -556,7 +584,12 @@ impl Screen {
     ///
     /// This is the core of the efficient rendering: we only write cells
     /// that actually changed, and we batch cursor movements.
+    ///
+    /// Handles wide (CJK/fullwidth) characters correctly by skipping
+    /// continuation cells and tracking display width for cursor position.
     pub fn render_diff(ops: &[DiffOp], width: u16) -> String {
+        use unicode_width::UnicodeWidthChar;
+
         if ops.is_empty() {
             return String::new();
         }
@@ -568,6 +601,12 @@ impl Screen {
         for op in ops {
             match op {
                 DiffOp::SetCell { row, col, cell } => {
+                    // Skip continuation cells — they're rendered as part of
+                    // the wide character in the preceding column
+                    if cell.wide {
+                        continue;
+                    }
+
                     // Move cursor if needed
                     let need_move = last_row != Some(*row) || last_col.unwrap_or(0) + 1 != *col;
 
@@ -584,12 +623,14 @@ impl Screen {
                     // Write character
                     output.push(cell.char);
 
+                    // Track cursor position accounting for display width
+                    let char_width = cell.char.width().unwrap_or(1).max(1) as u16;
                     last_row = Some(*row);
-                    last_col = Some(*col + 1);
+                    last_col = Some(*col + char_width);
 
                     // If we're at the right edge, the cursor won't advance
                     // further, so we need to move it explicitly next time
-                    if *col + 1 >= width {
+                    if *col + char_width >= width {
                         last_col = None;
                     }
                 }
@@ -862,5 +903,89 @@ mod tests {
         );
         assert_eq!(s.get(0, 0).unwrap().char, 'C');
         assert_eq!(s.get(0, 1).unwrap().char, 'D');
+    }
+
+    #[test]
+    fn test_screen_write_str_wide_char() {
+        // Wide (CJK) characters should occupy 2 columns and mark continuation cell
+        let mut s = Screen::new(10, 3);
+        // '一' is a CJK character with display width 2
+        s.write_str(0, 0, "一x", Color::Default, Color::Default, Style::new());
+
+        // The wide char should be at col 0
+        let cell_0 = s.get(0, 0).unwrap();
+        assert_eq!(cell_0.char, '一');
+        assert!(!cell_0.wide);
+
+        // The continuation cell should be at col 1
+        let cell_1 = s.get(0, 1).unwrap();
+        assert!(cell_1.wide);
+
+        // 'x' should be at col 2 (not col 1)
+        let cell_2 = s.get(0, 2).unwrap();
+        assert_eq!(cell_2.char, 'x');
+        assert!(!cell_2.wide);
+    }
+
+    #[test]
+    fn test_screen_write_str_wide_char_at_edge() {
+        // Wide char at the right edge should not overflow
+        let mut s = Screen::new(3, 1);
+        s.write_str(0, 0, "一", Color::Default, Color::Default, Style::new());
+
+        // '一' takes cols 0-1, which fits in width 3
+        assert_eq!(s.get(0, 0).unwrap().char, '一');
+        assert!(s.get(0, 1).unwrap().wide);
+        assert_eq!(s.get(0, 2).unwrap().char, ' '); // empty
+    }
+
+    #[test]
+    fn test_cell_default_not_wide() {
+        let cell = Cell::default();
+        assert!(!cell.wide);
+        assert_eq!(cell.char, ' ');
+    }
+
+    #[test]
+    fn test_cell_wide_continuation() {
+        let cell = Cell::wide_continuation(Color::RED, Color::BLUE, Style::bold());
+        assert!(cell.wide);
+        assert_eq!(cell.char, ' ');
+        assert_eq!(cell.fg, Color::RED);
+        assert_eq!(cell.bg, Color::BLUE);
+        assert!(cell.style.bold);
+    }
+
+    #[test]
+    fn test_screen_diff_wide_char_tracking() {
+        // When a wide char changes, the continuation cell should also be
+        // included in the diff so it gets properly updated.
+        let mut s1 = Screen::new(10, 1);
+        let mut s2 = Screen::new(10, 1);
+        s1.write_str(0, 0, "AB", Color::Default, Color::Default, Style::new());
+        s2.write_str(0, 0, "一x", Color::Default, Color::Default, Style::new());
+
+        let diff = s2.diff_from(&s1);
+
+        // Should have diffs for: col 0 (一 replaces A), col 1 (continuation replaces B), col 2 (x replaces nothing)
+        // At minimum, cols 0 and 1 must differ
+        assert!(diff.len() >= 2);
+
+        // Check that col 0 has the wide char
+        let col0_op = diff.iter().find(|op| matches!(op, DiffOp::SetCell { col: 0, .. }));
+        assert!(col0_op.is_some());
+        let DiffOp::SetCell { cell: cell0, .. } = col0_op.unwrap() else {
+            panic!("expected SetCell");
+        };
+        assert_eq!(cell0.char, '一');
+        assert!(!cell0.wide);
+
+        // Check that col 1 has the continuation marker
+        let col1_op = diff.iter().find(|op| matches!(op, DiffOp::SetCell { col: 1, .. }));
+        assert!(col1_op.is_some());
+        let DiffOp::SetCell { cell: cell1, .. } = col1_op.unwrap() else {
+            panic!("expected SetCell");
+        };
+        assert!(cell1.wide);
     }
 }

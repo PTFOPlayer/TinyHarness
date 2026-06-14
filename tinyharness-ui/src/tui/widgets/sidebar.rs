@@ -396,6 +396,7 @@ impl Widget for SidebarWidget {
                 fg: styles::SIDEBAR_FG,
                 bg: styles::SIDEBAR_BG,
                 style: Style::default(),
+                wide: false,
             },
         );
 
@@ -617,6 +618,7 @@ impl Widget for SidebarWidget {
                     for col in end_col..right_bound {
                         if let Some(cell) = screen.get_mut(screen_row, col) {
                             cell.char = ' ';
+                            cell.wide = false;
                             cell.fg = styles::SIDEBAR_FG;
                             cell.bg = styles::SIDEBAR_BG;
                             cell.style = Style::default();
@@ -642,6 +644,7 @@ impl Widget for SidebarWidget {
                         for col in 0..area.width.saturating_sub(2) {
                             if let Some(cell) = screen.get_mut(screen_row, area.x + 1 + col) {
                                 cell.char = ' ';
+                                cell.wide = false;
                                 cell.fg = sel_fg;
                                 cell.bg = sel_bg;
                                 cell.style = Style::default();
@@ -677,6 +680,7 @@ impl Widget for SidebarWidget {
                         for col in end_col..right_bound {
                             if let Some(cell) = screen.get_mut(screen_row, col) {
                                 cell.char = ' ';
+                                cell.wide = false;
                                 cell.fg = styles::SIDEBAR_FG;
                                 cell.bg = styles::SIDEBAR_BG;
                                 cell.style = Style::default();
@@ -700,6 +704,7 @@ impl Widget for SidebarWidget {
                     for col in end_col..right_bound {
                         if let Some(cell) = screen.get_mut(screen_row, col) {
                             cell.char = ' ';
+                            cell.wide = false;
                             cell.fg = styles::SIDEBAR_FG;
                             cell.bg = styles::SIDEBAR_BG;
                             cell.style = Style::default();
@@ -758,6 +763,7 @@ impl Widget for SidebarWidget {
             for row in sb_top..sb_bottom {
                 if let Some(cell) = screen.get_mut(row, sb_x) {
                     cell.char = '│';
+                    cell.wide = false;
                     cell.fg = styles::SCROLLBAR_FG;
                     cell.bg = styles::SIDEBAR_BG;
                 }
@@ -769,6 +775,7 @@ impl Widget for SidebarWidget {
                 if row < sb_bottom {
                     if let Some(cell) = screen.get_mut(row, sb_x) {
                         cell.char = '█';
+                        cell.wide = false;
                         cell.fg = styles::SCROLLBAR_FG;
                     }
                 }
@@ -1196,6 +1203,7 @@ impl SidebarWidget {
         for c in end_col..right_bound {
             if let Some(cell) = screen.get_mut(row, c) {
                 cell.char = ' ';
+                cell.wide = false;
                 cell.fg = styles::SIDEBAR_FG;
                 cell.bg = styles::SIDEBAR_BG;
                 cell.style = Style::default();
