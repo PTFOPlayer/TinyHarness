@@ -1369,17 +1369,30 @@ mod tests {
         // wide character's primary cell, not the continuation cell.
         let mut s = Screen::new(10, 1);
         // '一' (width 2) + combining acute (U+0301, width 0)
-        s.write_str(0, 0, "一\u{0301}", Color::Default, Color::Default, Style::new());
+        s.write_str(
+            0,
+            0,
+            "一\u{0301}",
+            Color::Default,
+            Color::Default,
+            Style::new(),
+        );
 
         // The combining mark should be in col 0 (the wide char's primary cell),
         // not col 1 (the continuation cell).
         let cell_0 = s.get(0, 0).unwrap();
-        assert_eq!(cell_0.char, '\u{0301}', "combining mark should be in primary cell");
+        assert_eq!(
+            cell_0.char, '\u{0301}',
+            "combining mark should be in primary cell"
+        );
         assert!(!cell_0.wide);
 
         // Col 1 should still be the continuation cell
         let cell_1 = s.get(0, 1).unwrap();
-        assert!(cell_1.wide, "col 1 should still be a wide continuation cell");
+        assert!(
+            cell_1.wide,
+            "col 1 should still be a wide continuation cell"
+        );
     }
 
     #[test]

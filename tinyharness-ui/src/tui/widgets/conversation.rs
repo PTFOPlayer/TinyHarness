@@ -2929,9 +2929,7 @@ mod visual_tests {
         conv.render(area, &mut screen);
 
         // After skipping, the first answer's label "    1. " should be visible.
-        let row_text: String = (0..20u16)
-            .map(|c| screen.get(0, c).unwrap().char)
-            .collect();
+        let row_text: String = (0..20u16).map(|c| screen.get(0, c).unwrap().char).collect();
         assert!(
             row_text.contains("1"),
             "First answer label should be visible after skipping question. Row 0: {:?}",

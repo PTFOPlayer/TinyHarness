@@ -586,11 +586,13 @@ impl Widget for InputBarWidget {
 
             // Draw input content
             let available_width = area.width.saturating_sub(col - area.x);
-            let (display_text, display_offset) = if self.content.width() > available_width as usize {
+            let (display_text, display_offset) = if self.content.width() > available_width as usize
+            {
                 // Content is wider than available — show the tail, snapping to a
                 // char boundary so multi-byte UTF-8 doesn't panic.
                 let target_bytes = self.content.len().saturating_sub(available_width as usize);
-                let start = self.content
+                let start = self
+                    .content
                     .char_indices()
                     .find(|(i, _)| *i >= target_bytes)
                     .map(|(i, _)| i)
@@ -611,7 +613,10 @@ impl Widget for InputBarWidget {
 
             // Draw cursor
             if self.focused {
-                let adjusted_cursor = self.cursor.saturating_sub(display_offset).min(display_text.len());
+                let adjusted_cursor = self
+                    .cursor
+                    .saturating_sub(display_offset)
+                    .min(display_text.len());
                 let before_cursor = &display_text[..adjusted_cursor];
                 let cursor_col = col + before_cursor.width() as u16;
                 if cursor_col < area.x + area.width {
