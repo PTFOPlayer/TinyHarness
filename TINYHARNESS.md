@@ -69,7 +69,7 @@ Three crates in a Cargo workspace:
 ## Testing
 
 - `cargo test --workspace` runs all tests
-- `tinyharness-lib` has good coverage; `tinyharness-ui` and binary crate have limited coverage (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~84 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
 - Use `tempfile` for test isolation; tool tests must not touch the real filesystem
 - Run specific test: `cargo test <test_name>`
 - Run per crate: `cargo test -p tinyharness-lib`, `cargo test -p TinyHarness`, `cargo test -p tinyharness-ui`

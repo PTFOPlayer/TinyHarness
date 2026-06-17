@@ -355,7 +355,7 @@ tinyharness-ui/src/
     ├── cell.rs            Color/style representation for the screen buffer (raw ANSI, no framework)
     ├── event.rs           Event system (keyboard, mouse, paste)
     ├── layout.rs          Rect/constraint-based layout (inspired by ratatui, from scratch)
-    ├── screen.rs          Screen buffer with differential rendering (only changed cells written)
+    ├── screen.rs          Screen buffer with differential rendering, Unicode width support (CJK/combining marks)
     ├── terminal.rs        Raw terminal control, alternate screen, signal handling
     ├── widget.rs          Widget trait, Action enum, shared style helpers
     └── widgets/

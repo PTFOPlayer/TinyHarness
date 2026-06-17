@@ -23,7 +23,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-This compiles all three crates and runs the test suite (~81 tests in `tinyharness-lib` and the binary crate).
+This compiles all three crates and runs the test suite (~450 tests across all crates).
 
 ---
 
@@ -63,7 +63,7 @@ tinyharness-ui/               UI library — terminal output abstractions + expe
 │       ├── cell.rs            Color/style for screen buffer (raw ANSI, no framework)
 │       ├── event.rs           Keyboard/mouse/paste events
 │       ├── layout.rs          Constraint-based layout
-│       ├── screen.rs          Differential rendering screen buffer
+│       ├── screen.rs          Differential rendering screen buffer with Unicode width support
 │       ├── terminal.rs        Raw terminal control, alternate screen
 │       ├── widget.rs          Widget trait, Action enum
 │       └── widgets/           conversation, input_bar, sidebar, spinner, status_bar, tool_output
@@ -169,7 +169,7 @@ Use `serde` + `schemars` for serialization and JSON Schema generation:
 
 - Use `tempfile` for test isolation — tool tests must not touch the real filesystem
 - Test modules go inline: `#[cfg(test)] mod tests { ... }`
-- Library crate has good test coverage; binary and UI crates need more (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~84 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
 
 ### Tool Categories
 
