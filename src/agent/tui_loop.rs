@@ -160,9 +160,9 @@ fn render_signal_result_tui(result: &SignalResult, agent_event_tx: &mpsc::Sender
             error,
         } => {
             if *success {
-                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(
-                    "Conversation compacted successfully.".to_string(),
-                ));
+                // The captured output from execute_compact already includes
+                // the detailed compaction result (message counts, stages, etc.),
+                // so we don't need to send a duplicate success message here.
             } else if let Some(e) = error {
                 let _ = agent_event_tx
                     .send(TuiAgentEvent::Error(format!("Auto-compact failed: {}", e)));
@@ -364,13 +364,19 @@ async fn process_slash_command(
     _interrupted: &Arc<AtomicBool>,
     agent_event_tx: &mpsc::Sender<TuiAgentEvent>,
     last_known_token_usage: &mut Option<tinyharness_lib::provider::TokenUsage>,
-    _context_size: ContextWindowSize,
+    context_size: ContextWindowSize,
 ) {
     match dispatch_command_to_tui(input, ctx, messages, registry, agent_event_tx).await {
         Ok(CommandResult::Ok) => {
             // Update token usage from compaction side-channel
             if let Some(usage) = command_result::apply_ok(ctx, session) {
-                *last_known_token_usage = Some(usage);
+                *last_known_token_usage = Some(usage.clone());
+                // Send updated token count to TUI
+                let _ = agent_event_tx.send(TuiAgentEvent::TokenUpdate {
+                    count: usage.total_tokens as u64,
+                    limit: Some(context_size.tokens() as u64),
+                });
+                send_context_warning_if_needed(usage.total_tokens, context_size, agent_event_tx);
             }
             // Send mode update if it changed
             let _ = agent_event_tx.send(TuiAgentEvent::ModeChanged(ctx.current_mode.to_string()));
@@ -596,6 +602,7 @@ async fn process_user_message(
                 agent_event_tx,
                 user_action_rx,
                 &mut auto_accept,
+                context_size,
             )
             .await;
 
@@ -635,6 +642,7 @@ async fn handle_tui_tool_calls(
     agent_event_tx: &mpsc::Sender<TuiAgentEvent>,
     user_action_rx: &mut mpsc::Receiver<TuiUserAction>,
     auto_accept: &mut bool,
+    context_size: ContextWindowSize,
 ) -> bool {
     if tool_calls.is_empty() {
         return false;
@@ -715,10 +723,49 @@ async fn handle_tui_tool_calls(
                         );
                     }
                     _ => {
+                        // Swap ctx.output with a capture writer so that any
+                        // output produced by the signal handler (e.g.
+                        // auto_compact's compaction progress) is captured
+                        // instead of going to raw stdout (which is invisible
+                        // and corrupts the TUI in alternate-screen mode).
+                        let capture = CaptureWriter::new();
+                        let captured_output = Output::new(Box::new(capture.clone()));
+                        let original_output = std::mem::replace(&mut ctx.output, captured_output);
+
                         let result =
                             signal::handle_signal_event(&event, messages, session, ctx, provider)
                                 .await;
+
+                        // Restore the original output writer
+                        ctx.output = original_output;
+
+                        // Send any captured output as a system message
+                        let output_bytes = capture.take_output();
+                        let output_text = String::from_utf8_lossy(&output_bytes);
+                        let stripped = strip_ansi_sgr(&output_text);
+                        if !stripped.is_empty() {
+                            let _ = agent_event_tx
+                                .send(TuiAgentEvent::SystemMessage(stripped.to_string()));
+                        }
+
                         render_signal_result_tui(&result, agent_event_tx);
+
+                        // If auto_compact succeeded, send updated token usage
+                        // to the TUI so the status bar refreshes.
+                        if matches!(result, SignalResult::AutoCompact { success: true, .. })
+                            && let Some(usage) = ctx.compaction_token_usage.take()
+                        {
+                            session.set_token_usage(usage.clone());
+                            let _ = agent_event_tx.send(TuiAgentEvent::TokenUpdate {
+                                count: usage.total_tokens as u64,
+                                limit: Some(context_size.tokens() as u64),
+                            });
+                            send_context_warning_if_needed(
+                                usage.total_tokens,
+                                context_size,
+                                agent_event_tx,
+                            );
+                        }
                     }
                 }
             } else {

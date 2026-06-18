@@ -1,6 +1,6 @@
 [package]
 name = "tinyharness-lib"
-version = "0.2.0"
+version = "0.2.1"
 license = "MIT"
 description = "core liblary for tinyharness"
 edition = "2024"
