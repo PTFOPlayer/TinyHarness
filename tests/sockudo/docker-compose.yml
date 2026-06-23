@@ -1,0 +1,59 @@
+# =============================================================================
+# Sockudo AI Transport — Integration Test Stack
+# =============================================================================
+# Starts ONLY Sockudo (with AI Transport enabled).
+# Ollama is expected to be running locally on the host at port 11434.
+# Uses in-memory drivers (no Redis required) for lightweight testing.
+#
+# Usage:
+#   ./run-test.sh up     — start Sockudo
+#   ./run-test.sh test   — run smoke tests against the live stack
+#   ./run-test.sh down   — stop and remove containers
+#   ./run-test.sh run    — up + test + down (full cycle)
+# =============================================================================
+
+services:
+  sockudo:
+    image: sockudo/sockudo:4.6.0
+    container_name: tinyharness-sockudo
+    restart: "no"
+    environment:
+      RUST_LOG: "info,sockudo=debug"
+      DEBUG: "false"
+      HOST: "0.0.0.0"
+      PORT: "6001"
+      # Override any baked-in SOCKUDO_DEFAULT_APP_* to ensure test-app is registered
+      SOCKUDO_DEFAULT_APP_ID: "test-app"
+      SOCKUDO_DEFAULT_APP_KEY: "test-key"
+      SOCKUDO_DEFAULT_APP_SECRET: "test-secret"
+      SOCKUDO_DEFAULT_APP_ENABLED: "true"
+      SOCKUDO_ENABLE_CLIENT_MESSAGES: "true"
+      # Per-app event payload limit (KB). Default is 100 which rejects large
+      # AI Transport events. Must match config.toml's [event_limits].
+      SOCKUDO_DEFAULT_APP_MAX_EVENT_PAYLOAD_IN_KB: "10240"
+      # WebSocket payload limit (KB). Default is 64 which can also block large messages.
+      WEBSOCKET_MAX_PAYLOAD_KB: "10240"
+    ports:
+      - "6001:6001"
+      - "9601:9601"
+    volumes:
+      # The :z suffix relabels the mounted files for SELinux container access.
+      # Without it, SELinux (enforcing mode) blocks the sockudo user from reading
+      # config.toml, causing "Permission denied (os error 13)" and the server
+      # falls back to defaults (no AI Transport enabled).
+      - ./config:/app/config:ro,z
+    # Override the image's default CMD which uses config.json — we need config.toml
+    # so AI Transport and our test app are properly configured.
+    command: ["sockudo", "--config", "/app/config/config.toml"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:6001/up/test-app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - tinyharness-test
+
+networks:
+  tinyharness-test:
+    driver: bridge

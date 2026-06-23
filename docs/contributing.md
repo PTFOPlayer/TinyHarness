@@ -42,7 +42,7 @@ TinyHarness/                  Binary crate — CLI, agent loop, slash commands
 tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rustyline
 ├── src/
 │   ├── lib.rs                Re-exports all public types
-│   ├── provider/             Provider trait + Ollama/llama.cpp/vLLM impls
+│   ├── provider/             Provider trait + Ollama/llama.cpp/vLLM/Sockudo impls
 │   ├── tools/                15 tools + ToolManager with mode filtering
 │   ├── config/mod.rs         Settings, project settings, prompt management
 │   ├── context.rs            Workspace detection, instruction file discovery
@@ -70,6 +70,16 @@ tinyharness-ui/               UI library — terminal output abstractions + expe
 │       ├── terminal.rs        Raw terminal control, alternate screen
 │       ├── widget.rs          Widget trait, Action enum
 │       └── widgets/           conversation, input_bar, sidebar, spinner, status_bar, tool_output
+│
+docs/examples/                Example code (not part of Cargo workspace)
+└── sockudo-worker/           ⚠️ Example Sockudo AI Transport worker bridge
+    ├── src/
+    │   ├── main.rs           Binary entry point (clap CLI, env vars)
+    │   ├── lib.rs            Module declarations + re-exports
+    │   ├── auth.rs           Pusher-style HMAC-SHA256 signed HTTP requests
+    │   ├── ollama.rs         Streaming Ollama chat client (NDJSON over bytes_stream)
+    │   └── worker.rs         WebSocket connection, ai-input handling, versioned message publishing
+    └── Cargo.toml            Standalone crate (not in workspace)
 │
 docs/                         User-facing documentation
 └── todo/                     Enhancement tracking (local only, not committed)
@@ -273,6 +283,8 @@ pub fn handle_my_command(ctx: &mut CommandContext, _args: &[&str]) -> CommandRes
 3. Add to `ProviderKind` enum in `config/mod.rs`
 4. Add CLI flag in `main.rs`
 5. Add provider creation in `src/agent/setup.rs`
+6. If the provider requires credentials (like Sockudo), add fields to `Settings` and handle them in setup
+7. If the provider needs a separate bridge/worker process (like Sockudo), create a standalone example crate (see `docs/examples/sockudo-worker/` for reference)
 
 ### Modifying Settings
 
@@ -287,6 +299,7 @@ pub fn handle_my_command(ctx: &mut CommandContext, _args: &[&str]) -> CommandRes
 
 - **Code questions**: Look at existing patterns — most modules follow consistent idioms
 - **Architecture**: Read `TINYHARNESS.md` (the project's own instructions) and the module overview above
+- **Sockudo provider**: ⚠️ Highly experimental — see [Configuration Guide](configuration.md#sockudo-provider-experimental) for setup and limitations
 - **Planned work**: Check `todo/todo.md` and `todo/<number>-*.md` for tracked enhancements
 - **Tool docs**: See [Tools Reference](tools-reference.md) for tool schemas and behavior
 - **Configuration**: See [Configuration Guide](configuration.md) for settings and paths

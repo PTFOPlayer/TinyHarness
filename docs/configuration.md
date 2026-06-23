@@ -45,7 +45,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `last_provider` | string | `"ollama"` | Last used provider: `"ollama"`, `"llamacpp"`, or `"vllm"` |
+| `last_provider` | string | `"ollama"` | Last used provider: `"ollama"`, `"llamacpp"`, `"vllm"`, or `"sockudo"` |
 | `last_provider_url` | string\|null | `null` | Custom base URL for the provider. Set by `--url` flag or `--config` interactive setup. If `null`, uses the provider's default URL |
 | `last_model` | string\|null | `null` | Last used model name. Set by `/model <name>`. If `null`, the provider auto-selects the first available model |
 
@@ -53,6 +53,37 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 - Ollama: `http://127.0.0.1:11434`
 - llama.cpp: `http://127.0.0.1:8080`
 - vLLM: `http://127.0.0.1:8000`
+- Sockudo: `http://127.0.0.1:6001` (⚠️ highly experimental)
+
+### Sockudo Provider (Experimental)
+
+> ⚠️ **The Sockudo AI Transport provider is highly experimental.** It is not recommended for production use and may have stability issues, incomplete features, or breaking changes without notice.
+
+The Sockudo provider uses a [Sockudo](https://github.com/sockudo/sockudo) WebSocket server's AI Transport feature to communicate with an LLM backend. Unlike the other providers which talk directly to an LLM server, Sockudo requires:
+
+1. A running **Sockudo server** with AI Transport enabled and versioned messages configured.
+2. A **worker bridge** process — a separate binary (example in `docs/examples/sockudo-worker/`) that connects to Sockudo, receives `ai-input` events, calls Ollama for inference, and streams responses back as versioned message mutations.
+
+**Sockudo-specific settings:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sockudo_app_id` | string\|null | `null` | Sockudo app ID. Set via `--config` interactive setup |
+| `sockudo_app_key` | string\|null | `null` | Sockudo app key (used for WebSocket auth) |
+| `sockudo_app_secret` | string\|null | `null` | Sockudo app secret (used for HMAC-SHA256 request signing) |
+
+These credentials must match the Sockudo server's app configuration. For testing, see `tests/sockudo/config/config.toml` and `tests/sockudo/run-test.sh`.
+
+**How it works:**
+1. The provider publishes an `ai-input` event via signed HTTP POST to the Sockudo server.
+2. The worker bridge receives the event, calls Ollama, and publishes the response back as `sockudo:message.create` → `.append` → `.update` events.
+3. The provider subscribes to the response channel via WebSocket and converts streamed events into `ChatMessageResponse` chunks.
+
+**Limitations:**
+- No model list endpoint — `list_models` returns only the selected model or an empty vec
+- Tool calls are passed through but tool support depends on the worker and Ollama model capabilities
+- The provider does not expose retries or think levels (those are Ollama-specific)
+- Requires a running worker bridge process alongside the Sockudo server
 
 ### Mode Setting
 
@@ -247,6 +278,7 @@ All CLI flags override settings:
 | `-o`, `--ollama` | `last_provider = "ollama"` |
 | `-l`, `--llama-cpp` | `last_provider = "llamacpp"` |
 | `-v`, `--vllm` | `last_provider = "vllm"` |
+| `--sockudo` | `last_provider = "sockudo"` (⚠️ experimental) |
 | `-u`, `--url <url>` | `last_provider_url = <url>` |
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
 | `--config` | Runs interactive setup, saves, exits |

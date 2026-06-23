@@ -180,12 +180,17 @@ pub async fn run_agent_loop(
         let session_name = session.meta().name.as_deref().unwrap_or("unnamed");
         let session_suffix = format!(" {DIM}({}){RESET}", session_name);
 
-        // Include current model name next to the mode label
-        let model_name = {
+        // Include current model name next to the mode label.
+        // When no model is known yet (e.g. Sockudo before the first
+        // response), omit the suffix entirely rather than showing a
+        // placeholder like "?".
+        let model_suffix = {
             let p = provider.lock().await;
-            p.current_model().unwrap_or_else(|| "?".to_string())
+            match p.current_model() {
+                Some(name) => format!(" {DIM}{name}{RESET}"),
+                None => String::new(),
+            }
         };
-        let model_suffix = format!(" {DIM}{}{RESET}", model_name);
 
         let prompt = format!(
             "{}{}{}\n{}[{}]{}{}> {}{}",

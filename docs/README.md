@@ -15,6 +15,15 @@
 
 - [Contributing](contributing.md) — project setup, code conventions, PR process
 
+## Provider Guides
+
+| Provider | Status | Notes |
+|----------|--------|-------|
+| Ollama | Stable (default) | Raw SSE streaming, retries, think levels, API key for web tools |
+| llama.cpp | Stable | OpenAI-compatible, shared HTTP/SSE logic |
+| vLLM | Stable | OpenAI-compatible, shared HTTP/SSE logic |
+| Sockudo | ⚠️ Highly experimental | AI Transport via WebSocket, requires a worker bridge (see `docs/examples/sockudo-worker/`) |
+
 ## Quick References
 
 ### By Role
@@ -39,6 +48,7 @@
 | "What tools are available?" | [Tools Reference](tools-reference.md) |
 | "How do I override TINYHARNESS.md discovery?" | [Project Instructions](project-instructions.md#customizing-the-file-list) |
 | "What languages are auto-detected?" | [Language Detection](language-detection.md) |
+| "Is Sockudo production-ready?" | No — see [Configuration Guide](configuration.md#sockudo-provider-experimental) |
 | "How do I contribute?" | [Contributing](contributing.md) |
 
 ## Files and Directories

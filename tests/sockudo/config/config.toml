@@ -1,0 +1,111 @@
+# =============================================================================
+# Sockudo Configuration for AI Transport Testing
+# =============================================================================
+# This config uses in-memory drivers for all backends, making it suitable
+# for lightweight testing without external dependencies (no Redis, no MySQL).
+# =============================================================================
+
+port = 6001
+host = "0.0.0.0"
+debug = true
+# Default is 64 (64KB). AI Transport events with large conversation histories
+# + tool definitions can exceed this, so raise to match [event_limits].
+websocket_max_payload_kb = 10240
+
+[app_manager]
+driver = "memory"
+
+[app_manager.cache]
+enabled = false
+
+[app_manager.array]
+[[app_manager.array.apps]]
+id = "test-app"
+key = "test-key"
+secret = "test-secret"
+enabled = true
+
+[app_manager.array.apps.policy.limits]
+max_connections = 100
+max_client_events_per_second = 1000
+# Per-app event payload limit (in KB). Default is 100 (100KB) which is too
+# small for AI Transport events with large conversation histories + tool
+# definitions. Raise to match the server-level [event_limits] below.
+max_event_payload_in_kb = 10240
+
+[app_manager.array.apps.policy.features]
+enable_client_messages = true
+
+[adapter]
+driver = "local"
+
+[cache]
+driver = "memory"
+
+[queue]
+driver = "memory"
+
+# ── Event Limits ────────────────────────────────────────────────────────────
+# Default max_payload_in_kb is 100 (100KB). AI input events with large
+# conversation histories + tool definitions can exceed this, so raise it.
+[event_limits]
+max_channels_at_once = 100
+max_name_length = 200
+max_payload_in_kb = 10240
+max_batch_size = 10
+
+[rate_limiter]
+enabled = false
+
+[metrics]
+enabled = true
+driver = "prometheus"
+port = 9601
+
+# ── History ─────────────────────────────────────────────────────────────────
+# REQUIRED by ai_transport.enabled — Sockudo validates this at startup.
+[history]
+enabled = true
+backend = "memory"
+retention_window_seconds = 86400
+max_page_size = 100
+writer_shards = 4
+writer_queue_capacity = 1024
+purge_interval_seconds = 300
+purge_batch_size = 1000
+max_purge_per_tick = 100000
+
+# ── Versioned Messages ──────────────────────────────────────────────────────
+# REQUIRED by ai_transport — enables sockudo:message.create|append|update events
+[versioned_messages]
+enabled = true
+driver = "memory"
+max_page_size = 100
+retention_window_seconds = 86400
+purge_interval_seconds = 300
+purge_batch_size = 1000
+max_purge_per_tick = 100000
+
+# ── AI Transport ───────────────────────────────────────────────────────────
+# Lets clients publish ai-input events via HTTP and receive ai-output
+# responses via WebSocket subscription. Sockudo forwards the input to the
+# configured LLM backend (Ollama) and streams the response back as
+# versioned message mutations.
+
+[ai_transport]
+enabled = true
+max_accumulated_message_bytes = 1048576
+max_appends_per_message = 4096
+max_open_streaming_messages_per_channel = 1024
+
+[[ai_transport.channels]]
+prefix = "ai-"
+
+[ai_transport.rollup]
+enabled = true
+default_window_ms = 40
+min_window_ms = 0
+max_window_ms = 500
+orphan_ttl_ms = 60000
+wheel_tick_ms = 5
+shards = 64

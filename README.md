@@ -6,7 +6,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 
 ## Features
 
-- **Pluggable Providers**: Ollama, llama.cpp, vLLM, and any OpenAI-compatible API. Swap backends without changing application code. Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
+- **Pluggable Providers**: Ollama, llama.cpp, vLLM, and any OpenAI-compatible API. Swap backends without changing application code. Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels. ⚠️ Sockudo AI Transport is also supported as a highly experimental backend — it requires a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`).
 - **Tool System**: 15 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `web_search`, `web_fetch`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, `screenshot`, plus the built-in `read` image loader for multimodal models).
 - **Agent Modes**: Four modes — `casual` (web-only), `planning` (read-only + signals), `agent` (full access), and `research` (web-focused) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
 - **Skills**: Pluggable SKILL.md modules discovered from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`. Invokable by the AI via `invoke_skill` or by the user via `/use <name>`. Supports YAML frontmatter with name, description, compatibility, licensing, and model-invocation controls.
@@ -32,6 +32,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
   - [Ollama](https://ollama.com/) (default)
   - [llama.cpp](https://github.com/ggml-org/llama.cpp) server
   - [vLLM](https://github.com/vllm-project/vllm)
+  - [Sockudo](https://github.com/sockudo/sockudo) (⚠️ highly experimental — requires a worker bridge, see `docs/examples/sockudo-worker/`)
 
 ### Installation
 
@@ -103,6 +104,12 @@ tinyharness --vllm
 ```
 Connects to `http://127.0.0.1:8000` by default.
 
+**Sockudo** (⚠️ highly experimental):
+```bash
+tinyharness --sockudo
+```
+Connects to `http://127.0.0.1:6001` by default. Requires a running Sockudo server with AI Transport enabled and a worker bridge process (see `docs/examples/sockudo-worker/`). This backend is not recommended for production use.
+
 A health check runs on startup to verify the provider is reachable. If the saved model is unavailable, the first available model is auto-selected with a warning.
 
 **Custom URL** (works with any provider):
@@ -144,6 +151,7 @@ Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when 
 | `-o`, `--ollama` | Use the Ollama provider (default) |
 | `-l`, `--llama-cpp` | Use the llama.cpp provider |
 | `-v`, `--vllm` | Use the vLLM provider |
+| `--sockudo` | Use the Sockudo AI Transport provider (⚠️ highly experimental) |
 | `-u`, `--url <url>` | Custom base URL for the provider |
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `--config` | Run interactive provider setup, then exit |
@@ -330,6 +338,7 @@ tinyharness-lib/src/
 │   ├── ollama.rs         OllamaProvider — raw SSE streaming, retries, Gemini signatures
 │   ├── llama_cpp.rs      LlamaCppProvider — OpenAI-compatible
 │   ├── vllm.rs           VllmProvider — OpenAI-compatible
+│   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
 │   └── openai_compat.rs  Shared HTTP/SSE logic for OpenAI-compatible backends
 ├── config/mod.rs         Settings persistence (provider, model, mode, API key, safe/denied commands, think type)
 ├── mode.rs               AgentMode enum (casual/planning/agent/research) with customizable .md prompts
@@ -394,6 +403,10 @@ tinyharness-ui/src/
 ### Binary crate (`src/`)
 
 CLI application — argument parsing, agent loop, slash commands, tool dispatch, safety checking.
+
+### Sockudo worker (`docs/examples/sockudo-worker/`)
+
+⚠️ **Highly experimental** — example worker binary that bridges Sockudo AI Transport to Ollama. Connects to a Sockudo server via WebSocket, receives `ai-input` events, calls Ollama for inference, and streams responses back as versioned message mutations. Not part of the Cargo workspace and not required for normal TinyHarness usage with Ollama, llama.cpp, or vLLM. Build it standalone with `cargo build` from within the `docs/examples/sockudo-worker/` directory.
 
 ```
 src/

@@ -234,12 +234,17 @@ pub async fn run_tui_agent_loop(
     let mut last_known_token_usage: Option<tinyharness_lib::provider::TokenUsage> =
         session.meta().token_usage.clone();
 
-    // Send initial state to the TUI
+    // Send initial state to the TUI.
+    // When no model is known yet (e.g. Sockudo before the first
+    // response), don't send a model name — the TUI will display
+    // an empty/placeholder until the first response reports it.
     let model_name = {
         let p = provider.lock().await;
-        p.current_model().unwrap_or_else(|| "unknown".to_string())
+        p.current_model()
     };
-    let _ = agent_event_tx.send(TuiAgentEvent::ModelChanged(model_name));
+    if let Some(name) = model_name {
+        let _ = agent_event_tx.send(TuiAgentEvent::ModelChanged(name));
+    }
     let _ = agent_event_tx.send(TuiAgentEvent::ModeChanged(ctx.current_mode.to_string()));
 
     if let Some(ref usage) = last_known_token_usage {
@@ -567,6 +572,16 @@ async fn process_user_message(
 
         // Finish streaming
         let _ = agent_event_tx.send(TuiAgentEvent::StreamingDone);
+
+        // After streaming, check if the provider's model has been updated
+        // (e.g. Sockudo discovers the actual model from the worker's
+        // response). Notify the TUI so the status bar reflects it.
+        {
+            let p = provider.lock().await;
+            if let Some(model) = p.current_model() {
+                let _ = agent_event_tx.send(TuiAgentEvent::ModelChanged(model));
+            }
+        }
 
         if !received_done || is_error {
             let error_detail = if is_error {

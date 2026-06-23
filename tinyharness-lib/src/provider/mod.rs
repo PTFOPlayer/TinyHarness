@@ -1,6 +1,7 @@
 pub mod llama_cpp;
 pub mod ollama;
 pub mod openai_compat;
+pub mod sockudo;
 pub mod vllm;
 
 use std::fmt::Display;

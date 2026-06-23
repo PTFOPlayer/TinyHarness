@@ -121,6 +121,10 @@ pub fn prompt_for_provider(out: &mut Output) -> Result<ProviderKind, String> {
         out,
         "  {CYAN}3{RESET}) vllm      (default: {GRAY}http://127.0.0.1:8000{RESET})"
     );
+    let _ = writeln!(
+        out,
+        "  {CYAN}4{RESET}) sockudo   (default: {GRAY}http://127.0.0.1:6001{RESET})"
+    );
 
     loop {
         let _ = write!(out, "\n{BOLD}Choice [1]:{RESET} ");
@@ -142,9 +146,12 @@ pub fn prompt_for_provider(out: &mut Output) -> Result<ProviderKind, String> {
         if line == "3" {
             return Ok(ProviderKind::Vllm);
         }
+        if line == "4" {
+            return Ok(ProviderKind::Sockudo);
+        }
         let _ = writeln!(
             out,
-            "{ORANGE}Please enter 1, 2, or 3 (or press Enter for the default).{RESET}"
+            "{ORANGE}Please enter 1, 2, 3, or 4 (or press Enter for the default).{RESET}"
         );
     }
 }
@@ -165,6 +172,7 @@ pub fn prompt_for_url(
                 ProviderKind::Ollama => "ollama",
                 ProviderKind::LlamaCpp => "llama-cpp",
                 ProviderKind::Vllm => "vllm",
+                ProviderKind::Sockudo => "sockudo",
             }
         ));
     }
@@ -213,6 +221,7 @@ pub fn default_url_for(kind: ProviderKind) -> &'static str {
         ProviderKind::Ollama => "http://127.0.0.1:11434",
         ProviderKind::LlamaCpp => "http://127.0.0.1:8080",
         ProviderKind::Vllm => "http://127.0.0.1:8000",
+        ProviderKind::Sockudo => "http://127.0.0.1:6001",
     }
 }
 
@@ -241,6 +250,105 @@ pub fn apply_api_key_choice(choice: ApiKeyChoice) -> bool {
             true
         }
     }
+}
+
+/// Prompt the user for Sockudo app credentials (app_id, app_key, app_secret).
+///
+/// Shows the current stored values and allows the user to keep or change each.
+/// Persists the result to settings.
+fn prompt_for_sockudo_credentials(out: &mut Output) -> Result<(), String> {
+    if !std::io::stdin().is_terminal() {
+        return Err(
+            "Interactive Sockudo credential prompt requires a TTY. Set sockudo_app_id, sockudo_app_key, and sockudo_app_secret in settings.json manually.".to_string(),
+        );
+    }
+
+    let s = load_settings();
+
+    let _ = writeln!(
+        out,
+        "\n{BOLD}Sockudo app credentials:{RESET}\n{GRAY}Required for AI Transport authentication (HMAC-SHA256 signed requests).{RESET}"
+    );
+
+    // App ID
+    let current_id = s.sockudo_app_id.as_deref().unwrap_or("(not set)");
+    let _ = write!(
+        out,
+        "\n{BOLD}App ID [{GRAY}{current_id}{RESET}{BOLD}]:{RESET} "
+    );
+    let _ = out.flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => return Err("stdin closed".to_string()),
+        Ok(_) => {}
+    }
+    let app_id = {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            s.sockudo_app_id.clone().unwrap_or_default()
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    // App Key
+    let current_key = s.sockudo_app_key.as_deref().unwrap_or("(not set)");
+    let _ = write!(
+        out,
+        "\n{BOLD}App Key [{GRAY}{current_key}{RESET}{BOLD}]:{RESET} "
+    );
+    let _ = out.flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => return Err("stdin closed".to_string()),
+        Ok(_) => {}
+    }
+    let app_key = {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            s.sockudo_app_key.clone().unwrap_or_default()
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    // App Secret
+    let _ = writeln!(
+        out,
+        "\n{ORANGE}Note:{RESET} the secret will be visible while you type."
+    );
+    let current_secret = mask_api_key(s.sockudo_app_secret.as_ref());
+    let _ = write!(
+        out,
+        "{BOLD}App Secret [{GRAY}{current_secret}{RESET}{BOLD}]:{RESET} "
+    );
+    let _ = out.flush();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => return Err("stdin closed".to_string()),
+        Ok(_) => {}
+    }
+    let app_secret = {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            s.sockudo_app_secret.clone().unwrap_or_default()
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    // Save to settings
+    let mut s = load_settings();
+    s.sockudo_app_id = Some(app_id);
+    s.sockudo_app_key = Some(app_key);
+    s.sockudo_app_secret = Some(app_secret);
+    save_settings(&s);
+
+    let _ = writeln!(
+        out,
+        "{GREEN}✔{RESET} {BOLD}Sockudo credentials saved.{RESET}"
+    );
+    Ok(())
 }
 
 /// Run the full interactive setup flow used by `--config`.
@@ -274,6 +382,11 @@ pub fn interactive_setup(out: &mut Output) -> Result<SetupResult, String> {
         }
     }
 
+    // Sockudo needs app credentials (app_id, app_key, app_secret).
+    if matches!(kind, ProviderKind::Sockudo) {
+        prompt_for_sockudo_credentials(out)?;
+    }
+
     let _ = writeln!(
         out,
         "\n{GRAY}Saved to settings. Run tinyharness to start.{RESET}"
@@ -301,6 +414,10 @@ mod tests {
             "http://127.0.0.1:8080"
         );
         assert_eq!(default_url_for(ProviderKind::Vllm), "http://127.0.0.1:8000");
+        assert_eq!(
+            default_url_for(ProviderKind::Sockudo),
+            "http://127.0.0.1:6001"
+        );
     }
 
     #[test]
@@ -341,6 +458,10 @@ mod tests {
         assert_eq!(
             resolve_url(ProviderKind::Vllm, "", &s),
             "http://127.0.0.1:8000"
+        );
+        assert_eq!(
+            resolve_url(ProviderKind::Sockudo, "", &s),
+            "http://127.0.0.1:6001"
         );
     }
 

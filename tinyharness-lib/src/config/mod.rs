@@ -241,6 +241,7 @@ pub enum ProviderKind {
     Ollama,
     LlamaCpp,
     Vllm,
+    Sockudo,
 }
 
 impl fmt::Display for ProviderKind {
@@ -249,6 +250,7 @@ impl fmt::Display for ProviderKind {
             ProviderKind::Ollama => f.write_str("ollama"),
             ProviderKind::LlamaCpp => f.write_str("llama.cpp"),
             ProviderKind::Vllm => f.write_str("vllm"),
+            ProviderKind::Sockudo => f.write_str("sockudo"),
         }
     }
 }
@@ -261,6 +263,7 @@ impl FromStr for ProviderKind {
             "ollama" => Ok(ProviderKind::Ollama),
             "llama.cpp" | "llamacpp" | "llama_cpp" => Ok(ProviderKind::LlamaCpp),
             "vllm" => Ok(ProviderKind::Vllm),
+            "sockudo" => Ok(ProviderKind::Sockudo),
             _ => Err(format!("Unknown provider '{}'", s)),
         }
     }
@@ -326,6 +329,15 @@ pub struct Settings {
     pub last_model: Option<String>,
     pub preferred_mode: AgentMode,
     pub ollama_api_key: Option<String>,
+    /// Sockudo app ID for the AI Transport provider.
+    #[serde(default)]
+    pub sockudo_app_id: Option<String>,
+    /// Sockudo app key (used as auth_key in signed API requests and WebSocket URL).
+    #[serde(default)]
+    pub sockudo_app_key: Option<String>,
+    /// Sockudo app secret (used to sign API requests via HMAC-SHA256).
+    #[serde(default)]
+    pub sockudo_app_secret: Option<String>,
     /// Timeout in seconds for Ollama requests (default: 5)
     pub ollama_timeout_secs: u64,
     /// Maximum number of retries for Ollama requests (default: 3)
@@ -359,6 +371,9 @@ impl Default for Settings {
             last_model: None,
             preferred_mode: AgentMode::Casual,
             ollama_api_key: None,
+            sockudo_app_id: None,
+            sockudo_app_key: None,
+            sockudo_app_secret: None,
             ollama_timeout_secs: 5,
             ollama_max_retries: 3,
             ollama_think_type: OllamaThinkType::Medium,
