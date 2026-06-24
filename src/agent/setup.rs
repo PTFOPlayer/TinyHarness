@@ -536,7 +536,10 @@ mod tests {
             openai_compat_api_key: Some("sk-settings".to_string()),
             ..Settings::default()
         };
-        assert_eq!(resolve_api_key("", &s), Some("sk-settings".to_string()));
+        assert_eq!(
+            resolve_api_key_pure("", &s),
+            Some("sk-settings".to_string())
+        );
     }
 
     #[test]
