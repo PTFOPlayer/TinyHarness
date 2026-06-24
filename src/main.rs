@@ -56,6 +56,19 @@ struct Args {
     #[arg(short, long, default_value_t = String::new())]
     url: String,
 
+    /// Bearer token for OpenAI-compatible providers (llama.cpp, vLLM, and any
+    /// server exposing `/v1/chat/completions`). Sent as `Authorization: Bearer
+    /// <key>`. Overrides the saved setting and the `OPENAI_API_KEY` env var.
+    /// Use `--api-key ""` to clear. Has no effect on Ollama or Sockudo.
+    #[arg(long, default_value_t = String::new())]
+    api_key: String,
+
+    /// Skip the provider health check at startup. Useful when the server
+    /// requires a separate scope on `/health`, doesn't expose one, or you
+    /// want the agent to start fast and surface errors on the first request.
+    #[arg(long)]
+    skip_health_check: bool,
+
     /// Continue the most recent session in the current directory.
     #[arg(short, long)]
     r#continue: bool,
@@ -95,11 +108,15 @@ fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
 async fn create_provider(
     kind: ProviderKind,
     url: String,
+    api_key: Option<String>,
+    skip_health_check: bool,
     settings: &Settings,
 ) -> Arc<Mutex<dyn Provider + Send + Sync>> {
     let provider: Arc<Mutex<dyn Provider + Send + Sync>> = match kind {
-        ProviderKind::LlamaCpp => Arc::new(Mutex::new(LlamaCppProvider::new(url))),
-        ProviderKind::Vllm => Arc::new(Mutex::new(VllmProvider::new(url))),
+        ProviderKind::LlamaCpp => {
+            Arc::new(Mutex::new(LlamaCppProvider::with_api_key(url, api_key)))
+        }
+        ProviderKind::Vllm => Arc::new(Mutex::new(VllmProvider::with_api_key(url, api_key))),
         ProviderKind::Ollama => Arc::new(Mutex::new(OllamaProvider::new(
             url,
             settings.ollama_timeout_secs,
@@ -117,7 +134,8 @@ async fn create_provider(
     };
 
     // Run health check for all providers (Ollama included)
-    {
+    // Skipped when the CLI flag or settings flag is set.
+    if !skip_health_check {
         let p = provider.lock().await;
         if let Err(e) = p.health_check().await {
             let mut err_out = Output::stderr();
@@ -127,6 +145,12 @@ async fn create_provider(
             );
             std::process::exit(1);
         }
+    } else {
+        let mut err_out = Output::stderr();
+        let _ = writeln!(
+            err_out,
+            "{BOLD}{kind}:{RESET} Skipping health check (--skip-health-check).",
+        );
     }
 
     provider
@@ -406,7 +430,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.url.clone()
     };
 
-    let provider = create_provider(provider_kind, url.clone(), &settings).await;
+    let api_key = agent_setup::resolve_api_key(&args.api_key, &settings);
+    let skip_hc = args.skip_health_check || settings.skip_health_check;
+    let provider = create_provider(provider_kind, url.clone(), api_key, skip_hc, &settings).await;
 
     // Auto-select model if none is currently set.
     // Sockudo doesn't use a saved model — the worker selects the backend

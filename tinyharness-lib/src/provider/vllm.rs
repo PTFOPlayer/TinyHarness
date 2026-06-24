@@ -11,8 +11,14 @@ pub struct VllmProvider {
 
 impl VllmProvider {
     pub fn new(base_url: String) -> Self {
+        Self::with_api_key(base_url, None)
+    }
+
+    /// Create a new vLLM provider, optionally sending an
+    /// `Authorization: Bearer <api_key>` header on every request.
+    pub fn with_api_key(base_url: String, api_key: Option<String>) -> Self {
         VllmProvider {
-            inner: OpenAiCompatInner::new(base_url),
+            inner: OpenAiCompatInner::with_api_key(base_url, api_key),
         }
     }
 }

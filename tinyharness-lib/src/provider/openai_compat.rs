@@ -13,16 +13,26 @@ use crate::provider::{
 
 /// Shared inner state for OpenAI-compatible providers (llama.cpp, vLLM, etc.).
 ///
-/// Encapsulates the common `{client, base_url, model}` fields and all shared
-/// logic so that provider implementations only need to differ in `list_models()`.
+/// Encapsulates the common `{client, base_url, model, api_key}` fields and all
+/// shared logic so that provider implementations only need to differ in
+/// `list_models()`.
 pub struct OpenAiCompatInner {
     client: Client,
     base_url: String,
     model: Option<String>,
+    /// Optional bearer token sent as `Authorization: Bearer <key>` on every
+    /// request. Used by hosted OpenAI-compatible APIs (e.g. OpenRouter,
+    /// Together, self-hosted gateways) that require authentication.
+    api_key: Option<String>,
 }
 
 impl OpenAiCompatInner {
     pub fn new(base_url: String) -> Self {
+        Self::with_api_key(base_url, None)
+    }
+
+    /// Create a new inner state with an optional bearer token.
+    pub fn with_api_key(base_url: String, api_key: Option<String>) -> Self {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(300))
@@ -32,6 +42,7 @@ impl OpenAiCompatInner {
             client,
             base_url,
             model: None,
+            api_key,
         }
     }
 
@@ -39,8 +50,13 @@ impl OpenAiCompatInner {
     pub fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
         let client = self.client.clone();
+        let api_key = self.api_key.clone();
         Box::pin(async move {
-            match client.get(&url).send().await {
+            let mut req = client.get(&url);
+            if let Some(key) = &api_key {
+                req = req.bearer_auth(key);
+            }
+            match req.send().await {
                 Ok(resp) if resp.status().is_success() => Ok(()),
                 Ok(resp) => Err(format!(
                     "Server returned {}: {}",
@@ -74,8 +90,13 @@ impl OpenAiCompatInner {
         let url = format!("{}/v1/models", self.base_url.trim_end_matches('/'));
         let client = self.client.clone();
         let current_model = self.model.clone();
+        let api_key = self.api_key.clone();
         Box::pin(async move {
-            match client.get(&url).send().await {
+            let mut req = client.get(&url);
+            if let Some(key) = &api_key {
+                req = req.bearer_auth(key);
+            }
+            match req.send().await {
                 Ok(resp) if resp.status().is_success() => {
                     match resp.json::<ModelListResponse>().await {
                         Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
@@ -107,6 +128,7 @@ impl OpenAiCompatInner {
         let openai_tools = tools.into_iter().map(to_openai_tool).collect();
         let client = self.client.clone();
         let chat_url = self.chat_url();
+        let api_key = self.api_key.clone();
 
         let body = ChatRequest {
             model,
@@ -120,7 +142,8 @@ impl OpenAiCompatInner {
 
         // Spawn the streaming work on a background task
         tokio::spawn(async move {
-            let _usage = stream_chat_completions(&client, &chat_url, &body, &send).await;
+            let _usage =
+                stream_chat_completions(&client, &chat_url, &body, api_key.as_deref(), &send).await;
         });
 
         Box::pin(async move { Ok(recv) })
@@ -331,13 +354,21 @@ pub fn to_openai_tool(ti: ToolDefinition) -> OpenAITool {
 /// Stream chat completions from an OpenAI-compatible endpoint.
 /// Returns accumulated tool calls and final content via the sender.
 /// Also returns the token usage if available.
+///
+/// If `api_key` is `Some`, the request includes an
+/// `Authorization: Bearer <key>` header.
 pub async fn stream_chat_completions(
     client: &reqwest::Client,
     url: &str,
     body: &ChatRequest,
+    api_key: Option<&str>,
     send: &tokio::sync::mpsc::Sender<ChatMessageResponse>,
 ) -> Option<crate::provider::TokenUsage> {
-    let response = match client.post(url).json(body).send().await {
+    let mut request = client.post(url).json(body);
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+    let response = match request.send().await {
         Ok(r) => r,
         Err(e) => {
             let _ = send

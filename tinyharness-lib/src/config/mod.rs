@@ -329,6 +329,12 @@ pub struct Settings {
     pub last_model: Option<String>,
     pub preferred_mode: AgentMode,
     pub ollama_api_key: Option<String>,
+    /// API key sent as `Authorization: Bearer <key>` by OpenAI-compatible
+    /// providers (llama.cpp, vLLM, and any server exposing the
+    /// `/v1/chat/completions` endpoint). Set via `--api-key` or
+    /// `OPENAI_API_KEY` env var. Leave `None` for local unauthenticated servers.
+    #[serde(default)]
+    pub openai_compat_api_key: Option<String>,
     /// Sockudo app ID for the AI Transport provider.
     #[serde(default)]
     pub sockudo_app_id: Option<String>,
@@ -350,6 +356,13 @@ pub struct Settings {
     pub context_limit: Option<u32>,
     /// Automatically accept safe read-only commands in the run tool (default: true)
     pub auto_accept_safe_commands: bool,
+    /// Skip the provider health check at startup (default: false).
+    /// Useful for hosted OpenAI-compatible gateways that require a separate
+    /// scope on `/health`, or for self-hosted servers without a `/health`
+    /// endpoint. When true, the agent proceeds straight to model selection
+    /// and reports any connection error on the first real request instead.
+    #[serde(default)]
+    pub skip_health_check: bool,
     /// List of command prefixes considered safe for auto-accept (default: see get_default_safe_commands)
     pub safe_command_prefixes: Option<Vec<String>>,
     /// List of command prefixes that are always denied auto-accept, even if they
@@ -371,6 +384,7 @@ impl Default for Settings {
             last_model: None,
             preferred_mode: AgentMode::Casual,
             ollama_api_key: None,
+            openai_compat_api_key: None,
             sockudo_app_id: None,
             sockudo_app_key: None,
             sockudo_app_secret: None,
@@ -380,6 +394,7 @@ impl Default for Settings {
             show_thinking: false,
             context_limit: None,
             auto_accept_safe_commands: true,
+            skip_health_check: false,
             safe_command_prefixes: None,
             denied_command_prefixes: None,
             project_md_files: None,

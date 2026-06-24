@@ -234,6 +234,38 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
     save_settings(&s);
 }
 
+/// Resolve the bearer token for OpenAI-compatible providers using the
+/// precedence:
+///
+/// 1. `cli_api_key` (the value of `--api-key` if passed; empty string is
+///    treated as "no key requested" and short-circuits to `None`).
+/// 2. `OPENAI_API_KEY` environment variable, if set and non-empty.
+/// 3. `settings.openai_compat_api_key`, if set.
+///
+/// When `cli_api_key` is non-empty it is also persisted to settings so that
+/// subsequent launches pick it up automatically without `--api-key`.
+///
+/// Returns `None` when no key should be sent. The Ollama and Sockudo providers
+/// ignore this value entirely.
+pub fn resolve_api_key(cli_api_key: &str, settings: &Settings) -> Option<String> {
+    if !cli_api_key.is_empty() {
+        let key = cli_api_key.to_string();
+        let mut s = load_settings();
+        s.openai_compat_api_key = Some(key.clone());
+        save_settings(&s);
+        return Some(key);
+    }
+    if let Ok(env_key) = std::env::var("OPENAI_API_KEY")
+        && !env_key.is_empty()
+    {
+        return Some(env_key);
+    }
+    settings
+        .openai_compat_api_key
+        .clone()
+        .filter(|s| !s.is_empty())
+}
+
 /// Persist an API key change based on the user's choice.
 pub fn apply_api_key_choice(choice: ApiKeyChoice) -> bool {
     let mut s = load_settings();
