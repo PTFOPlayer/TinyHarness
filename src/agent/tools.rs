@@ -53,6 +53,7 @@ pub async fn handle_tool_calls<W: Write>(
         role: Role::Assistant,
         content: response_content.to_string(),
         tool_calls: tool_calls.to_vec(),
+        tool_call_id: None,
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
@@ -151,6 +152,7 @@ pub async fn handle_tool_calls<W: Write>(
                     "[Tool denied] The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
                     call.function.name, args_summary
                 ),
+                tool_call_id: None,
                 tool_calls: vec![], images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));

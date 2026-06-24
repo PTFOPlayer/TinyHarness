@@ -800,6 +800,7 @@ fn parse_tool_calls(value: &serde_json::Value) -> Option<Vec<ToolCall>> {
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
             Some(ToolCall {
+                id: None,
                 function: ToolCallFunction {
                     name,
                     arguments,

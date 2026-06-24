@@ -90,6 +90,7 @@ pub async fn handle_signal_event(
                             old_mode, mode, mode
                         ),
                         tool_calls: vec![],
+                        tool_call_id: None,
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -104,6 +105,7 @@ pub async fn handle_signal_event(
                         role: Role::Tool,
                         content: format!("Already in '{}' mode. No change was made.", mode),
                         tool_calls: vec![],
+                        tool_call_id: None,
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -152,6 +154,7 @@ pub async fn handle_signal_event(
                             }
                         ),
                         tool_calls: vec![],
+                        tool_call_id: None,
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -169,6 +172,7 @@ pub async fn handle_signal_event(
                             e
                         ),
                         tool_calls: vec![],
+                        tool_call_id: None,
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -199,6 +203,7 @@ pub async fn handle_signal_event(
                             role: Role::Tool,
                             content: format!("Skill '{}' is already active. Its instructions are already in effect.", name),
                             tool_calls: vec![],
+                            tool_call_id: None,
                             images: vec![],
                         });
                         session.append_message(messages.last().expect("just pushed a message"));
@@ -214,6 +219,7 @@ pub async fn handle_signal_event(
                             role: Role::User,
                             content: format!("/use {}", skill_name),
                             tool_calls: vec![],
+                            tool_call_id: None,
                             images: vec![],
                         });
                         session.append_message(messages.last().expect("just pushed a message"));
@@ -241,6 +247,7 @@ pub async fn handle_signal_event(
                             skill_name, available
                         ),
                         tool_calls: vec![],
+                        tool_call_id: None,
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -282,6 +289,7 @@ pub fn apply_question_answer(
         role: Role::Tool,
         content: result_content,
         tool_calls: vec![],
+        tool_call_id: None,
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
@@ -310,6 +318,7 @@ pub fn apply_question_error(error: String, messages: &mut Vec<Message>, session:
         role: Role::Tool,
         content: error,
         tool_calls: vec![],
+        tool_call_id: None,
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
@@ -328,6 +337,7 @@ pub fn apply_signal_parse_error(
             tool_name
         ),
         tool_calls: vec![],
+        tool_call_id: None,
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));

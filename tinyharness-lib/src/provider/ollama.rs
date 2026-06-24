@@ -389,6 +389,7 @@ impl OllamaChunk {
                     })
                     .map(|s| s.to_string());
                 ToolCall {
+                    id: None,
                     function: ToolCallFunction {
                         name: tc.function.name,
                         arguments: tc.function.arguments,

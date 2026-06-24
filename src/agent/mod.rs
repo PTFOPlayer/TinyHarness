@@ -303,6 +303,7 @@ pub async fn run_agent_loop(
             role: Role::User,
             content: user_input.clone(),
             tool_calls: vec![],
+            tool_call_id: None,
             images: pending_images,
         });
 
@@ -487,6 +488,7 @@ pub async fn run_agent_loop(
                         role: Role::Assistant,
                         content: response_content,
                         tool_calls: vec![],
+                        tool_call_id: None,
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -564,6 +566,7 @@ pub async fn run_agent_loop(
                 role: Role::Assistant,
                 content: response_content,
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));

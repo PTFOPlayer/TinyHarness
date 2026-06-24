@@ -113,12 +113,12 @@ async fn call_llm_summarize(
                        Preserve all technical details: file paths, code snippets, error messages, decisions made, \
                        and current task status. Do NOT add information that was not in the original conversation."
                 .to_string(),
-            tool_calls: vec![], images: vec![],
+            tool_calls: vec![], tool_call_id: None, images: vec![],
         },
         Message {
             role: Role::User,
             content: format!("{}\n\n{}", summarization_prompt, text_to_summarize),
-            tool_calls: vec![], images: vec![],
+            tool_calls: vec![], tool_call_id: None, images: vec![],
         },
     ];
 
@@ -390,6 +390,7 @@ fn reconstruct_messages(
             role: Role::System,
             content: merged_content,
             tool_calls: sys.tool_calls,
+            tool_call_id: sys.tool_call_id,
             images: sys.images,
         });
     }
@@ -420,6 +421,7 @@ mod tests {
             role: Role::User,
             content: long_content,
             tool_calls: vec![],
+            tool_call_id: None,
             images: vec![],
         };
         let formatted = format_messages_for_summary(&[&msg]);
@@ -437,6 +439,7 @@ mod tests {
             role: Role::Assistant,
             content: "Hello world".to_string(),
             tool_calls: vec![],
+            tool_call_id: None,
             images: vec![],
         };
         let formatted = format_messages_for_summary(&[&msg]);
@@ -450,24 +453,28 @@ mod tests {
                 role: Role::System,
                 content: "sys".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "usr".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "ast".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::Tool,
                 content: "tol".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
         ];
@@ -512,6 +519,7 @@ mod tests {
             role: Role::System,
             content: "You are helpful.".to_string(),
             tool_calls: vec![],
+            tool_call_id: None,
             images: vec![],
         };
         let mut messages = vec![
@@ -520,48 +528,56 @@ mod tests {
                 role: Role::User,
                 content: "msg1".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "msg2".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "msg3".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "msg4".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "recent1".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "recent2".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::User,
                 content: "recent3".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
             Message {
                 role: Role::Assistant,
                 content: "recent4".to_string(),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             },
         ];

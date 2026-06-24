@@ -313,14 +313,28 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
                     .tool_calls
                     .into_iter()
                     .enumerate()
-                    .map(|(i, tc)| OpenAIToolCall {
-                        index: i,
-                        id: String::new(),
-                        call_type: "function".to_string(),
-                        function: OpenAIToolCallFunction {
-                            name: tc.function.name,
-                            arguments: tc.function.arguments.to_string(),
-                        },
+                    .map(|(i, tc)| {
+                        // Synthesize a stable id when the upstream provider
+                        // didn't return one (some local / non-OpenAI servers
+                        // omit it). OpenAI requires a non-empty id.
+                        let id = tc
+                            .id
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| format!("call_{}", i));
+                        let args_str = if tc.function.arguments.is_null() {
+                            "{}".to_string()
+                        } else {
+                            tc.function.arguments.to_string()
+                        };
+                        OpenAIToolCall {
+                            index: i,
+                            id,
+                            call_type: "function".to_string(),
+                            function: OpenAIToolCallFunction {
+                                name: tc.function.name,
+                                arguments: args_str,
+                            },
+                        }
                     })
                     .collect();
                 OpenAIMessage {
@@ -331,12 +345,20 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
                 }
             }
         }
-        Role::Tool => OpenAIMessage {
-            role: "tool".to_string(),
-            content: serde_json::Value::String(msg.content),
-            tool_calls: None,
-            tool_call_id: None,
-        },
+        Role::Tool => {
+            // OpenAI requires a non-empty tool_call_id. Fall back to a
+            // deterministic synthetic id when the agent loop didn't set one.
+            let tool_call_id = msg
+                .tool_call_id
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "call_unknown".to_string());
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: serde_json::Value::String(msg.content),
+                tool_calls: None,
+                tool_call_id: Some(tool_call_id),
+            }
+        }
     }
 }
 
@@ -386,6 +408,27 @@ pub async fn stream_chat_completions(
             return None;
         }
     };
+
+    // If the server returned a non-success status, surface the body as an
+    // error instead of feeding it into the SSE parser (which would silently
+    // drop it).
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let _ = send
+            .send(ChatMessageResponse {
+                message: ChatMessage {
+                    content: format!("Error: HTTP {} — {}", status.as_u16(), body),
+                    tool_calls: vec![],
+                    thinking: None,
+                },
+                done: true,
+                is_error: true,
+                usage: None,
+            })
+            .await;
+        return None;
+    }
 
     let mut stream = response.bytes_stream();
     let mut buf = String::new();
@@ -494,6 +537,7 @@ pub async fn stream_chat_completions(
                 let args: serde_json::Value =
                     serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
                 ToolCall {
+                    id: if tc.id.is_empty() { None } else { Some(tc.id) },
                     function: ToolCallFunction {
                         name: tc.function.name,
                         arguments: args,

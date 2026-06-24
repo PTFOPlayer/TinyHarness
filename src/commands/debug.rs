@@ -552,12 +552,14 @@ mod tests {
                 role: Role::Assistant,
                 content: "I'll read that file.".to_string(),
                 tool_calls: vec![ToolCall {
+                    id: None,
                     function: tinyharness_lib::provider::ToolCallFunction {
                         name: "read".to_string(),
                         arguments: serde_json::json!({"path": "/tmp/test.rs"}),
                         thought_signature: None,
                     },
                 }],
+                tool_call_id: None,
                 images: vec![],
             },
             Message::simple(Role::Tool, "file contents here"),

@@ -136,6 +136,7 @@ pub fn apply_skill_use(
                 role: Role::User,
                 content: format!("/use {}", skill_name),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
@@ -175,6 +176,7 @@ pub fn apply_skill_unload(
                 role: Role::User,
                 content: format!("/unload {}", skill_name),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));

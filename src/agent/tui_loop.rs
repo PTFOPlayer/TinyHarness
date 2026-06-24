@@ -444,6 +444,7 @@ async fn process_user_message(
         role: Role::User,
         content: text.to_string(),
         tool_calls: vec![],
+        tool_call_id: None,
         images: pending_images,
     });
 
@@ -556,6 +557,7 @@ async fn process_user_message(
                                 role: Role::Assistant,
                                 content: response_content,
                                 tool_calls: vec![],
+                                tool_call_id: None,
                                 images: vec![],
                             });
                             session.append_message(messages.last().expect("just pushed a message"));
@@ -601,6 +603,7 @@ async fn process_user_message(
                 role: Role::Assistant,
                 content: response_content.clone(),
                 tool_calls: tool_calls.clone(),
+                tool_call_id: None,
                 images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
@@ -634,6 +637,7 @@ async fn process_user_message(
             role: Role::Assistant,
             content: response_content,
             tool_calls: vec![],
+            tool_call_id: None,
             images: vec![],
         });
         session.append_message(messages.last().expect("just pushed a message"));
@@ -858,6 +862,7 @@ async fn handle_tui_tool_calls(
                     call.function.name, args_summary
                 ),
                 tool_calls: vec![],
+                tool_call_id: None,
                 images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));

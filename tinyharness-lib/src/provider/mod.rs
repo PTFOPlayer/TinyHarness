@@ -22,6 +22,13 @@ pub struct ToolDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// OpenAI tool call ID (e.g. `call_abc123`). Required by OpenAI-compatible
+    /// servers when echoing the call back in subsequent assistant messages
+    /// and when building matching `tool` result messages. Some servers generate
+    /// it for us; others (or local models) may not, in which case we fall
+    /// back to a synthetic id at serialization time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub function: ToolCallFunction,
 }
 
@@ -89,10 +96,23 @@ pub struct Message {
     pub role: Role,
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
+    /// OpenAI `tool_call_id` for `Role::Tool` messages — links the result back
+    /// to the originating assistant tool call. Required by OpenAI-compatible
+    /// servers. `None` is allowed for round-trips with providers that don't
+    /// use it, but the OpenAI-compatible serialiser will substitute a
+    /// synthetic id when missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     /// Optional images attached to the message (multimodal models).
     /// Only meaningful for `User` role messages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageAttachment>,
+}
+
+impl Default for Message {
+    fn default() -> Self {
+        Message::simple(Role::User, "")
+    }
 }
 
 impl Message {
@@ -102,6 +122,7 @@ impl Message {
             role,
             content: content.into(),
             tool_calls: vec![],
+            tool_call_id: None,
             images: vec![],
         }
     }

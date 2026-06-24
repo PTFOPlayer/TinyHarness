@@ -82,12 +82,12 @@ pub async fn execute_init(
                        this project. Be specific, concise, and factual. Focus on things an AI cannot infer from \
                        the code alone: build commands, conventions, gotchas, architecture decisions. \
                        Output ONLY the raw markdown content — no code fences, no explanations before or after.".to_string(),
-            tool_calls: vec![], images: vec![],
+            tool_calls: vec![], tool_call_id: None, images: vec![],
         },
         Message {
             role: Role::User,
             content: prompt,
-            tool_calls: vec![], images: vec![],
+            tool_calls: vec![], tool_call_id: None, images: vec![],
         },
     ];
 

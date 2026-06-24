@@ -58,6 +58,7 @@ pub fn batch_tool_results(results: Vec<GenericToolResult>) -> Option<Message> {
             batched_content
         ),
         tool_calls: vec![],
+        tool_call_id: None,
         images: all_images,
     })
 }
