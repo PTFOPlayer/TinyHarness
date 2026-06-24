@@ -743,8 +743,13 @@ fn build_ai_input_opt(
                         .iter()
                         .enumerate()
                         .map(|(i, tc)| {
+                            let id = tc
+                                .id
+                                .clone()
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or_else(|| format!("call-{}", i));
                             serde_json::json!({
-                                "id": format!("call-{}", i),
+                                "id": id,
                                 "type": "function",
                                 "function": {
                                     "name": tc.function.name,
@@ -754,6 +759,13 @@ fn build_ai_input_opt(
                         })
                         .collect::<Vec<_>>()
                 );
+            }
+            // Tool messages must include tool_call_id matching the assistant's tool call
+            if m.role == Role::Tool
+                && let Some(tcid) = &m.tool_call_id
+                && !tcid.is_empty()
+            {
+                obj["tool_call_id"] = serde_json::Value::String(tcid.clone());
             }
             obj
         })
@@ -1265,18 +1277,16 @@ mod tests {
     fn test_build_ai_input_with_tool_call_messages() {
         let mut msg = Message::simple(Role::Assistant, "I'll list files.");
         msg.tool_calls = vec![ToolCall {
-            id: None,
+            id: Some("call-42".to_string()),
             function: ToolCallFunction {
                 name: "ls".to_string(),
                 arguments: serde_json::json!({"path": "/"}),
                 thought_signature: None,
             },
         }];
-        let messages = vec![
-            Message::simple(Role::User, "List /"),
-            msg,
-            Message::simple(Role::Tool, "file1\nfile2"),
-        ];
+        let mut tool_msg = Message::simple(Role::Tool, "file1\nfile2");
+        tool_msg.tool_call_id = Some("call-42".to_string());
+        let messages = vec![Message::simple(Role::User, "List /"), msg, tool_msg];
         let result = build_ai_input("m", &messages, &[]);
         assert_eq!(result["messages"].as_array().unwrap().len(), 3);
         assert_eq!(result["messages"][1]["role"], "assistant");
@@ -1284,9 +1294,11 @@ mod tests {
         // Tool calls must include id and type fields for OpenAI-compatible backends
         let tc = &result["messages"][1]["tool_calls"][0];
         assert_eq!(tc["type"], "function");
-        assert!(tc["id"].as_str().unwrap().starts_with("call-"));
+        assert_eq!(tc["id"], "call-42");
         assert_eq!(tc["function"]["name"], "ls");
         assert_eq!(result["messages"][2]["role"], "tool");
+        // Tool messages must include tool_call_id matching the assistant's tool call
+        assert_eq!(result["messages"][2]["tool_call_id"], "call-42");
     }
 
     #[test]

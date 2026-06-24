@@ -4,13 +4,31 @@
 
 use tinyharness_lib::{image::ImageAttachment, provider::Message};
 
+/// Ensure every `ToolCall` in the slice has a non-empty `id`.
+///
+/// Some providers (Ollama, Sockudo) return tool calls without `id`. OpenAI-
+/// compatible APIs require a non-empty id that matches between the assistant
+/// message and the tool result. This function synthesizes stable ids
+/// (`call_0`, `call_1`, …) for any tool calls that are missing one, mutating
+/// the slice in place.
+pub fn ensure_tool_call_ids(tool_calls: &mut [tinyharness_lib::provider::ToolCall]) {
+    for (i, tc) in tool_calls.iter_mut().enumerate() {
+        if tc.id.as_deref().map(|s| s.is_empty()).unwrap_or(true) {
+            tc.id = Some(format!("call_{}", i));
+        }
+    }
+}
+
 /// Result from executing a generic (non-signal) tool call.
 ///
 /// Used by both CLI and TUI agent loops to track tool execution results
 /// before batching them into a single `Role::Tool` message.
 pub struct GenericToolResult {
-    /// Formatted content for batching into the conversation message.
+    /// Formatted content for the conversation message.
     pub content: String,
+    /// The `tool_call_id` from the originating assistant tool call.
+    /// OpenAI-compatible APIs require this to match the assistant's tool call id.
+    pub tool_call_id: String,
     /// If this was an auditable tool (run/write/edit), the tool name.
     pub audit_tool_name: Option<String>,
     /// For auditable tools: the primary argument (command for "run", path for "write"/"edit").
@@ -23,44 +41,30 @@ pub struct GenericToolResult {
     pub images: Vec<ImageAttachment>,
 }
 
-/// Batch multiple generic tool results into a single `Role::Tool` message.
+/// Convert tool results into individual `Role::Tool` messages, one per result.
 ///
-/// For a single result, the content is used directly. For multiple results,
-/// they're joined with separators and a count header.
+/// OpenAI-compatible APIs require one `Role::Tool` message per tool call, each
+/// with a `tool_call_id` matching the originating assistant tool call.
 ///
-/// Returns `None` if the results list is empty.
-pub fn batch_tool_results(results: Vec<GenericToolResult>) -> Option<Message> {
-    if results.is_empty() {
-        return None;
-    }
-
-    let batched_content = if results.len() == 1 {
-        results[0].content.clone()
-    } else {
-        format!(
-            "Multiple tool results ({} total):\n\n{}",
-            results.len(),
-            results
-                .iter()
-                .map(|r| r.content.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n---\n\n")
-        )
-    };
-
-    // Collect images from all tool results
-    let all_images: Vec<ImageAttachment> = results.into_iter().flat_map(|r| r.images).collect();
-
-    Some(Message {
-        role: tinyharness_lib::provider::Role::Tool,
-        content: format!(
-            "Tool results:\n{}\n\nUse these results to continue helping the user.",
-            batched_content
-        ),
-        tool_calls: vec![],
-        tool_call_id: None,
-        images: all_images,
-    })
+/// Returns an empty vector if the results list is empty.
+pub fn batch_tool_results(results: Vec<GenericToolResult>) -> Vec<Message> {
+    results
+        .into_iter()
+        .map(|r| {
+            // Collect images from this tool result
+            let images = r.images;
+            Message {
+                role: tinyharness_lib::provider::Role::Tool,
+                content: format!(
+                    "Tool results:\n{}\n\nUse these results to continue helping the user.",
+                    r.content
+                ),
+                tool_calls: vec![],
+                tool_call_id: Some(r.tool_call_id),
+                images,
+            }
+        })
+        .collect()
 }
 
 /// Build audit detail for a tool call.

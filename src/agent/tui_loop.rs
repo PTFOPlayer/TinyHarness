@@ -35,8 +35,8 @@ use super::confirm::ConfirmationDecision;
 use super::display::format_args_summary_tui;
 use super::signal::{self, SignalResult};
 use super::tool_result::{
-    GenericToolResult, audit_info_for_tool, batch_tool_results, compute_tool_diff, log_tool_audit,
-    tool_display_content,
+    GenericToolResult, audit_info_for_tool, batch_tool_results, compute_tool_diff,
+    ensure_tool_call_ids, log_tool_audit, tool_display_content,
 };
 
 /// Strip common ANSI SGR escape sequences from a string.
@@ -598,6 +598,10 @@ async fn process_user_message(
 
         // Handle tool calls
         if !tool_calls.is_empty() {
+            // Ensure every tool call has a non-empty id (some providers omit them)
+            let mut tool_calls = tool_calls;
+            ensure_tool_call_ids(&mut tool_calls);
+
             // Push the assistant message with tool calls
             messages.push(Message {
                 role: Role::Assistant,
@@ -699,9 +703,10 @@ async fn handle_tui_tool_calls(
                 // Question signal requires user interaction — handle via TUI channel
                 match &event {
                     SignalEvent::Question { question, answers } => {
+                        let tc_id = call.id.as_deref().unwrap_or("");
                         // Validate question
                         if let Some(error) = signal::validate_question(question, answers) {
-                            signal::apply_question_error(error, messages, session);
+                            signal::apply_question_error(error, messages, session, tc_id);
                             continue;
                         }
 
@@ -738,10 +743,11 @@ async fn handle_tui_tool_calls(
 
                         let is_skip = answer.starts_with("Skipped");
                         signal::apply_question_answer(
-                            question, &answer, is_skip, messages, session,
+                            question, &answer, is_skip, messages, session, tc_id,
                         );
                     }
                     _ => {
+                        let tc_id = call.id.as_deref().unwrap_or("");
                         // Swap ctx.output with a capture writer so that any
                         // output produced by the signal handler (e.g.
                         // auto_compact's compaction progress) is captured
@@ -751,9 +757,10 @@ async fn handle_tui_tool_calls(
                         let captured_output = Output::new(Box::new(capture.clone()));
                         let original_output = std::mem::replace(&mut ctx.output, captured_output);
 
-                        let result =
-                            signal::handle_signal_event(&event, messages, session, ctx, provider)
-                                .await;
+                        let result = signal::handle_signal_event(
+                            &event, messages, session, ctx, provider, tc_id,
+                        )
+                        .await;
 
                         // Restore the original output writer
                         ctx.output = original_output;
@@ -788,7 +795,8 @@ async fn handle_tui_tool_calls(
                     }
                 }
             } else {
-                signal::apply_signal_parse_error(&call.function.name, messages, session);
+                let tc_id = call.id.as_deref().unwrap_or("");
+                signal::apply_signal_parse_error(&call.function.name, messages, session, tc_id);
             }
             continue;
         }
@@ -856,13 +864,13 @@ async fn handle_tui_tool_calls(
             let args_summary =
                 format_args_summary_tui(&call.function.name, &call.function.arguments);
             messages.push(Message {
-                role: Role::System,
+                role: Role::Tool,
                 content: format!(
                     "The user denied the '{}' tool call with arguments: {}",
                     call.function.name, args_summary
                 ),
                 tool_calls: vec![],
-                tool_call_id: None,
+                tool_call_id: call.id.clone(),
                 images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
@@ -905,6 +913,7 @@ async fn handle_tui_tool_calls(
         let (audit_tool_name, audit_detail) = audit_info_for_tool(call);
         generic_tool_results.push(GenericToolResult {
             content: format!("### {} Tool Result\n\n{}", call.function.name, result),
+            tool_call_id: call.id.clone().unwrap_or_default(),
             audit_tool_name,
             audit_detail,
             duration_ms,
@@ -913,8 +922,9 @@ async fn handle_tui_tool_calls(
         });
     }
 
-    // Batch all generic tool results into a single message
-    if let Some(msg) = batch_tool_results(generic_tool_results) {
+    // Push individual tool result messages (one per tool call)
+    let tool_msgs = batch_tool_results(generic_tool_results);
+    for msg in tool_msgs {
         messages.push(msg);
         session.append_message(messages.last().expect("just pushed a message"));
     }

@@ -346,17 +346,15 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
             }
         }
         Role::Tool => {
-            // OpenAI requires a non-empty tool_call_id. Fall back to a
-            // deterministic synthetic id when the agent loop didn't set one.
-            let tool_call_id = msg
-                .tool_call_id
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "call_unknown".to_string());
+            // tool_call_id should have been set by the agent loop. If somehow
+            // missing, skip the field rather than emitting a bogus id that the
+            // server will reject.
+            let tool_call_id = msg.tool_call_id.filter(|s| !s.is_empty());
             OpenAIMessage {
                 role: "tool".to_string(),
                 content: serde_json::Value::String(msg.content),
                 tool_calls: None,
-                tool_call_id: Some(tool_call_id),
+                tool_call_id,
             }
         }
     }

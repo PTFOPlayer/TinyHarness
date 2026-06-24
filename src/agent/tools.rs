@@ -18,7 +18,8 @@ use tinyharness_ui::ui::confirm::Confirmation;
 use super::confirm::ConfirmationDecision;
 use super::signal::{self, SignalResult};
 use super::tool_result::{
-    GenericToolResult, audit_info_for_tool, batch_tool_results, log_tool_audit,
+    GenericToolResult, audit_info_for_tool, batch_tool_results, ensure_tool_call_ids,
+    log_tool_audit,
 };
 
 /// Handle tool calls from the assistant response.
@@ -42,6 +43,14 @@ pub async fn handle_tool_calls<W: Write>(
         return Ok(false);
     }
 
+    // Ensure every tool call has a non-empty id (some providers omit them).
+    // We clone so we can mutate, and use the cloned slice for the rest of the
+    // function so tool_call_ids are consistent between assistant message and
+    // tool result messages.
+    let mut tool_calls: Vec<ToolCall> = tool_calls.to_vec();
+    ensure_tool_call_ids(&mut tool_calls);
+    let tool_calls = tool_calls; // immutable from here
+
     let tool_count = tool_calls.len();
     writeln!(
         stdout,
@@ -52,7 +61,7 @@ pub async fn handle_tool_calls<W: Write>(
     messages.push(Message {
         role: Role::Assistant,
         content: response_content.to_string(),
-        tool_calls: tool_calls.to_vec(),
+        tool_calls: tool_calls.clone(),
         tool_call_id: None,
         images: vec![],
     });
@@ -81,21 +90,24 @@ pub async fn handle_tool_calls<W: Write>(
             if let Some(event) =
                 tool_manager.parse_signal_event(&call.function.name, &call.function.arguments)
             {
+                let tc_id = call.id.as_deref().unwrap_or("");
                 // Question signal requires user interaction — handle it directly
                 // since the shared signal module can't do CLI I/O.
                 match &event {
                     SignalEvent::Question { question, answers } => {
-                        handle_question_cli(question, answers, messages, session, stdout)?;
+                        handle_question_cli(question, answers, messages, session, stdout, tc_id)?;
                     }
                     _ => {
-                        let result =
-                            signal::handle_signal_event(&event, messages, session, ctx, &provider)
-                                .await;
+                        let result = signal::handle_signal_event(
+                            &event, messages, session, ctx, &provider, tc_id,
+                        )
+                        .await;
                         render_signal_result_cli(&result, stdout)?;
                     }
                 }
             } else {
-                signal::apply_signal_parse_error(&call.function.name, messages, session);
+                let tc_id = call.id.as_deref().unwrap_or("");
+                signal::apply_signal_parse_error(&call.function.name, messages, session, tc_id);
             }
             continue;
         }
@@ -110,7 +122,7 @@ pub async fn handle_tool_calls<W: Write>(
 
         // Confirmation step using shared decision logic
         let decision = super::confirm::decide_tool_confirmation(
-            call,
+            &call,
             *auto_accept,
             auto_accept_safe_commands,
             &safe_commands,
@@ -121,7 +133,7 @@ pub async fn handle_tool_calls<W: Write>(
         let (approved, auto_accepted) = match decision {
             ConfirmationDecision::AutoApproved { auto_accepted: aa } => (true, aa),
             ConfirmationDecision::NeedsConfirmation => {
-                match tinyharness_ui::ui::confirm::prompt_tool_confirmation(stdout, call)? {
+                match tinyharness_ui::ui::confirm::prompt_tool_confirmation(stdout, &call)? {
                     Confirmation::No => {
                         stdout.write_all(
                             format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes(),
@@ -147,12 +159,12 @@ pub async fn handle_tool_calls<W: Write>(
         if !approved {
             let args_summary = super::display::format_args_summary(&call.function.arguments);
             messages.push(Message {
-                role: Role::User,
+                role: Role::Tool,
                 content: format!(
                     "[Tool denied] The user denied the '{}' tool call with arguments: {}\n\nTell the user you cannot proceed with that action unless they approve it.",
                     call.function.name, args_summary
                 ),
-                tool_call_id: None,
+                tool_call_id: call.id.clone(),
                 tool_calls: vec![], images: vec![],
             });
             session.append_message(messages.last().expect("just pushed a message"));
@@ -160,22 +172,26 @@ pub async fn handle_tool_calls<W: Write>(
         }
 
         // Generic tool execution — collect result for batching
-        let result = execute_generic_tool(call, tool_manager, stdout, auto_accepted).await;
+        let result = execute_generic_tool(&call, tool_manager, stdout, auto_accepted).await;
 
         // Log to audit if this was an auditable tool (run/write/edit)
         log_tool_audit(
             session.id(),
-            call,
+            &call,
             auto_accepted,
             result.duration_ms,
             result.is_error,
         );
 
-        generic_tool_results.push(result);
+        generic_tool_results.push(GenericToolResult {
+            tool_call_id: call.id.clone().unwrap_or_default(),
+            ..result
+        });
     }
 
-    // Batch all generic tool results into a single message
-    if let Some(msg) = batch_tool_results(generic_tool_results) {
+    // Push individual tool result messages (one per tool call)
+    let tool_msgs = batch_tool_results(generic_tool_results);
+    for msg in tool_msgs {
         messages.push(msg);
         session.append_message(messages.last().expect("just pushed a message"));
     }
@@ -190,10 +206,11 @@ fn handle_question_cli<W: Write>(
     messages: &mut Vec<Message>,
     session: &mut Session,
     stdout: &mut W,
+    tool_call_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Validate
     if let Some(error) = signal::validate_question(question, answers) {
-        signal::apply_question_error(error, messages, session);
+        signal::apply_question_error(error, messages, session, tool_call_id);
         return Ok(());
     }
 
@@ -271,7 +288,14 @@ fn handle_question_cli<W: Write>(
     }
     stdout.flush()?;
 
-    signal::apply_question_answer(question, &selected_answer, is_skip, messages, session);
+    signal::apply_question_answer(
+        question,
+        &selected_answer,
+        is_skip,
+        messages,
+        session,
+        tool_call_id,
+    );
     Ok(())
 }
 
@@ -585,6 +609,7 @@ async fn execute_generic_tool<W: Write>(
 
     GenericToolResult {
         content: format!("### {} Tool Result\n\n{}", call.function.name, result),
+        tool_call_id: String::new(), // set by caller
         audit_tool_name,
         audit_detail,
         duration_ms,

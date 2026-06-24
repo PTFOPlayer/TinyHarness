@@ -76,6 +76,7 @@ pub async fn handle_signal_event(
     session: &mut Session,
     ctx: &mut CommandContext,
     provider: &std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
+    tool_call_id: &str,
 ) -> SignalResult {
     match event {
         SignalEvent::SwitchMode { mode } => {
@@ -90,7 +91,7 @@ pub async fn handle_signal_event(
                             old_mode, mode, mode
                         ),
                         tool_calls: vec![],
-                        tool_call_id: None,
+                        tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -105,7 +106,7 @@ pub async fn handle_signal_event(
                         role: Role::Tool,
                         content: format!("Already in '{}' mode. No change was made.", mode),
                         tool_calls: vec![],
-                        tool_call_id: None,
+                        tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -125,7 +126,7 @@ pub async fn handle_signal_event(
             // otherwise return a marker result indicating the caller should
             // handle the question.
             if let Some(error) = validate_question(question, answers) {
-                apply_question_error(error, messages, session);
+                apply_question_error(error, messages, session, tool_call_id);
             }
             // The caller should handle the question before calling this function.
             // This branch should never be reached in practice.
@@ -154,7 +155,7 @@ pub async fn handle_signal_event(
                             }
                         ),
                         tool_calls: vec![],
-                        tool_call_id: None,
+                        tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -172,7 +173,7 @@ pub async fn handle_signal_event(
                             e
                         ),
                         tool_calls: vec![],
-                        tool_call_id: None,
+                        tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -203,7 +204,7 @@ pub async fn handle_signal_event(
                             role: Role::Tool,
                             content: format!("Skill '{}' is already active. Its instructions are already in effect.", name),
                             tool_calls: vec![],
-                            tool_call_id: None,
+                            tool_call_id: Some(tool_call_id.to_string()),
                             images: vec![],
                         });
                         session.append_message(messages.last().expect("just pushed a message"));
@@ -247,7 +248,7 @@ pub async fn handle_signal_event(
                             skill_name, available
                         ),
                         tool_calls: vec![],
-                        tool_call_id: None,
+                        tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
@@ -273,6 +274,7 @@ pub fn apply_question_answer(
     is_skip: bool,
     messages: &mut Vec<Message>,
     session: &mut Session,
+    tool_call_id: &str,
 ) {
     let result_content = if is_skip {
         format!(
@@ -289,7 +291,7 @@ pub fn apply_question_answer(
         role: Role::Tool,
         content: result_content,
         tool_calls: vec![],
-        tool_call_id: None,
+        tool_call_id: Some(tool_call_id.to_string()),
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
@@ -313,12 +315,17 @@ pub fn validate_question(question: &str, answers: &[String]) -> Option<String> {
 }
 
 /// Apply validation error for question signal as a message.
-pub fn apply_question_error(error: String, messages: &mut Vec<Message>, session: &mut Session) {
+pub fn apply_question_error(
+    error: String,
+    messages: &mut Vec<Message>,
+    session: &mut Session,
+    tool_call_id: &str,
+) {
     messages.push(Message {
         role: Role::Tool,
         content: error,
         tool_calls: vec![],
-        tool_call_id: None,
+        tool_call_id: Some(tool_call_id.to_string()),
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));
@@ -329,6 +336,7 @@ pub fn apply_signal_parse_error(
     tool_name: &str,
     messages: &mut Vec<Message>,
     session: &mut Session,
+    tool_call_id: &str,
 ) {
     messages.push(Message {
         role: Role::Tool,
@@ -337,7 +345,7 @@ pub fn apply_signal_parse_error(
             tool_name
         ),
         tool_calls: vec![],
-        tool_call_id: None,
+        tool_call_id: Some(tool_call_id.to_string()),
         images: vec![],
     });
     session.append_message(messages.last().expect("just pushed a message"));

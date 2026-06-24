@@ -451,8 +451,10 @@ async fn stream_ollama_chat(
             serde_json::Value::Array(arr) => {
                 // Fix 2: Add "name" field to tool result messages by tracking
                 // tool_calls from the most recent assistant message.
+                // Also inject "tool_call_id" for OpenAI-compatible backends.
                 // Fix 3: Re-inject thought_signatures into assistant tool_calls.
                 let mut prev_tool_names: Vec<String> = Vec::new();
+                let mut prev_tool_ids: Vec<String> = Vec::new();
                 let mut ts_idx: usize = 0;
                 for msg in arr.iter_mut() {
                     if let serde_json::Value::Object(msg_map) = msg {
@@ -460,6 +462,7 @@ async fn stream_ollama_chat(
                         match role {
                             "assistant" => {
                                 prev_tool_names.clear();
+                                prev_tool_ids.clear();
                                 if let Some(tcs) = msg_map.get_mut("tool_calls")
                                     && let Some(tc_arr) = tcs.as_array_mut()
                                 {
@@ -479,8 +482,8 @@ async fn stream_ollama_chat(
                                     }
                                     ts_idx += 1;
 
-                                    // Track tool names for Fix 2
-                                    for tc in tc_arr.iter() {
+                                    // Track tool names and ids for Fix 2
+                                    for (i, tc) in tc_arr.iter().enumerate() {
                                         if let Some(name) = tc
                                             .get("function")
                                             .and_then(|f| f.get("name"))
@@ -488,18 +491,36 @@ async fn stream_ollama_chat(
                                         {
                                             prev_tool_names.push(name.to_string());
                                         }
+                                        // Track tool call ids (synthesize if missing)
+                                        let id = tc
+                                            .get("id")
+                                            .and_then(|v| v.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_else(|| format!("call_{}", i));
+                                        prev_tool_ids.push(id);
                                     }
                                 } else {
                                     ts_idx += 1;
                                 }
                             }
-                            "tool"
-                                if !msg_map.contains_key("name") && prev_tool_names.len() == 1 =>
-                            {
-                                msg_map.insert(
-                                    "name".to_string(),
-                                    serde_json::Value::String(prev_tool_names[0].clone()),
-                                );
+                            "tool" => {
+                                // Add "name" field for Ollama/Gemini compatibility
+                                // (only when there's exactly one tool call)
+                                if !msg_map.contains_key("name") && prev_tool_names.len() == 1 {
+                                    msg_map.insert(
+                                        "name".to_string(),
+                                        serde_json::Value::String(prev_tool_names[0].clone()),
+                                    );
+                                }
+                                // Add "tool_call_id" for OpenAI-compatible backends
+                                if !msg_map.contains_key("tool_call_id") && prev_tool_ids.len() == 1
+                                {
+                                    msg_map.insert(
+                                        "tool_call_id".to_string(),
+                                        serde_json::Value::String(prev_tool_ids[0].clone()),
+                                    );
+                                }
                             }
                             _ => {}
                         }
