@@ -14,7 +14,7 @@ use tinyharness_lib::{
     mode::AgentMode,
     provider::{
         Message, Provider, Role, llama_cpp::LlamaCppProvider, ollama::OllamaProvider,
-        sockudo::SockudoProvider, vllm::VllmProvider,
+        openai_compat_provider::OpenAiCompatProvider, sockudo::SockudoProvider, vllm::VllmProvider,
     },
     session::{Session, SessionStore},
     tools::ToolManager,
@@ -47,6 +47,13 @@ struct Args {
     #[arg(short, long)]
     vllm: bool,
 
+    /// Use the generic OpenAI-compatible provider for hosted gateways
+    /// (OpenRouter, Together, custom proxies, etc.) that require a Bearer
+    /// API key. Requires `--api-key` or the `OPENAI_API_KEY` env var, and
+    /// `--url` to specify the gateway endpoint.
+    #[arg(long)]
+    openai_compat: bool,
+
     /// Use the Sockudo provider (AI Transport via Sockudo WebSocket server).
     #[arg(long)]
     sockudo: bool,
@@ -56,10 +63,10 @@ struct Args {
     #[arg(short, long, default_value_t = String::new())]
     url: String,
 
-    /// Bearer token for OpenAI-compatible providers (llama.cpp, vLLM, and any
-    /// server exposing `/v1/chat/completions`). Sent as `Authorization: Bearer
-    /// <key>`. Overrides the saved setting and the `OPENAI_API_KEY` env var.
-    /// Use `--api-key ""` to clear. Has no effect on Ollama or Sockudo.
+    /// Bearer token for the `--openai-compat` provider. Sent as
+    /// `Authorization: Bearer <key>` on every request. Overrides the saved
+    /// setting and the `OPENAI_API_KEY` env var. Use `--api-key -` to clear
+    /// the saved key. Has no effect on Ollama, llama.cpp, vLLM, or Sockudo.
     #[arg(long, default_value_t = String::new())]
     api_key: String,
 
@@ -95,6 +102,8 @@ fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
         ProviderKind::LlamaCpp
     } else if args.vllm {
         ProviderKind::Vllm
+    } else if args.openai_compat {
+        ProviderKind::OpenAiCompat
     } else if args.sockudo {
         ProviderKind::Sockudo
     } else if args.ollama {
@@ -105,18 +114,31 @@ fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
 }
 
 /// Create the provider backend, run health checks, and return it wrapped in Arc<Mutex>.
+#[allow(clippy::too_many_arguments)]
 async fn create_provider(
     kind: ProviderKind,
     url: String,
     api_key: Option<String>,
     skip_health_check: bool,
+    skip_health_check_source: &str,
     settings: &Settings,
 ) -> Arc<Mutex<dyn Provider + Send + Sync>> {
     let provider: Arc<Mutex<dyn Provider + Send + Sync>> = match kind {
-        ProviderKind::LlamaCpp => {
-            Arc::new(Mutex::new(LlamaCppProvider::with_api_key(url, api_key)))
+        ProviderKind::LlamaCpp => Arc::new(Mutex::new(LlamaCppProvider::new(url))),
+        ProviderKind::Vllm => Arc::new(Mutex::new(VllmProvider::new(url))),
+        ProviderKind::OpenAiCompat => {
+            let key = api_key.unwrap_or_else(|| {
+                let mut err_out = Output::stderr();
+                let _ = writeln!(
+                    err_out,
+                    "{BOLD}Error:{RESET} --openai-compat requires an API key. \
+                     Pass {CYAN}--api-key <KEY>{RESET}, set the {CYAN}OPENAI_API_KEY{RESET} \
+                     env var, or configure it via {CYAN}--config{RESET}.",
+                );
+                std::process::exit(1);
+            });
+            Arc::new(Mutex::new(OpenAiCompatProvider::new(url, key)))
         }
-        ProviderKind::Vllm => Arc::new(Mutex::new(VllmProvider::with_api_key(url, api_key))),
         ProviderKind::Ollama => Arc::new(Mutex::new(OllamaProvider::new(
             url,
             settings.ollama_timeout_secs,
@@ -149,7 +171,7 @@ async fn create_provider(
         let mut err_out = Output::stderr();
         let _ = writeln!(
             err_out,
-            "{BOLD}{kind}:{RESET} Skipping health check (--skip-health-check).",
+            "{BOLD}{kind}:{RESET} Skipping health check ({skip_health_check_source}).",
         );
     }
 
@@ -432,7 +454,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let api_key = agent_setup::resolve_api_key(&args.api_key, &settings);
     let skip_hc = args.skip_health_check || settings.skip_health_check;
-    let provider = create_provider(provider_kind, url.clone(), api_key, skip_hc, &settings).await;
+    let skip_hc_source = if args.skip_health_check {
+        "--skip-health-check"
+    } else {
+        "settings.skip_health_check"
+    };
+    let provider = create_provider(
+        provider_kind,
+        url.clone(),
+        api_key,
+        skip_hc,
+        skip_hc_source,
+        &settings,
+    )
+    .await;
 
     // Auto-select model if none is currently set.
     // Sockudo doesn't use a saved model — the worker selects the backend

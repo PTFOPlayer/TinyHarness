@@ -241,6 +241,12 @@ pub enum ProviderKind {
     Ollama,
     LlamaCpp,
     Vllm,
+    /// Generic OpenAI-compatible provider for hosted gateways (OpenRouter,
+    /// Together, etc.) that require a Bearer API key. Unlike LlamaCpp/Vllm
+    /// which target local unauthenticated servers, this provider always
+    /// sends `Authorization: Bearer <key>` and requires `--api-key` or
+    /// the `OPENAI_API_KEY` env var.
+    OpenAiCompat,
     Sockudo,
 }
 
@@ -250,6 +256,7 @@ impl fmt::Display for ProviderKind {
             ProviderKind::Ollama => f.write_str("ollama"),
             ProviderKind::LlamaCpp => f.write_str("llama.cpp"),
             ProviderKind::Vllm => f.write_str("vllm"),
+            ProviderKind::OpenAiCompat => f.write_str("openai-compat"),
             ProviderKind::Sockudo => f.write_str("sockudo"),
         }
     }
@@ -263,6 +270,7 @@ impl FromStr for ProviderKind {
             "ollama" => Ok(ProviderKind::Ollama),
             "llama.cpp" | "llamacpp" | "llama_cpp" => Ok(ProviderKind::LlamaCpp),
             "vllm" => Ok(ProviderKind::Vllm),
+            "openai-compat" | "openaicompat" | "openai_compat" => Ok(ProviderKind::OpenAiCompat),
             "sockudo" => Ok(ProviderKind::Sockudo),
             _ => Err(format!("Unknown provider '{}'", s)),
         }
@@ -329,10 +337,9 @@ pub struct Settings {
     pub last_model: Option<String>,
     pub preferred_mode: AgentMode,
     pub ollama_api_key: Option<String>,
-    /// API key sent as `Authorization: Bearer <key>` by OpenAI-compatible
-    /// providers (llama.cpp, vLLM, and any server exposing the
-    /// `/v1/chat/completions` endpoint). Set via `--api-key` or
-    /// `OPENAI_API_KEY` env var. Leave `None` for local unauthenticated servers.
+    /// API key sent as `Authorization: Bearer <key>` by the OpenAI-compatible
+    /// provider (`--openai-compat`). Set via `--api-key` or `OPENAI_API_KEY`
+    /// env var. Not used by Ollama, llama.cpp, vLLM, or Sockudo.
     #[serde(default)]
     pub openai_compat_api_key: Option<String>,
     /// Sockudo app ID for the AI Transport provider.
@@ -357,8 +364,8 @@ pub struct Settings {
     /// Automatically accept safe read-only commands in the run tool (default: true)
     pub auto_accept_safe_commands: bool,
     /// Skip the provider health check at startup (default: false).
-    /// Useful for hosted OpenAI-compatible gateways that require a separate
-    /// scope on `/health`, or for self-hosted servers without a `/health`
+    /// Useful for the `--openai-compat` provider when the gateway requires a
+    /// separate scope on `/health`, or for any server without a `/health`
     /// endpoint. When true, the agent proceeds straight to model selection
     /// and reports any connection error on the first real request instead.
     #[serde(default)]

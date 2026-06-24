@@ -1,6 +1,7 @@
 pub mod llama_cpp;
 pub mod ollama;
 pub mod openai_compat;
+pub mod openai_compat_provider;
 pub mod sockudo;
 pub mod vllm;
 

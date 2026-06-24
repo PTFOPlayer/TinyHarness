@@ -104,26 +104,30 @@ pub fn prompt_for_api_key(out: &mut Output) -> Result<ApiKeyChoice, String> {
 pub fn prompt_for_provider(out: &mut Output) -> Result<ProviderKind, String> {
     if !std::io::stdin().is_terminal() {
         return Err(
-            "Interactive provider selection requires a TTY. Re-run with --ollama, --llama-cpp, or --vllm, or pass --url.".to_string(),
+            "Interactive provider selection requires a TTY. Re-run with --ollama, --llama-cpp, --vllm, --openai-compat, or --sockudo, or pass --url.".to_string(),
         );
     }
 
     let _ = writeln!(out, "\n{BOLD}Select a provider:{RESET}");
     let _ = writeln!(
         out,
-        "  {CYAN}1{RESET}) ollama    (default: {GRAY}http://127.0.0.1:11434{RESET})"
+        "  {CYAN}1{RESET}) ollama        (default: {GRAY}http://127.0.0.1:11434{RESET})"
     );
     let _ = writeln!(
         out,
-        "  {CYAN}2{RESET}) llama.cpp (default: {GRAY}http://127.0.0.1:8080{RESET})"
+        "  {CYAN}2{RESET}) llama.cpp      (default: {GRAY}http://127.0.0.1:8080{RESET})"
     );
     let _ = writeln!(
         out,
-        "  {CYAN}3{RESET}) vllm      (default: {GRAY}http://127.0.0.1:8000{RESET})"
+        "  {CYAN}3{RESET}) vllm           (default: {GRAY}http://127.0.0.1:8000{RESET})"
     );
     let _ = writeln!(
         out,
-        "  {CYAN}4{RESET}) sockudo   (default: {GRAY}http://127.0.0.1:6001{RESET})"
+        "  {CYAN}4{RESET}) sockudo        (default: {GRAY}http://127.0.0.1:6001{RESET})"
+    );
+    let _ = writeln!(
+        out,
+        "  {CYAN}5{RESET}) openai-compat  (hosted gateway, requires {GRAY}--api-key{RESET})"
     );
 
     loop {
@@ -149,9 +153,12 @@ pub fn prompt_for_provider(out: &mut Output) -> Result<ProviderKind, String> {
         if line == "4" {
             return Ok(ProviderKind::Sockudo);
         }
+        if line == "5" {
+            return Ok(ProviderKind::OpenAiCompat);
+        }
         let _ = writeln!(
             out,
-            "{ORANGE}Please enter 1, 2, 3, or 4 (or press Enter for the default).{RESET}"
+            "{ORANGE}Please enter 1, 2, 3, 4, or 5 (or press Enter for the default).{RESET}"
         );
     }
 }
@@ -172,6 +179,7 @@ pub fn prompt_for_url(
                 ProviderKind::Ollama => "ollama",
                 ProviderKind::LlamaCpp => "llama-cpp",
                 ProviderKind::Vllm => "vllm",
+                ProviderKind::OpenAiCompat => "openai-compat",
                 ProviderKind::Sockudo => "sockudo",
             }
         ));
@@ -221,6 +229,8 @@ pub fn default_url_for(kind: ProviderKind) -> &'static str {
         ProviderKind::Ollama => "http://127.0.0.1:11434",
         ProviderKind::LlamaCpp => "http://127.0.0.1:8080",
         ProviderKind::Vllm => "http://127.0.0.1:8000",
+        // No default — hosted gateways require an explicit URL.
+        ProviderKind::OpenAiCompat => "",
         ProviderKind::Sockudo => "http://127.0.0.1:6001",
     }
 }
@@ -234,21 +244,27 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
     save_settings(&s);
 }
 
-/// Resolve the bearer token for OpenAI-compatible providers using the
+/// Resolve the bearer token for the OpenAI-compatible provider using the
 /// precedence:
 ///
-/// 1. `cli_api_key` (the value of `--api-key` if passed; empty string is
-///    treated as "no key requested" and short-circuits to `None`).
+/// 1. `cli_api_key` — the value of `--api-key` if passed:
+///    - A non-empty value (other than `-`) is used as the key and persisted
+///      to settings so subsequent launches pick it up automatically.
+///    - The sentinel value `"-"` clears any saved key and returns `None`.
+///    - An empty string means the flag was not provided; fall through.
 /// 2. `OPENAI_API_KEY` environment variable, if set and non-empty.
-/// 3. `settings.openai_compat_api_key`, if set.
+/// 3. `settings.openai_compat_api_key`, if set and non-empty.
 ///
-/// When `cli_api_key` is non-empty it is also persisted to settings so that
-/// subsequent launches pick it up automatically without `--api-key`.
-///
-/// Returns `None` when no key should be sent. The Ollama and Sockudo providers
-/// ignore this value entirely.
+/// Returns `None` when no key should be sent. Only the `OpenAiCompat`
+/// provider uses this value; Ollama, llama.cpp, vLLM, and Sockudo ignore it.
 pub fn resolve_api_key(cli_api_key: &str, settings: &Settings) -> Option<String> {
     if !cli_api_key.is_empty() {
+        if cli_api_key == "-" {
+            let mut s = load_settings();
+            s.openai_compat_api_key = None;
+            save_settings(&s);
+            return None;
+        }
         let key = cli_api_key.to_string();
         let mut s = load_settings();
         s.openai_compat_api_key = Some(key.clone());
@@ -446,6 +462,7 @@ mod tests {
             "http://127.0.0.1:8080"
         );
         assert_eq!(default_url_for(ProviderKind::Vllm), "http://127.0.0.1:8000");
+        assert_eq!(default_url_for(ProviderKind::OpenAiCompat), "");
         assert_eq!(
             default_url_for(ProviderKind::Sockudo),
             "http://127.0.0.1:6001"
@@ -491,10 +508,61 @@ mod tests {
             resolve_url(ProviderKind::Vllm, "", &s),
             "http://127.0.0.1:8000"
         );
+        // OpenAiCompat has no default URL — returns empty string, caller
+        // should require --url.
+        assert_eq!(resolve_url(ProviderKind::OpenAiCompat, "", &s), "");
         assert_eq!(
             resolve_url(ProviderKind::Sockudo, "", &s),
             "http://127.0.0.1:6001"
         );
+    }
+
+    #[test]
+    fn resolve_api_key_settings_fallback() {
+        // When no CLI flag and no env var, fall back to settings.
+        let s = Settings {
+            openai_compat_api_key: Some("sk-settings".to_string()),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_api_key("", &s), Some("sk-settings".to_string()));
+    }
+
+    #[test]
+    fn resolve_api_key_empty_settings_returns_none() {
+        let s = Settings::default();
+        assert_eq!(resolve_api_key("", &s), None);
+    }
+
+    #[test]
+    fn resolve_api_key_empty_string_in_settings_is_ignored() {
+        let s = Settings {
+            openai_compat_api_key: Some(String::new()),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_api_key("", &s), None);
+    }
+
+    #[test]
+    fn resolve_api_key_cli_value_wins() {
+        // CLI key takes precedence over env and settings.
+        let s = Settings {
+            openai_compat_api_key: Some("sk-settings".to_string()),
+            ..Settings::default()
+        };
+        assert_eq!(
+            resolve_api_key("sk-from-cli", &s),
+            Some("sk-from-cli".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_clear_sentinel() {
+        // The sentinel "-" should return None (clear).
+        let s = Settings {
+            openai_compat_api_key: Some("sk-settings".to_string()),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_api_key("-", &s), None);
     }
 
     #[test]
