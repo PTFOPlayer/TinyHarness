@@ -1,6 +1,6 @@
 # TinyHarness
 
-Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM), built-in tool calling, and an experimental terminal UI (TUI).
+Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM, OpenAI-compatible gateways, and experimental Sockudo AI Transport), built-in tool calling, and an experimental terminal UI (TUI).
 
 ## Commands
 
@@ -10,7 +10,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 - Format check: `cargo fmt --all -- --check`
 - Formatting: `cargo fmt --all`
 - Install: `make install` (builds release + copies to `~/.local/bin`)
-- Run: `cargo run` (Ollama default) or `cargo run -- --llama-cpp` / `--vllm`
+- Run: `cargo run` (Ollama default) or `cargo run -- --llama-cpp` / `--vllm` / `--openai-compat --url <url> --api-key <key>` / `--sockudo`
 - TUI (experimental): `cargo run -- --tui`
 
 ## Workspace Structure
@@ -23,13 +23,13 @@ Three crates in a Cargo workspace:
 
 ### Key `tinyharness-lib` modules
 
-- `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `LlamaCppProvider`/`VllmProvider` (shared OpenAI-compat internals)
+- `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `LlamaCppProvider`/`VllmProvider` (shared OpenAI-compat internals, no auth), `OpenAiCompatProvider` (Bearer auth for hosted gateways), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
 - `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering
 - `session.rs` — JSONL persistence, auto-save every 5 messages
 - `context.rs` — Workspace metadata + instruction file discovery (TINYHARNESS.md → .tinyharness.md → AGENTS.md → CLAUDE.md)
 - `skill.rs` — Skill discovery from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`
 - `mode.rs` — Agent modes with `.md` system prompts
-- `config/mod.rs` — SettingsStore, ProviderKind, OllamaThinkType
+- `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType
 
 ### Binary crate structure
 
@@ -54,7 +54,7 @@ Three crates in a Cargo workspace:
 2. Agent loop: read input (or `--prompt`), dispatch slash commands, send messages to provider, stream response, handle tool calls
 3. Signal tools (`switch_mode`, `question`, `auto_compact`, `invoke_skill`) bypass generic tool execution and are handled inline
 4. Destructive tools prompt for confirmation (except `run` which cannot be auto-accepted); ReadOnly tools run immediately
-5. Tool results are batched into a single `Role::Tool` message, appended to conversation
+5. Tool results are batched into a single `Role::Tool` message, appended to conversation. Each tool result carries `tool_call_id` linking it back to the originating `ToolCall.id` (required by OpenAI-compatible servers).
 6. Auto-save session every 5 messages; flush on mode switch, session switch, exit
 
 ## Agent Modes
@@ -69,15 +69,15 @@ Three crates in a Cargo workspace:
 ## Testing
 
 - `cargo test --workspace` runs all tests
-- `tinyharness-lib` has good coverage (~84 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~89 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
 - Use `tempfile` for test isolation; tool tests must not touch the real filesystem
 - Run specific test: `cargo test <test_name>`
 - Run per crate: `cargo test -p tinyharness-lib`, `cargo test -p TinyHarness`, `cargo test -p tinyharness-ui`
 
 ## Important Rules & Gotchas
 
-- **Provider startup**: All providers run a health check (Ollama calls `list_local_models`). If saved model is unavailable, auto-select picks the first available with a warning.
-- **Ollama specifics**: Own raw SSE parser (not ollama-rs streaming) to handle native and OpenAI-compatible formats; captures Gemini `thought_signature` from tool responses and re-injects them; fixes serialization quirks (lowercases tool type, injects `name` in tool results).
+- **Provider startup**: All providers run a health check (Ollama calls `list_local_models`). If saved model is unavailable, auto-select picks the first available with a warning. Use `--skip-health-check` to bypass (useful for gateways without `/health`). `--openai-compat` requires `--api-key` (or `OPENAI_API_KEY` env var) and `--url`.
+- **Ollama specifics**: Own raw SSE parser (not ollama-rs streaming) to handle native and OpenAI-compatible formats; captures Gemini `thought_signature` from tool responses and re-injects them; fixes serialization quirks (lowercases tool type, injects `name` in tool results, synthesizes `tool_call_id` when missing for OpenAI-compatible servers).
 - **System prompts**: Assembled from `header.md` + `<mode>.md` for Agent/Planning/Research; Casual is self-contained. Prompts are refreshed on mode switch, file pinning changes, skill activation, and `/refresh`.
 - **Command safety** (`src/agent/safety.rs`): Prefix matching with word boundaries, deny list priority, strips redirections before matching; rejects `;`, `&`, `|`, `$()`, backticks, newlines. Redirections like `2>&1` are auto-accepted if base command is safe.
 - **Confirmation**: `run` tool cannot be auto-accepted even with 'a' (auto-accept mode); only `write` and `edit` can.

@@ -20,8 +20,9 @@
 | Provider | Status | Notes |
 |----------|--------|-------|
 | Ollama | Stable (default) | Raw SSE streaming, retries, think levels, API key for web tools |
-| llama.cpp | Stable | OpenAI-compatible, shared HTTP/SSE logic |
-| vLLM | Stable | OpenAI-compatible, shared HTTP/SSE logic |
+| llama.cpp | Stable | OpenAI-compatible, shared HTTP/SSE logic, no auth (local servers) |
+| vLLM | Stable | OpenAI-compatible, shared HTTP/SSE logic, no auth (local servers) |
+| OpenAI-compat | Stable | Generic OpenAI-compatible gateways (OpenRouter, Together, etc.) with Bearer auth. Requires `--api-key` and `--url` |
 | Sockudo | ⚠️ Highly experimental | AI Transport via WebSocket, requires a worker bridge (see `docs/examples/sockudo-worker/`) |
 
 ## Quick References

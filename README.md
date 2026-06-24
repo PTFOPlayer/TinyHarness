@@ -6,7 +6,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 
 ## Features
 
-- **Pluggable Providers**: Ollama, llama.cpp, vLLM, and any OpenAI-compatible API. Swap backends without changing application code. Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels. ⚠️ Sockudo AI Transport is also supported as a highly experimental backend — it requires a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`).
+- **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
 - **Tool System**: 15 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `web_search`, `web_fetch`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, `screenshot`, plus the built-in `read` image loader for multimodal models).
 - **Agent Modes**: Four modes — `casual` (web-only), `planning` (read-only + signals), `agent` (full access), and `research` (web-focused) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
 - **Skills**: Pluggable SKILL.md modules discovered from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`. Invokable by the AI via `invoke_skill` or by the user via `/use <name>`. Supports YAML frontmatter with name, description, compatibility, licensing, and model-invocation controls.
@@ -28,10 +28,11 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 ### Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable, edition 2024)
-- At least one LLM backend running locally:
-  - [Ollama](https://ollama.com/) (default)
-  - [llama.cpp](https://github.com/ggml-org/llama.cpp) server
-  - [vLLM](https://github.com/vllm-project/vllm)
+- At least one LLM backend:
+  - [Ollama](https://ollama.com/) (default, local)
+  - [llama.cpp](https://github.com/ggml-org/llama.cpp) server (local, no auth)
+  - [vLLM](https://github.com/vllm-project/vllm) (local, no auth)
+  - Any OpenAI-compatible API gateway (OpenRouter, Together, custom proxies, etc.) — requires an API key and explicit URL
   - [Sockudo](https://github.com/sockudo/sockudo) (⚠️ highly experimental — requires a worker bridge, see `docs/examples/sockudo-worker/`)
 
 ### Installation
@@ -104,6 +105,12 @@ tinyharness --vllm
 ```
 Connects to `http://127.0.0.1:8000` by default.
 
+**OpenAI-compatible gateway** (OpenRouter, Together, custom proxies, etc.):
+```bash
+tinyharness --openai-compat --url https://openrouter.ai/api/v1 --api-key <YOUR_KEY>
+```
+Requires `--url` (no default URL) and an API key. You can also set the `OPENAI_API_KEY` environment variable instead of `--api-key`. Bearer auth is sent on every request. Use `--skip-health-check` if the gateway doesn't expose a `/health` endpoint.
+
 **Sockudo** (⚠️ highly experimental):
 ```bash
 tinyharness --sockudo
@@ -117,6 +124,7 @@ A health check runs on startup to verify the provider is reachable. If the saved
 tinyharness --llama-cpp --url http://localhost:2832
 tinyharness --ollama --url http://192.168.1.50:11434
 tinyharness --vllm --url http://gpu-server:8000
+tinyharness --openai-compat --url https://api.example.com/v1 --api-key sk-xxx
 ```
 
 **Continue last session**:
@@ -151,8 +159,11 @@ Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when 
 | `-o`, `--ollama` | Use the Ollama provider (default) |
 | `-l`, `--llama-cpp` | Use the llama.cpp provider |
 | `-v`, `--vllm` | Use the vLLM provider |
+| `--openai-compat` | Use a generic OpenAI-compatible gateway (requires `--api-key` and `--url`) |
 | `--sockudo` | Use the Sockudo AI Transport provider (⚠️ highly experimental) |
 | `-u`, `--url <url>` | Custom base URL for the provider |
+| `--api-key <key>` | Bearer token for `--openai-compat` (use `-` to clear saved key) |
+| `--skip-health-check` | Skip provider health check at startup |
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `--config` | Run interactive provider setup, then exit |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
@@ -334,12 +345,13 @@ Frontend-agnostic — no terminal I/O, no ANSI codes, no rustyline.
 tinyharness-lib/src/
 ├── lib.rs               Re-exports all public types
 ├── provider/             Provider trait + implementations
-│   ├── mod.rs            Provider trait, Message types, ToolDefinition
+│   ├── mod.rs            Provider trait, Message types, ToolDefinition, ToolCall (with id)
 │   ├── ollama.rs         OllamaProvider — raw SSE streaming, retries, Gemini signatures
-│   ├── llama_cpp.rs      LlamaCppProvider — OpenAI-compatible
-│   ├── vllm.rs           VllmProvider — OpenAI-compatible
+│   ├── llama_cpp.rs      LlamaCppProvider — OpenAI-compatible, no auth
+│   ├── vllm.rs           VllmProvider — OpenAI-compatible, no auth
 │   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
-│   └── openai_compat.rs  Shared HTTP/SSE logic for OpenAI-compatible backends
+│   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
+│   └── openai_compat_provider.rs OpenAiCompatProvider — Bearer auth wrapper for hosted gateways
 ├── config/mod.rs         Settings persistence (provider, model, mode, API key, safe/denied commands, think type)
 ├── mode.rs               AgentMode enum (casual/planning/agent/research) with customizable .md prompts
 ├── context.rs            WorkspaceContext — auto-detected project metadata + instruction file discovery

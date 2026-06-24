@@ -26,7 +26,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-This compiles all three crates and runs the test suite (~450 tests across all crates).
+This compiles all three crates and runs the test suite (~490 tests across all crates).
 
 ---
 
@@ -42,7 +42,13 @@ TinyHarness/                  Binary crate — CLI, agent loop, slash commands
 tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rustyline
 ├── src/
 │   ├── lib.rs                Re-exports all public types
-│   ├── provider/             Provider trait + Ollama/llama.cpp/vLLM/Sockudo impls
+│   ├── provider/             Provider trait + Ollama/llama.cpp/vLLM/OpenAI-compat/Sockudo impls
+│   │   ├── ollama.rs             OllamaProvider — raw SSE streaming, retries, Gemini signatures
+│   │   ├── llama_cpp.rs          LlamaCppProvider — OpenAI-compatible, no auth (local)
+│   │   ├── vllm.rs               VllmProvider — OpenAI-compatible, no auth (local)
+│   │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
+│   │   ├── openai_compat_provider.rs OpenAiCompatProvider — Bearer auth wrapper for hosted gateways
+│   │   └── sockudo.rs            SockudoProvider — AI Transport via WebSocket (⚠️ experimental)
 │   ├── tools/                15 tools + ToolManager with mode filtering
 │   ├── config/mod.rs         Settings, project settings, prompt management
 │   ├── context.rs            Workspace detection, instruction file discovery
@@ -190,7 +196,7 @@ Use `serde` + `schemars` for serialization and JSON Schema generation:
 
 - Use `tempfile` for test isolation — tool tests must not touch the real filesystem
 - Test modules go inline: `#[cfg(test)] mod tests { ... }`
-- `tinyharness-lib` has good coverage (~84 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~89 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
 
 ### Tool Categories
 
@@ -207,12 +213,14 @@ See [Tools Reference](tools-reference.md) for the full list and behavior.
 
 GitHub Actions runs on every push and PR to `master`:
 
-| Job | Command | Purpose |
-|-----|---------|---------|
-| Format | `cargo fmt --all -- --check` | Ensures consistent formatting |
-| Clippy | `cargo clippy --workspace -- -D warnings` | Catches common mistakes |
-| Test | `cargo test --workspace` | Runs full test suite |
-| Build | `cargo build --workspace` | Confirms compilation |
+| Job | Platform | Command | Purpose |
+|-----|----------|---------|---------|
+| Format | Linux | `cargo fmt --all -- --check` | Ensures consistent formatting |
+| Clippy | Linux | `cargo clippy --workspace -- -D warnings` | Catches common mistakes |
+| Test | Linux | `cargo test --workspace` | Runs full test suite |
+| Build | Linux | `cargo build --workspace` | Confirms compilation |
+| Build | Windows | `cargo build --workspace` | Confirms Windows compilation |
+| Test | Windows | `cargo test --workspace` | Runs full test suite on Windows |
 
 Uses `dtolnay/rust-toolchain@stable` for Rust and `Swatinem/rust-cache@v2` for caching.
 
@@ -299,6 +307,7 @@ pub fn handle_my_command(ctx: &mut CommandContext, _args: &[&str]) -> CommandRes
 
 - **Code questions**: Look at existing patterns — most modules follow consistent idioms
 - **Architecture**: Read `TINYHARNESS.md` (the project's own instructions) and the module overview above
+- **OpenAI-compat provider**: See [Configuration Guide](configuration.md#openai-compatible-provider-settings) for API key setup
 - **Sockudo provider**: ⚠️ Highly experimental — see [Configuration Guide](configuration.md#sockudo-provider-experimental) for setup and limitations
 - **Planned work**: Check `todo/todo.md` and `todo/<number>-*.md` for tracked enhancements
 - **Tool docs**: See [Tools Reference](tools-reference.md) for tool schemas and behavior

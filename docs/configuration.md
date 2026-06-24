@@ -29,6 +29,11 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
   "last_model": "qwen2.5-coder:14b",
   "preferred_mode": "agent",
   "ollama_api_key": null,
+  "openai_compat_api_key": null,
+  "sockudo_app_id": null,
+  "sockudo_app_key": null,
+  "sockudo_app_secret": null,
+  "skip_health_check": false,
   "ollama_timeout_secs": 5,
   "ollama_max_retries": 3,
   "ollama_think_type": "medium",
@@ -45,7 +50,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `last_provider` | string | `"ollama"` | Last used provider: `"ollama"`, `"llamacpp"`, `"vllm"`, or `"sockudo"` |
+| `last_provider` | string | `"ollama"` | Last used provider: `"ollama"`, `"llamacpp"`, `"vllm"`, `"openai-compat"`, or `"sockudo"` |
 | `last_provider_url` | string\|null | `null` | Custom base URL for the provider. Set by `--url` flag or `--config` interactive setup. If `null`, uses the provider's default URL |
 | `last_model` | string\|null | `null` | Last used model name. Set by `/model <name>`. If `null`, the provider auto-selects the first available model |
 
@@ -53,7 +58,21 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 - Ollama: `http://127.0.0.1:11434`
 - llama.cpp: `http://127.0.0.1:8080`
 - vLLM: `http://127.0.0.1:8000`
+- OpenAI-compat: _(none — `--url` is required)_
 - Sockudo: `http://127.0.0.1:6001` (⚠️ highly experimental)
+
+### OpenAI-Compatible Provider Settings
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>`, `OPENAI_API_KEY` env var, or `--config` interactive setup. Use `--api-key -` to clear the saved key |
+| `skip_health_check` | bool | `false` | Skip the provider health check at startup. Useful for gateways without a `/health` endpoint. Set via `--skip-health-check` |
+
+**API key resolution precedence:**
+1. `--api-key <key>` CLI flag (highest — also persists to settings)
+2. `OPENAI_API_KEY` environment variable
+3. `openai_compat_api_key` in settings.json
+4. None (provider startup fails with an error)
 
 ### Sockudo Provider (Experimental)
 
@@ -278,8 +297,11 @@ All CLI flags override settings:
 | `-o`, `--ollama` | `last_provider = "ollama"` |
 | `-l`, `--llama-cpp` | `last_provider = "llamacpp"` |
 | `-v`, `--vllm` | `last_provider = "vllm"` |
+| `--openai-compat` | `last_provider = "openai-compat"` (requires `--api-key` and `--url`) |
 | `--sockudo` | `last_provider = "sockudo"` (⚠️ experimental) |
 | `-u`, `--url <url>` | `last_provider_url = <url>` |
+| `--api-key <key>` | `openai_compat_api_key = <key>` (only affects `--openai-compat`; use `-` to clear) |
+| `--skip-health-check` | Skips provider health check at startup |
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
 | `--config` | Runs interactive setup, saves, exits |
 | `-p`, `--prompt <text>` | Sends initial prompt then enters interactive mode |
@@ -292,4 +314,5 @@ All CLI flags override settings:
 | Variable | Effect |
 |----------|--------|
 | `TINYHARNESS_MD_FILES` | Comma-separated list of instruction file names, overrides `project_md_files` in settings |
+| `OPENAI_API_KEY` | Bearer token for the `--openai-compat` provider (used when `--api-key` is not passed) |
 | `HOME` | Used to resolve `~/.config/tinyharness/` and `~/.local/share/tinyharness/` |

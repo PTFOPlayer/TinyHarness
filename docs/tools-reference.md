@@ -209,7 +209,7 @@ All parameters are passed as strings to keep parsing simple. For non-string type
 
 ### Tool Call Format
 
-The model emits tool calls in XML block format with `tool_calls` and `invoke` elements. Multiple tools can be called in a single block. Results are batched into a single response message.
+The model emits tool calls in XML block format with `tool_calls` and `invoke` elements. Multiple tools can be called in a single block. Results are batched into a single response message. Each tool call includes an `id` (OpenAI tool call ID) that is echoed back in the matching `Role::Tool` result message via `tool_call_id`, as required by OpenAI-compatible servers. Signal tools also propagate `tool_call_id` through the agent loop.
 
 ---
 
