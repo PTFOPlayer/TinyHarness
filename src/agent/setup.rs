@@ -258,18 +258,30 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
 /// Returns `None` when no key should be sent. Only the `OpenAiCompat`
 /// provider uses this value; Ollama, llama.cpp, vLLM, and Sockudo ignore it.
 pub fn resolve_api_key(cli_api_key: &str, settings: &Settings) -> Option<String> {
+    let result = resolve_api_key_pure(cli_api_key, settings);
+    // Persist side-effects only when there is an actual CLI key to store/clear.
+    // The pure function is used in tests to avoid touching the real settings file.
+    if !cli_api_key.is_empty() {
+        let mut s = load_settings();
+        if result.is_some() {
+            s.openai_compat_api_key = result.clone();
+        } else {
+            // Sentinel "-" clears the key
+            s.openai_compat_api_key = None;
+        }
+        save_settings(&s);
+    }
+    result
+}
+
+/// Pure (side-effect-free) API key resolution.  Used by tests so they never
+/// touch the real `~/.config/tinyharness/settings.json`.
+pub fn resolve_api_key_pure(cli_api_key: &str, settings: &Settings) -> Option<String> {
     if !cli_api_key.is_empty() {
         if cli_api_key == "-" {
-            let mut s = load_settings();
-            s.openai_compat_api_key = None;
-            save_settings(&s);
             return None;
         }
-        let key = cli_api_key.to_string();
-        let mut s = load_settings();
-        s.openai_compat_api_key = Some(key.clone());
-        save_settings(&s);
-        return Some(key);
+        return Some(cli_api_key.to_string());
     }
     if let Ok(env_key) = std::env::var("OPENAI_API_KEY")
         && !env_key.is_empty()
@@ -524,13 +536,16 @@ mod tests {
             openai_compat_api_key: Some("sk-settings".to_string()),
             ..Settings::default()
         };
-        assert_eq!(resolve_api_key("", &s), Some("sk-settings".to_string()));
+        assert_eq!(
+            resolve_api_key_pure("", &s),
+            Some("sk-settings".to_string())
+        );
     }
 
     #[test]
     fn resolve_api_key_empty_settings_returns_none() {
         let s = Settings::default();
-        assert_eq!(resolve_api_key("", &s), None);
+        assert_eq!(resolve_api_key_pure("", &s), None);
     }
 
     #[test]
@@ -539,7 +554,7 @@ mod tests {
             openai_compat_api_key: Some(String::new()),
             ..Settings::default()
         };
-        assert_eq!(resolve_api_key("", &s), None);
+        assert_eq!(resolve_api_key_pure("", &s), None);
     }
 
     #[test]
@@ -550,7 +565,7 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(
-            resolve_api_key("sk-from-cli", &s),
+            resolve_api_key_pure("sk-from-cli", &s),
             Some("sk-from-cli".to_string())
         );
     }
@@ -562,7 +577,7 @@ mod tests {
             openai_compat_api_key: Some("sk-settings".to_string()),
             ..Settings::default()
         };
-        assert_eq!(resolve_api_key("-", &s), None);
+        assert_eq!(resolve_api_key_pure("-", &s), None);
     }
 
     #[test]

@@ -236,8 +236,9 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
 }
 
 /// Identifies which provider backend was used last.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum ProviderKind {
+    #[default]
     Ollama,
     LlamaCpp,
     Vllm,
@@ -283,13 +284,14 @@ impl FromStr for ProviderKind {
 ///
 /// Corresponds to Ollama's `think` parameter. Only meaningful for Ollama;
 /// other providers ignore this setting.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OllamaThinkType {
     /// Disable thinking entirely (fastest, lowest quality).
     Off,
     /// Minimal reasoning (faster, lower latency).
     Low,
     /// Balanced reasoning (good default).
+    #[default]
     Medium,
     /// Maximum reasoning (slowest, highest quality).
     High,
@@ -327,48 +329,52 @@ impl FromStr for OllamaThinkType {
 ///
 /// Use `SettingsStore` to load and save instances of this type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)] // fall back to field defaults if any field is missing
 pub struct Settings {
+    #[serde(default)]
     pub last_provider: ProviderKind,
     /// Last URL used for the active provider. Set automatically by `--config`
     /// or by passing `--url`. Persisted so subsequent runs don't re-prompt.
     /// (default: None)
-    #[serde(default)]
     pub last_provider_url: Option<String>,
+    #[serde(default)]
     pub last_model: Option<String>,
+    #[serde(default)]
     pub preferred_mode: AgentMode,
+    #[serde(default)]
     pub ollama_api_key: Option<String>,
     /// API key sent as `Authorization: Bearer <key>` by the OpenAI-compatible
     /// provider (`--openai-compat`). Set via `--api-key` or `OPENAI_API_KEY`
     /// env var. Not used by Ollama, llama.cpp, vLLM, or Sockudo.
-    #[serde(default)]
     pub openai_compat_api_key: Option<String>,
     /// Sockudo app ID for the AI Transport provider.
-    #[serde(default)]
     pub sockudo_app_id: Option<String>,
     /// Sockudo app key (used as auth_key in signed API requests and WebSocket URL).
-    #[serde(default)]
     pub sockudo_app_key: Option<String>,
     /// Sockudo app secret (used to sign API requests via HMAC-SHA256).
-    #[serde(default)]
     pub sockudo_app_secret: Option<String>,
     /// Timeout in seconds for Ollama requests (default: 5)
+    #[serde(default)]
     pub ollama_timeout_secs: u64,
     /// Maximum number of retries for Ollama requests (default: 3)
+    #[serde(default)]
     pub ollama_max_retries: u32,
     /// Controls the think/reasoning level for Ollama (default: Medium)
+    #[serde(default)]
     pub ollama_think_type: OllamaThinkType,
     /// Show the model's thinking/reasoning chain inline during streaming (default: false)
+    #[serde(default)]
     pub show_thinking: bool,
     /// Context limit for warning calculations only (default: None, uses model default)
     pub context_limit: Option<u32>,
     /// Automatically accept safe read-only commands in the run tool (default: true)
+    #[serde(default = "default_auto_accept_safe_commands")]
     pub auto_accept_safe_commands: bool,
     /// Skip the provider health check at startup (default: false).
     /// Useful for the `--openai-compat` provider when the gateway requires a
     /// separate scope on `/health`, or for any server without a `/health`
     /// endpoint. When true, the agent proceeds straight to model selection
     /// and reports any connection error on the first real request instead.
-    #[serde(default)]
     pub skip_health_check: bool,
     /// List of command prefixes considered safe for auto-accept (default: see get_default_safe_commands)
     pub safe_command_prefixes: Option<Vec<String>>,
@@ -379,8 +385,14 @@ pub struct Settings {
     /// When set, replaces the hardcoded default list (TINYHARNESS.md, AGENTS.md, etc.).
     /// Use `TINYHARNESS_MD_FILES` env var for the highest priority override.
     /// (default: None → use hardcoded defaults)
-    #[serde(default)]
     pub project_md_files: Option<Vec<String>>,
+}
+
+/// Default value for `auto_accept_safe_commands` when the field is missing
+/// from the user's settings.json (e.g. written by a future version with the
+/// `auto_accept_mode` enum, or by an older build that didn't have this field).
+fn default_auto_accept_safe_commands() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -710,4 +722,53 @@ pub fn ensure_prompts_initialized() -> PathBuf {
     }
 
     dir
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// User settings from a future build (with `auto_accept_mode`) must load
+    /// against the current `Settings` struct (which still uses
+    /// `auto_accept_safe_commands`) without parse errors.
+    #[test]
+    fn load_settings_missing_fields_uses_defaults() {
+        let json = r#"{
+            "last_provider": "OpenAiCompat",
+            "last_provider_url": "http://localhost:8080/v1",
+            "last_model": "MiniMax-M3",
+            "preferred_mode": "Agent",
+            "ollama_api_key": null,
+            "openai_compat_api_key": "sk-test",
+            "ollama_timeout_secs": 5,
+            "ollama_max_retries": 3,
+            "ollama_think_type": "High",
+            "show_thinking": true,
+            "context_limit": 256000,
+            "auto_accept_mode": "all",
+            "skip_health_check": true
+        }"#;
+
+        let settings: Settings =
+            serde_json::from_str(json).expect("missing fields should use defaults");
+        assert_eq!(settings.last_provider, ProviderKind::OpenAiCompat);
+        assert_eq!(settings.preferred_mode, AgentMode::Agent);
+        // Missing fields default gracefully:
+        assert!(settings.auto_accept_safe_commands);
+        assert!(settings.skip_health_check);
+        assert_eq!(settings.ollama_think_type, OllamaThinkType::High);
+    }
+
+    /// An empty settings object should load with all defaults.
+    #[test]
+    fn load_settings_empty_object_uses_all_defaults() {
+        let settings: Settings =
+            serde_json::from_str("{}").expect("empty object should use defaults");
+        assert_eq!(settings.last_provider, ProviderKind::Ollama);
+        assert_eq!(settings.preferred_mode, AgentMode::Casual);
+        assert!(settings.auto_accept_safe_commands);
+        assert!(!settings.skip_health_check);
+    }
 }
