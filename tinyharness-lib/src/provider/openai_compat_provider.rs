@@ -5,25 +5,53 @@ use crate::provider::{ChatMessageResponse, Message, Provider, ToolDefinition};
 
 use super::openai_compat::OpenAiCompatInner;
 
-/// Provider for generic OpenAI-compatible API gateways (OpenRouter, Together,
-/// custom proxies, etc.) that require a Bearer API key.
+/// Unified provider for any OpenAI-compatible chat-completions endpoint.
 ///
-/// Unlike `LlamaCppProvider` and `VllmProvider` which target local
-/// unauthenticated servers, this provider always sends an
-/// `Authorization: Bearer <key>` header. The API key is required at
-/// construction time.
+/// Covers three concrete back-ends that previously had their own wrapper
+/// modules:
+///
+/// * Local llama.cpp servers (no auth, hard-coded single-model list).
+/// * Local vLLM servers (no auth, fetches `/v1/models`).
+/// * Hosted gateways like OpenRouter / Together / Groq (Bearer auth,
+///   fetches `/v1/models`).
+///
+/// The variation between them is just (a) whether an `Authorization: Bearer`
+/// header is sent and (b) how `list_models` resolves, so they collapse into
+/// a single struct with builder-style options.
 pub struct OpenAiCompatProvider {
     inner: OpenAiCompatInner,
+    /// When `Some`, `list_models` returns this fixed list instead of querying
+    /// the server. Used for back-ends like llama.cpp that don't expose a
+    /// useful `/v1/models` endpoint.
+    static_models: Option<Vec<String>>,
 }
 
 impl OpenAiCompatProvider {
-    /// Create a new OpenAI-compatible provider with the given base URL and
-    /// API key. The key is sent as `Authorization: Bearer <key>` on every
-    /// request (health check, model list, and chat streaming).
-    pub fn new(base_url: String, api_key: String) -> Self {
+    /// Create a new provider with no authentication. Suitable for local
+    /// unauthenticated servers (llama.cpp, vLLM, etc.).
+    pub fn new(base_url: String) -> Self {
+        OpenAiCompatProvider {
+            inner: OpenAiCompatInner::new(base_url),
+            static_models: None,
+        }
+    }
+
+    /// Create a new provider that sends `Authorization: Bearer <api_key>`
+    /// on every request. Required by hosted OpenAI-compatible gateways
+    /// (OpenRouter, Together, custom proxies, etc.).
+    pub fn with_api_key(base_url: String, api_key: String) -> Self {
         OpenAiCompatProvider {
             inner: OpenAiCompatInner::with_api_key(base_url, Some(api_key)),
+            static_models: None,
         }
+    }
+
+    /// Override `list_models` to return a fixed list instead of querying
+    /// the server. Useful for back-ends like llama.cpp that serve a single
+    /// model and don't expose a meaningful model-listing endpoint.
+    pub fn with_static_models(mut self, models: Vec<String>) -> Self {
+        self.static_models = Some(models);
+        self
     }
 }
 
@@ -33,6 +61,10 @@ impl Provider for OpenAiCompatProvider {
     }
 
     fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
+        if let Some(models) = &self.static_models {
+            let models = models.clone();
+            return Box::pin(async move { models });
+        }
         self.inner.fetch_model_list()
     }
 

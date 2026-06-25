@@ -94,20 +94,26 @@ impl OllamaProvider {
         timeout_secs: u64,
         max_retries: u32,
         think_type: OllamaThinkType,
-    ) -> Self {
+    ) -> Result<Self, String> {
         // Normalize URL: ensure it ends with '/'
         let base_url = if base.ends_with('/') {
-            base.clone()
+            base
         } else {
             format!("{base}/")
         };
-        let client = Ollama::from_url(base.into_url().unwrap());
+        // Parse the (normalized) URL once, propagating errors instead of panicking
+        // on user-supplied configuration.
+        let parsed_url = base_url
+            .clone()
+            .into_url()
+            .map_err(|e| format!("Invalid Ollama base URL `{base_url}`: {e}"))?;
+        let client = Ollama::from_url(parsed_url);
         let http_client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(timeout_secs + 60))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        OllamaProvider {
+        Ok(OllamaProvider {
             client,
             http_client,
             base_url,
@@ -115,7 +121,7 @@ impl OllamaProvider {
             timeout_secs,
             max_retries,
             think_type,
-        }
+        })
     }
 }
 
@@ -256,14 +262,14 @@ impl Provider for OllamaProvider {
                     Ok(Ok(())) => return, // success
                     Ok(Err(e)) => {
                         if attempt >= max_attempts {
-                            send_err(format!("Error after {attempt} retries: {e}"));
+                            send_err(format!("Error after {attempt} attempt(s): {e}"));
                             return;
                         }
                     }
                     Err(_) => {
                         if attempt >= max_attempts {
                             send_err(format!(
-                                "Error: Request timed out after {timeout_secs}s ({attempt} retries)"
+                                "Error: Request timed out after {timeout_secs}s ({attempt} attempt(s))"
                             ));
                             return;
                         }
@@ -453,81 +459,108 @@ async fn stream_ollama_chat(
                 // tool_calls from the most recent assistant message.
                 // Also inject "tool_call_id" for OpenAI-compatible backends.
                 // Fix 3: Re-inject thought_signatures into assistant tool_calls.
+                //
+                // `thought_signatures` is indexed by the position of each
+                // message in the original `messages` slice (one entry per
+                // message, regardless of role). We advance `ts_idx` on every
+                // message so the indices stay aligned; otherwise non-assistant
+                // messages (system, user, tool) cause off-by-N misalignment
+                // and signatures are never re-injected, silently breaking
+                // Gemini multi-turn tool calling.
                 let mut prev_tool_names: Vec<String> = Vec::new();
                 let mut prev_tool_ids: Vec<String> = Vec::new();
                 let mut ts_idx: usize = 0;
-                for msg in arr.iter_mut() {
-                    if let serde_json::Value::Object(msg_map) = msg {
-                        let role = msg_map.get("role").and_then(|v| v.as_str()).unwrap_or("");
-                        match role {
-                            "assistant" => {
-                                prev_tool_names.clear();
-                                prev_tool_ids.clear();
-                                if let Some(tcs) = msg_map.get_mut("tool_calls")
-                                    && let Some(tc_arr) = tcs.as_array_mut()
-                                {
-                                    // Re-inject thought_signatures
-                                    if let Some(sigs) = thought_signatures.get(ts_idx) {
-                                        for (i, tc) in tc_arr.iter_mut().enumerate() {
-                                            if let Some(sig) = sigs.get(i).and_then(|s| s.clone())
-                                                && let Some(func) = tc.get_mut("function")
-                                                && let Some(obj) = func.as_object_mut()
-                                            {
-                                                obj.insert(
-                                                    "thought_signature".to_string(),
-                                                    serde_json::Value::String(sig),
-                                                );
+                let looks_like_messages_array = arr.iter().any(|v| {
+                    v.as_object()
+                        .and_then(|o| o.get("role"))
+                        .and_then(|r| r.as_str())
+                        .is_some()
+                });
+                if looks_like_messages_array {
+                    for msg in arr.iter_mut() {
+                        if let serde_json::Value::Object(msg_map) = msg {
+                            let role =
+                                msg_map.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                            match role {
+                                "assistant" => {
+                                    prev_tool_names.clear();
+                                    prev_tool_ids.clear();
+                                    if let Some(tcs) = msg_map.get_mut("tool_calls")
+                                        && let Some(tc_arr) = tcs.as_array_mut()
+                                    {
+                                        // Re-inject thought_signatures
+                                        if let Some(sigs) = thought_signatures.get(ts_idx) {
+                                            for (i, tc) in tc_arr.iter_mut().enumerate() {
+                                                if let Some(sig) =
+                                                    sigs.get(i).and_then(|s| s.clone())
+                                                    && let Some(func) = tc.get_mut("function")
+                                                    && let Some(obj) = func.as_object_mut()
+                                                {
+                                                    obj.insert(
+                                                        "thought_signature".to_string(),
+                                                        serde_json::Value::String(sig),
+                                                    );
+                                                }
                                             }
                                         }
-                                    }
-                                    ts_idx += 1;
 
-                                    // Track tool names and ids for Fix 2
-                                    for (i, tc) in tc_arr.iter().enumerate() {
-                                        if let Some(name) = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("name"))
-                                            .and_then(|n| n.as_str())
-                                        {
-                                            prev_tool_names.push(name.to_string());
+                                        // Track tool names and ids for Fix 2
+                                        for (i, tc) in tc_arr.iter().enumerate() {
+                                            if let Some(name) = tc
+                                                .get("function")
+                                                .and_then(|f| f.get("name"))
+                                                .and_then(|n| n.as_str())
+                                            {
+                                                prev_tool_names.push(name.to_string());
+                                            }
+                                            // Track tool call ids (synthesize if missing)
+                                            let id = tc
+                                                .get("id")
+                                                .and_then(|v| v.as_str())
+                                                .filter(|s| !s.is_empty())
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| format!("call_{}", i));
+                                            prev_tool_ids.push(id);
                                         }
-                                        // Track tool call ids (synthesize if missing)
-                                        let id = tc
-                                            .get("id")
-                                            .and_then(|v| v.as_str())
-                                            .filter(|s| !s.is_empty())
-                                            .map(|s| s.to_string())
-                                            .unwrap_or_else(|| format!("call_{}", i));
-                                        prev_tool_ids.push(id);
                                     }
-                                } else {
-                                    ts_idx += 1;
                                 }
+                                "tool" => {
+                                    // Add "name" field for Ollama/Gemini compatibility
+                                    // (only when there's exactly one tool call)
+                                    if !msg_map.contains_key("name")
+                                        && prev_tool_names.len() == 1
+                                    {
+                                        msg_map.insert(
+                                            "name".to_string(),
+                                            serde_json::Value::String(
+                                                prev_tool_names[0].clone(),
+                                            ),
+                                        );
+                                    }
+                                    // Add "tool_call_id" for OpenAI-compatible backends
+                                    if !msg_map.contains_key("tool_call_id")
+                                        && prev_tool_ids.len() == 1
+                                    {
+                                        msg_map.insert(
+                                            "tool_call_id".to_string(),
+                                            serde_json::Value::String(prev_tool_ids[0].clone()),
+                                        );
+                                    }
+                                }
+                                _ => {}
                             }
-                            "tool" => {
-                                // Add "name" field for Ollama/Gemini compatibility
-                                // (only when there's exactly one tool call)
-                                if !msg_map.contains_key("name") && prev_tool_names.len() == 1 {
-                                    msg_map.insert(
-                                        "name".to_string(),
-                                        serde_json::Value::String(prev_tool_names[0].clone()),
-                                    );
-                                }
-                                // Add "tool_call_id" for OpenAI-compatible backends
-                                if !msg_map.contains_key("tool_call_id") && prev_tool_ids.len() == 1
-                                {
-                                    msg_map.insert(
-                                        "tool_call_id".to_string(),
-                                        serde_json::Value::String(prev_tool_ids[0].clone()),
-                                    );
-                                }
-                            }
-                            _ => {}
                         }
+                        // Always advance — `thought_signatures` is 1:1 with
+                        // the original `messages` Vec, including non-assistant
+                        // entries.
+                        ts_idx += 1;
                     }
                 }
+                // Recurse into children for non-message fixes (e.g. lowercasing
+                // tool `type`). We pass an empty slice to avoid re-applying
+                // thought_signatures from index 0 in any nested array.
                 for v in arr.iter_mut() {
-                    fix_request_json(v, thought_signatures);
+                    fix_request_json(v, &[]);
                 }
             }
             _ => {}
@@ -560,7 +593,7 @@ async fn stream_ollama_chat(
         // Process complete SSE lines
         while let Some(pos) = buffer.find('\n') {
             let line = buffer[..pos].trim().to_string();
-            buffer = buffer[pos + 1..].to_string();
+            buffer.drain(..=pos);
 
             if line.is_empty() {
                 continue;

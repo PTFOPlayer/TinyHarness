@@ -23,7 +23,7 @@ Three crates in a Cargo workspace:
 
 ### Key `tinyharness-lib` modules
 
-- `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `LlamaCppProvider`/`VllmProvider` (shared OpenAI-compat internals, no auth), `OpenAiCompatProvider` (Bearer auth for hosted gateways), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
+- `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `OpenAiCompatProvider` (unified llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
 - `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering
 - `session.rs` — JSONL persistence, auto-save every 5 messages
 - `context.rs` — Workspace metadata + instruction file discovery (TINYHARNESS.md → .tinyharness.md → AGENTS.md → CLAUDE.md)

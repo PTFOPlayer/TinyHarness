@@ -347,11 +347,9 @@ tinyharness-lib/src/
 ├── provider/             Provider trait + implementations
 │   ├── mod.rs            Provider trait, Message types, ToolDefinition, ToolCall (with id)
 │   ├── ollama.rs         OllamaProvider — raw SSE streaming, retries, Gemini signatures
-│   ├── llama_cpp.rs      LlamaCppProvider — OpenAI-compatible, no auth
-│   ├── vllm.rs           VllmProvider — OpenAI-compatible, no auth
 │   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
 │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
-│   └── openai_compat_provider.rs OpenAiCompatProvider — Bearer auth wrapper for hosted gateways
+│   └── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
 ├── config/mod.rs         Settings persistence (provider, model, mode, API key, safe/denied commands, think type)
 ├── mode.rs               AgentMode enum (casual/planning/agent/research) with customizable .md prompts
 ├── context.rs            WorkspaceContext — auto-detected project metadata + instruction file discovery

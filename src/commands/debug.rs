@@ -509,7 +509,8 @@ mod tests {
                     120,
                     0,
                     tinyharness_lib::config::OllamaThinkType::Off,
-                ),
+                )
+                .expect("valid test Ollama URL"),
             )),
             tinyharness_lib::context::WorkspaceContext::collect(),
             std::path::PathBuf::from("/tmp/tinyharness-prompts-test"),

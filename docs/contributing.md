@@ -42,12 +42,10 @@ TinyHarness/                  Binary crate — CLI, agent loop, slash commands
 tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rustyline
 ├── src/
 │   ├── lib.rs                Re-exports all public types
-│   ├── provider/             Provider trait + Ollama/llama.cpp/vLLM/OpenAI-compat/Sockudo impls
+│   ├── provider/             Provider trait + Ollama/OpenAI-compat/Sockudo impls
 │   │   ├── ollama.rs             OllamaProvider — raw SSE streaming, retries, Gemini signatures
-│   │   ├── llama_cpp.rs          LlamaCppProvider — OpenAI-compatible, no auth (local)
-│   │   ├── vllm.rs               VllmProvider — OpenAI-compatible, no auth (local)
 │   │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
-│   │   ├── openai_compat_provider.rs OpenAiCompatProvider — Bearer auth wrapper for hosted gateways
+│   │   ├── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
 │   │   └── sockudo.rs            SockudoProvider — AI Transport via WebSocket (⚠️ experimental)
 │   ├── tools/                15 tools + ToolManager with mode filtering
 │   ├── config/mod.rs         Settings, project settings, prompt management

@@ -13,8 +13,8 @@ use tinyharness_lib::{
     context::WorkspaceContext,
     mode::AgentMode,
     provider::{
-        Message, Provider, Role, llama_cpp::LlamaCppProvider, ollama::OllamaProvider,
-        openai_compat_provider::OpenAiCompatProvider, sockudo::SockudoProvider, vllm::VllmProvider,
+        Message, Provider, Role, ollama::OllamaProvider,
+        openai_compat_provider::OpenAiCompatProvider, sockudo::SockudoProvider,
     },
     session::{Session, SessionStore},
     tools::ToolManager,
@@ -66,9 +66,12 @@ struct Args {
     /// Bearer token for the `--openai-compat` provider. Sent as
     /// `Authorization: Bearer <key>` on every request. Overrides the saved
     /// setting and the `OPENAI_API_KEY` env var. Use `--api-key -` to clear
-    /// the saved key. Has no effect on Ollama, llama.cpp, vLLM, or Sockudo.
-    #[arg(long, default_value_t = String::new())]
-    api_key: String,
+    /// the saved key, or `--api-key ""` to explicitly disable auth (no
+    /// `Authorization` header sent — useful for local OpenAI-compatible
+    /// servers behind no auth). Has no effect on Ollama, llama.cpp, vLLM, or
+    /// Sockudo.
+    #[arg(long)]
+    api_key: Option<String>,
 
     /// Skip the provider health check at startup. Useful when the server
     /// requires a separate scope on `/health`, doesn't expose one, or you
@@ -124,27 +127,41 @@ async fn create_provider(
     settings: &Settings,
 ) -> Arc<Mutex<dyn Provider + Send + Sync>> {
     let provider: Arc<Mutex<dyn Provider + Send + Sync>> = match kind {
-        ProviderKind::LlamaCpp => Arc::new(Mutex::new(LlamaCppProvider::new(url))),
-        ProviderKind::Vllm => Arc::new(Mutex::new(VllmProvider::new(url))),
-        ProviderKind::OpenAiCompat => {
-            let key = api_key.unwrap_or_else(|| {
+        ProviderKind::LlamaCpp => Arc::new(Mutex::new(
+            OpenAiCompatProvider::new(url).with_static_models(vec!["llama-cpp".to_string()]),
+        )),
+        ProviderKind::Vllm => Arc::new(Mutex::new(OpenAiCompatProvider::new(url))),
+        ProviderKind::OpenAiCompat => match api_key {
+            Some(key) if !key.is_empty() => {
+                Arc::new(Mutex::new(OpenAiCompatProvider::with_api_key(url, key)))
+            }
+            // Explicit empty `--api-key ""` opts out of auth entirely.
+            Some(_) => Arc::new(Mutex::new(OpenAiCompatProvider::new(url))),
+            None => {
                 let mut err_out = Output::stderr();
                 let _ = writeln!(
                     err_out,
                     "{BOLD}Error:{RESET} --openai-compat requires an API key. \
                      Pass {CYAN}--api-key <KEY>{RESET}, set the {CYAN}OPENAI_API_KEY{RESET} \
-                     env var, or configure it via {CYAN}--config{RESET}.",
+                     env var, or configure it via {CYAN}--config{RESET}. \
+                     To use the gateway without auth, pass {CYAN}--api-key \"\"{RESET}.",
                 );
                 std::process::exit(1);
+            }
+        },
+        ProviderKind::Ollama => {
+            let provider = OllamaProvider::new(
+                url,
+                settings.ollama_timeout_secs,
+                settings.ollama_max_retries,
+                settings.ollama_think_type,
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
             });
-            Arc::new(Mutex::new(OpenAiCompatProvider::new(url, key)))
+            Arc::new(Mutex::new(provider))
         }
-        ProviderKind::Ollama => Arc::new(Mutex::new(OllamaProvider::new(
-            url,
-            settings.ollama_timeout_secs,
-            settings.ollama_max_retries,
-            settings.ollama_think_type,
-        ))),
         ProviderKind::Sockudo => {
             let app_id = settings.sockudo_app_id.clone().unwrap_or_default();
             let app_key = settings.sockudo_app_key.clone().unwrap_or_default();
@@ -185,10 +202,31 @@ async fn auto_select_model(provider: &mut dyn Provider, saved_model: Option<&Str
         return;
     }
 
-    // If a model was saved from a previous session, trust it directly.
-    // This is important for providers that don't expose a model list
-    // endpoint — the saved model name can't be validated locally.
+    // Query the server's model list once. An empty list means either the
+    // backend doesn't expose `/v1/models` (e.g. raw llama.cpp) or the call
+    // failed; in that case we can't validate anything and must trust the
+    // saved name.
+    let models = provider.list_models().await;
+
     if let Some(saved) = saved_model {
+        // If the server *did* return a model list, validate against it so
+        // we don't silently keep using a stale name carried over from a
+        // different provider/endpoint. A mismatch produces a visible
+        // warning and we fall back to the first available model.
+        if !models.is_empty() && !models.iter().any(|m| m == saved) {
+            let mut err_out = Output::stderr();
+            if let Some(first) = models.first() {
+                let _ = writeln!(
+                    err_out,
+                    "{BOLD}Warning:{RESET} Saved model {BLUE}{saved}{RESET} is not available on \
+                     this server. Switching to {BLUE}{first}{RESET}. Use {CYAN}/model <name>{RESET} \
+                     to pick a different one.",
+                );
+                provider.select_model(first.clone());
+                return;
+            }
+        }
+
         let mut err_out = Output::stderr();
         let _ = writeln!(
             err_out,
@@ -197,8 +235,6 @@ async fn auto_select_model(provider: &mut dyn Provider, saved_model: Option<&Str
         provider.select_model(saved.clone());
         return;
     }
-
-    let models = provider.list_models().await;
 
     // No saved model — pick first available
     if let Some(first) = models.first() {
@@ -453,7 +489,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.url.clone()
     };
 
-    let api_key = agent_setup::resolve_api_key(&args.api_key, &settings);
+    let api_key = agent_setup::resolve_api_key(args.api_key.as_deref(), &settings);
     let skip_hc = args.skip_health_check || settings.skip_health_check;
     let skip_hc_source = if args.skip_health_check {
         "--skip-health-check"
