@@ -339,7 +339,14 @@ pub fn to_openai_message(msg: Message) -> OpenAIMessage {
                     .collect();
                 OpenAIMessage {
                     role: "assistant".to_string(),
-                    content: serde_json::Value::String(msg.content),
+                    // MiniMax and some other strict providers reject empty
+                    // strings in assistant messages that contain only tool
+                    // calls.  Send `null` when there is no text content.
+                    content: if msg.content.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::String(msg.content)
+                    },
                     tool_calls: Some(tool_calls),
                     tool_call_id: None,
                 }
