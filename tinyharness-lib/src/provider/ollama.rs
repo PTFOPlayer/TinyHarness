@@ -479,8 +479,7 @@ async fn stream_ollama_chat(
                 if looks_like_messages_array {
                     for msg in arr.iter_mut() {
                         if let serde_json::Value::Object(msg_map) = msg {
-                            let role =
-                                msg_map.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                            let role = msg_map.get("role").and_then(|v| v.as_str()).unwrap_or("");
                             match role {
                                 "assistant" => {
                                     prev_tool_names.clear();
@@ -527,14 +526,10 @@ async fn stream_ollama_chat(
                                 "tool" => {
                                     // Add "name" field for Ollama/Gemini compatibility
                                     // (only when there's exactly one tool call)
-                                    if !msg_map.contains_key("name")
-                                        && prev_tool_names.len() == 1
-                                    {
+                                    if !msg_map.contains_key("name") && prev_tool_names.len() == 1 {
                                         msg_map.insert(
                                             "name".to_string(),
-                                            serde_json::Value::String(
-                                                prev_tool_names[0].clone(),
-                                            ),
+                                            serde_json::Value::String(prev_tool_names[0].clone()),
                                         );
                                     }
                                     // Add "tool_call_id" for OpenAI-compatible backends
