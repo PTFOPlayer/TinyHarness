@@ -10,8 +10,8 @@ use crate::mode::AgentMode;
 /// Controls how aggressively tool calls are auto-approved.
 ///
 /// Parsed from string values for JSON config: `"off"`, `"safe"`, `"all"`.
-/// Legacy boolean config fields (`auto_accept_all`, `auto_accept_safe_commands`)
-/// are handled by `SettingsStore::load()` when `auto_accept_mode` is absent.
+/// Legacy boolean fields (`auto_accept_all`, `auto_accept_safe_commands`)
+/// are resolved in `SettingsStore::load()` when `auto_accept_mode` is absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AutoAcceptMode {
@@ -951,7 +951,11 @@ mod tests {
 
     fn temp_settings_path() -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
-        dir.push(format!("tinyharness_test_{}.json", std::process::id()));
+        dir.push(format!(
+            "tinyharness_test_{}_{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         dir
     }
 }

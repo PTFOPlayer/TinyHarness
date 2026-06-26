@@ -38,9 +38,10 @@ pub enum ConfirmationDecision {
 /// The logic follows these rules:
 /// 1. Read-only tools (no confirmation needed) → `AutoApproved { auto_accepted: false }`
 /// 2. Per-turn auto-accept (`auto_accept == true`) → `AutoApproved { auto_accepted: true }`
-///    for everything except unsafe `run` commands (which are denied).
+///    for everything except unsafe `run` commands (which prompt via `NeedsConfirmation`).
 /// 3. Auto-accept mode (All) → `AutoApproved { auto_accepted: true }` for everything.
-/// 4. Auto-accept mode (Safe) → read-only only; destructive tools need confirmation.
+/// 4. Auto-accept mode (Safe) → auto-approve safe `run` commands;
+///    unsafe `run` and other destructive tools need confirmation.
 /// 5. Everything else → `NeedsConfirmation`
 pub fn decide_tool_confirmation(
     call: &ToolCall,
@@ -58,14 +59,14 @@ pub fn decide_tool_confirmation(
     }
 
     // Per-turn auto-accept ('a' key): approve destructive tools for the rest
-    // of this turn, but still deny unsafe `run` commands.
+    // of this turn, but still prompt for unsafe `run` commands.
     if auto_accept
         && call.function.name == "run"
         && let Some(cmd_value) = call.function.arguments.get("command")
         && let Some(cmd_str) = cmd_value.as_str()
         && !is_safe_command(cmd_str, safe_commands, denied_commands)
     {
-        return ConfirmationDecision::Denied;
+        return ConfirmationDecision::NeedsConfirmation;
     }
     if auto_accept {
         return ConfirmationDecision::AutoApproved {
@@ -81,8 +82,19 @@ pub fn decide_tool_confirmation(
             }
         }
         AutoAcceptMode::Safe => {
-            // Safe mode: only auto-approve read-only tools (handled above).
-            // Destructive tools need explicit user confirmation.
+            // Safe mode: auto-approve safe run commands, but prompt for
+            // unsafe run and other destructive tools.
+            if call.function.name == "run" {
+                if let Some(cmd_value) = call.function.arguments.get("command")
+                    && let Some(cmd_str) = cmd_value.as_str()
+                    && is_safe_command(cmd_str, safe_commands, denied_commands)
+                {
+                    return ConfirmationDecision::AutoApproved {
+                        auto_accepted: true,
+                    };
+                }
+            }
+            // Unsafe run or other destructive tools — need user confirmation
             ConfirmationDecision::NeedsConfirmation
         }
         AutoAcceptMode::Off => {
@@ -173,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn per_turn_auto_accept_denies_unsafe_run() {
+    fn per_turn_auto_accept_prompts_unsafe_run() {
         let call = make_call("run", json!({"command": "rm -rf /"}));
         let safe_commands = tinyharness_lib::config::get_default_safe_commands();
         let decision = decide_tool_confirmation(
@@ -184,7 +196,7 @@ mod tests {
             &[],
             true,
         );
-        assert_eq!(decision, ConfirmationDecision::Denied);
+        assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
 
     #[test]
@@ -205,6 +217,41 @@ mod tests {
                 auto_accepted: true
             }
         );
+    }
+
+    #[test]
+    fn safe_mode_auto_approves_safe_run() {
+        let call = make_call("run", json!({"command": "ls -la"}));
+        let safe_commands = tinyharness_lib::config::get_default_safe_commands();
+        let decision = decide_tool_confirmation(
+            &call,
+            false,
+            AutoAcceptMode::Safe,
+            &safe_commands,
+            &[],
+            true,
+        );
+        assert_eq!(
+            decision,
+            ConfirmationDecision::AutoApproved {
+                auto_accepted: true
+            }
+        );
+    }
+
+    #[test]
+    fn safe_mode_prompts_unsafe_run() {
+        let call = make_call("run", json!({"command": "rm -rf /"}));
+        let safe_commands = tinyharness_lib::config::get_default_safe_commands();
+        let decision = decide_tool_confirmation(
+            &call,
+            false,
+            AutoAcceptMode::Safe,
+            &safe_commands,
+            &[],
+            true,
+        );
+        assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
 
     #[test]
