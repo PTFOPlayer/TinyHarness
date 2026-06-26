@@ -84,15 +84,14 @@ pub fn decide_tool_confirmation(
         AutoAcceptMode::Safe => {
             // Safe mode: auto-approve safe run commands, but prompt for
             // unsafe run and other destructive tools.
-            if call.function.name == "run" {
-                if let Some(cmd_value) = call.function.arguments.get("command")
-                    && let Some(cmd_str) = cmd_value.as_str()
-                    && is_safe_command(cmd_str, safe_commands, denied_commands)
-                {
-                    return ConfirmationDecision::AutoApproved {
-                        auto_accepted: true,
-                    };
-                }
+            if call.function.name == "run"
+                && let Some(cmd_value) = call.function.arguments.get("command")
+                && let Some(cmd_str) = cmd_value.as_str()
+                && is_safe_command(cmd_str, safe_commands, denied_commands)
+            {
+                return ConfirmationDecision::AutoApproved {
+                    auto_accepted: true,
+                };
             }
             // Unsafe run or other destructive tools — need user confirmation
             ConfirmationDecision::NeedsConfirmation
