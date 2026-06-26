@@ -902,17 +902,24 @@ mod tests {
         let settings: Settings = serde_json::from_str(r#"{"auto_accept_mode": false}"#).unwrap();
         assert_eq!(settings.auto_accept_mode, AutoAcceptMode::Off);
     }
-
     #[test]
     fn auto_accept_mode_from_legacy_all_field() {
-        // auto_accept_all: true → All via serde alias
-        let settings: Settings = serde_json::from_str(r#"{"auto_accept_all": true}"#).unwrap();
+        // auto_accept_all: true → All via load() resolution
+        let store = SettingsStore::new(temp_settings_path());
+        let json = r#"{"auto_accept_all": true}"#;
+        std::fs::write(store.path(), json).unwrap();
+        let settings = store.load().unwrap();
         assert_eq!(settings.auto_accept_mode, AutoAcceptMode::All);
+        let _ = std::fs::remove_file(store.path());
 
-        let settings: Settings = serde_json::from_str(r#"{"auto_accept_all": false}"#).unwrap();
+        // auto_accept_all: false → Off
+        let store = SettingsStore::new(temp_settings_path());
+        let json = r#"{"auto_accept_all": false}"#;
+        std::fs::write(store.path(), json).unwrap();
+        let settings = store.load().unwrap();
         assert_eq!(settings.auto_accept_mode, AutoAcceptMode::Off);
+        let _ = std::fs::remove_file(store.path());
     }
-
     #[test]
     fn auto_accept_mode_from_legacy_safe_commands_field() {
         // auto_accept_safe_commands: false → Off via load() resolution
