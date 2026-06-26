@@ -10,9 +10,10 @@ use crate::mode::AgentMode;
 /// Controls how aggressively tool calls are auto-approved.
 ///
 /// Parsed from string values for JSON config: `"off"`, `"safe"`, `"all"`.
-/// Legacy boolean fields (`auto_accept_all`, `auto_accept_safe_commands`)
-/// are also accepted for backward compatibility during deserialization.
+/// Legacy boolean config fields (`auto_accept_all`, `auto_accept_safe_commands`)
+/// are handled by `SettingsStore::load()` when `auto_accept_mode` is absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AutoAcceptMode {
     Off,
     #[default]
