@@ -561,6 +561,9 @@ impl SettingsStore {
             return Ok(Settings::default());
         }
         let content = std::fs::read_to_string(&self.path)?;
+        if content.trim().is_empty() {
+            return Ok(Settings::default());
+        }
         let settings = serde_json::from_str(&content)?;
         Ok(settings)
     }
@@ -770,5 +773,28 @@ mod tests {
         assert_eq!(settings.preferred_mode, AgentMode::Casual);
         assert!(settings.auto_accept_safe_commands);
         assert!(!settings.skip_health_check);
+    }
+
+    #[test]
+    fn load_settings_empty_file_uses_defaults() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after UNIX_EPOCH")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "tinyharness_settings_empty_{}_{}.json",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::write(&path, "").expect("should create empty settings file");
+
+        let store = SettingsStore::new(path.clone());
+        let settings = store.load().expect("empty settings file should load");
+        assert_eq!(settings.last_provider, ProviderKind::Ollama);
+        assert_eq!(settings.preferred_mode, AgentMode::Casual);
+        assert!(settings.auto_accept_safe_commands);
+        assert!(!settings.skip_health_check);
+
+        let _ = std::fs::remove_file(path);
     }
 }
