@@ -777,15 +777,8 @@ mod tests {
 
     #[test]
     fn load_settings_empty_file_uses_defaults() {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock should be after UNIX_EPOCH")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "tinyharness_settings_empty_{}_{}.json",
-            std::process::id(),
-            nanos
-        ));
+        let temp_file = tempfile::NamedTempFile::new().expect("should create temp settings file");
+        let path = temp_file.path().to_path_buf();
         std::fs::write(&path, "").expect("should create empty settings file");
 
         let store = SettingsStore::new(path.clone());
@@ -794,7 +787,5 @@ mod tests {
         assert_eq!(settings.preferred_mode, AgentMode::Casual);
         assert!(settings.auto_accept_safe_commands);
         assert!(!settings.skip_health_check);
-
-        let _ = std::fs::remove_file(path);
     }
 }
