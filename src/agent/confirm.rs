@@ -59,15 +59,15 @@ pub fn decide_tool_confirmation(
 
     // Per-turn auto-accept ('a' key): approve destructive tools for the rest
     // of this turn, but still deny unsafe `run` commands.
+    if auto_accept
+        && call.function.name == "run"
+        && let Some(cmd_value) = call.function.arguments.get("command")
+        && let Some(cmd_str) = cmd_value.as_str()
+        && !is_safe_command(cmd_str, safe_commands, denied_commands)
+    {
+        return ConfirmationDecision::Denied;
+    }
     if auto_accept {
-        if call.function.name == "run" {
-            if let Some(cmd_value) = call.function.arguments.get("command")
-                && let Some(cmd_str) = cmd_value.as_str()
-                && !is_safe_command(cmd_str, safe_commands, denied_commands)
-            {
-                return ConfirmationDecision::Denied;
-            }
-        }
         return ConfirmationDecision::AutoApproved {
             auto_accepted: true,
         };

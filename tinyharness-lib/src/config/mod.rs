@@ -460,9 +460,9 @@ pub struct Settings {
     ///
     /// Parsed from `/autoaccept` command. Use `safe` for everyday use.
     ///
-    /// Legacy boolean configs are also accepted via deserialization aliases
-    /// and field resolution in `SettingsStore::load()`.
-    #[serde(default, alias = "auto_accept_all")]
+    /// Legacy boolean configs are also accepted via field resolution
+    /// in `SettingsStore::load()`.
+    #[serde(default)]
     pub auto_accept_mode: AutoAcceptMode,
     /// Skip the provider health check at startup (default: false).
     /// Useful for the `--openai-compat` provider when the gateway requires a
@@ -652,11 +652,11 @@ impl SettingsStore {
 
         // Legacy field resolution: old configs used `auto_accept_safe_commands: bool`
         // or `auto_accept_all: bool` instead of `auto_accept_mode`.
-        // If auto_accept_mode was not explicitly set (still default) and legacy
-        // fields are present, resolve the mode from them.
-        if settings.auto_accept_mode == AutoAcceptMode::Safe
-            && let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content)
+        // Only resolve if `auto_accept_mode` was NOT present in the JSON —
+        // the current value is just the default (Safe).
+        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content)
             && let Some(obj) = raw.as_object()
+            && !obj.contains_key("auto_accept_mode")
         {
             // auto_accept_all: true → All, false → Off
             if let Some(val) = obj.get("auto_accept_all") {
