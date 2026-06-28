@@ -11,9 +11,13 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, ... }:
+  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, advisory-db, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -33,6 +37,13 @@
           filter = path: type:
             (craneLib.filterCargoSources path type) ||
             (lib.hasSuffix ".md" path);
+          src = lib.cleanSource ./.;
+        };
+
+        denySrc = lib.cleanSourceWith {
+          filter = path: type:
+            (craneLib.filterCargoSources path type) ||
+            (lib.hasSuffix "deny.toml" path);
           src = lib.cleanSource ./.;
         };
 
@@ -78,6 +89,14 @@
           });
           fmt = craneLib.cargoFmt {
             inherit src;
+          };
+          deny = craneLib.cargoDeny {
+            src = denySrc;
+            cargoDenyExtraArgs = "--all-features";
+          };
+          audit = craneLib.cargoAudit {
+            src = craneLib.cleanCargoSource ./.;
+            inherit advisory-db;
           };
         };
 
