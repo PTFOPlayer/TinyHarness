@@ -116,7 +116,7 @@ fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
     }
 }
 
-/// Create the provider backend, run health checks, and return it wrapped in Arc<Mutex>.
+/// Create the provider backend, run health checks, and return it wrapped in `Arc<Mutex>`.
 #[allow(clippy::too_many_arguments)]
 async fn create_provider(
     kind: ProviderKind,
@@ -531,7 +531,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
         } else {
-            auto_select_model(&mut *p, settings.last_model.as_ref()).await;
+            auto_select_model(
+                &mut *p,
+                settings
+                    .get_model_for(provider_kind)
+                    .map(|s| s.to_string())
+                    .as_ref(),
+            )
+            .await;
         }
     }
 
@@ -549,11 +556,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if settings.last_provider != provider_kind {
             settings.last_provider = provider_kind;
         }
-        settings.last_provider_url = Some(url.clone());
+        settings.set_url_for(provider_kind, url.clone());
         save_settings(&settings);
     } else if !explicit_provider && !args.url.is_empty() {
         // User gave --url only (provider resolved from saved settings).
-        settings.last_provider_url = Some(url.clone());
+        settings.set_url_for(provider_kind, url.clone());
         save_settings(&settings);
     }
     // else: no CLI override — leave settings as they are.
@@ -634,6 +641,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut ctx = CommandContext::new(Arc::clone(&provider), workspace_ctx, prompts_dir);
     ctx.current_mode = initial_mode;
+    ctx.show_thinking = settings.show_thinking;
     ctx.session_id = Some(session.id().to_string());
 
     // Build the command registry to extract command names and subcommand

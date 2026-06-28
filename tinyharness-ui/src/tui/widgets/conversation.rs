@@ -2762,7 +2762,7 @@ mod visual_tests {
 
             // Mark columns beyond conversation width (simulating sidebar)
             let conv_width = width;
-            for row in 0..conv_height {
+            for _row in 0..conv_height {
                 // (no sidebar in this test, but we could add one)
             }
 

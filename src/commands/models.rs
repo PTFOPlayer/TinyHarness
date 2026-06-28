@@ -33,8 +33,10 @@ async_command!(
             execute_select(&mut ctx.output, &mut *p, &name).await?;
 
             let mut settings = load_settings();
-            settings.last_model = p.current_model();
-            save_settings(&settings);
+            if let Some(model) = p.current_model() {
+                settings.set_model_for(settings.last_provider, model);
+                save_settings(&settings);
+            }
 
             Ok(CommandResult::Ok)
         }

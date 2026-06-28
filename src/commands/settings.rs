@@ -31,7 +31,7 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
     let provider_str = format!("{}", settings.last_provider);
     let _ = writeln!(out, "{BOLD}│{RESET} Provider:  {BLUE}{provider_str}{RESET}",);
 
-    match &settings.last_model {
+    match settings.get_current_model() {
         Some(model) => {
             let _ = writeln!(out, "{BOLD}│{RESET} Model:     {BLUE}{model}{RESET}");
         }

@@ -410,6 +410,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Publish a versioned message event to Sockudo via signed HTTP POST.
+#[allow(clippy::too_many_arguments)]
 async fn publish_versioned_event(
     client: &reqwest::Client,
     app_id: &str,

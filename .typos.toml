@@ -1,0 +1,25 @@
+# typos configuration: https://github.com/crate-ci/typos
+# Allowlist false positives from test fixtures, technical names, and common
+# short tokens that the dictionary flags too aggressively.
+
+[default]
+extend-ignore-re = [
+    # Ignore short truncated-string test fixtures, e.g. truncate("hello", 3) == "hel"
+    '"hel"',
+    '"Hello Worl"',
+    'b"fo"',
+]
+
+[default.extend-words]
+# Project / crate names
+ratatui = "ratatui"
+# Accepted alternate spellings used in this codebase
+unparseable = "unparseable"
+Invokable = "Invokable"
+
+[files]
+extend-exclude = [
+    "target/",
+    "*.lock",
+    "tests/sockudo/",
+]

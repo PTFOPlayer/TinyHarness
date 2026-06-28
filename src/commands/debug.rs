@@ -287,7 +287,7 @@ fn dump_provider_diagnostics(file: &mut std::fs::File, _ctx: &CommandContext) {
 
     writeln!(file, "Provider kind: {}", settings.last_provider).unwrap();
 
-    if let Some(url) = &settings.last_provider_url {
+    if let Some(url) = settings.get_current_url() {
         writeln!(file, "Provider URL: {}", url).unwrap();
     } else {
         writeln!(file, "Provider URL: (not set)").unwrap();
@@ -296,7 +296,7 @@ fn dump_provider_diagnostics(file: &mut std::fs::File, _ctx: &CommandContext) {
     writeln!(
         file,
         "Current model: {}",
-        settings.last_model.as_deref().unwrap_or("(none)")
+        settings.get_current_model().unwrap_or("(none)")
     )
     .unwrap();
 

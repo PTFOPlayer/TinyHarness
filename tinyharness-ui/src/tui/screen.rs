@@ -202,7 +202,7 @@ impl Screen {
     /// If `wrap` is true, text wraps to the next line. If false, text is
     /// truncated at the right edge. Uses Unicode display widths.
     ///
-    /// This is a convenience wrapper around [`Self::write_wrapped`] with
+    /// This is a convenience wrapper around `Self::write_wrapped` with
     /// simple wrapping bounded by the screen dimensions.
     pub fn write_str_wrapped(
         &mut self,
@@ -239,7 +239,7 @@ impl Screen {
     /// `max_row` is the maximum row; text stops when `row > max_row`.
     /// `left_margin` is the column where wrapped lines start. Uses Unicode display widths.
     ///
-    /// This is a convenience wrapper around [`Self::write_wrapped`] with
+    /// This is a convenience wrapper around `Self::write_wrapped` with
     /// `skip_rows = 0` and wrapping enabled.
     pub fn write_str_wrapped_clipped(
         &mut self,
@@ -279,7 +279,7 @@ impl Screen {
     /// `max_row` is the maximum row; text stops when `row > max_row`.
     /// `left_margin` is the column where wrapped lines start. Uses Unicode display widths.
     ///
-    /// This is a convenience wrapper around [`Self::write_wrapped`] with
+    /// This is a convenience wrapper around `Self::write_wrapped` with
     /// `skip_rows > 0`.
     pub fn write_str_wrapped_skip_clipped(
         &mut self,
@@ -1122,7 +1122,7 @@ mod tests {
     fn test_screen_write_str_wrapped_clipped_multiline() {
         // Test clipped wrapping with a multi-line message
         let mut s = Screen::new(10, 5);
-        let end_row = s.write_str_wrapped_clipped(
+        let _end_row = s.write_str_wrapped_clipped(
             0,
             2,
             "AB CD",
@@ -1167,7 +1167,7 @@ mod tests {
     fn test_screen_write_str_wrapped_clipped_with_left_margin() {
         // Test wrapped clipping with left margin (like conversation messages)
         let mut s = Screen::new(20, 5);
-        let end_row = s.write_str_wrapped_clipped(
+        let _end_row = s.write_str_wrapped_clipped(
             0,
             7,
             "Hello World This Is A Long Message That Wraps",

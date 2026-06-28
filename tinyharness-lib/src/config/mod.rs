@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::{fmt, str::FromStr};
 
@@ -323,7 +324,7 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
 }
 
 /// Identifies which provider backend was used last.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ProviderKind {
     #[default]
     Ollama,
@@ -420,12 +421,18 @@ impl FromStr for OllamaThinkType {
 pub struct Settings {
     #[serde(default)]
     pub last_provider: ProviderKind,
-    /// Last URL used for the active provider. Set automatically by `--config`
-    /// or by passing `--url`. Persisted so subsequent runs don't re-prompt.
-    /// (default: None)
-    pub last_provider_url: Option<String>,
-    #[serde(default)]
-    pub last_model: Option<String>,
+    /// Per-provider URL overrides. Keyed by `ProviderKind` so switching
+    /// providers remembers each one's last URL. Migrated from the legacy
+    /// `last_provider_url` field on load.
+    /// (default: empty)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub provider_urls: HashMap<ProviderKind, String>,
+    /// Per-provider model selections. Keyed by `ProviderKind` so switching
+    /// providers remembers each one's last model. Migrated from the legacy
+    /// `last_model` field on load.
+    /// (default: empty)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub provider_models: HashMap<ProviderKind, String>,
     #[serde(default)]
     pub preferred_mode: AgentMode,
     #[serde(default)]
@@ -487,8 +494,8 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             last_provider: ProviderKind::Ollama,
-            last_provider_url: None,
-            last_model: None,
+            provider_urls: HashMap::new(),
+            provider_models: HashMap::new(),
             preferred_mode: AgentMode::Casual,
             ollama_api_key: None,
             openai_compat_api_key: None,
@@ -574,6 +581,36 @@ impl Settings {
     /// Defaults to an empty list (nothing denied).
     pub fn get_denied_commands(&self) -> Vec<String> {
         self.denied_command_prefixes.clone().unwrap_or_default()
+    }
+
+    /// Get the saved URL for a specific provider kind, if any.
+    pub fn get_url_for(&self, kind: ProviderKind) -> Option<&str> {
+        self.provider_urls.get(&kind).map(|s| s.as_str())
+    }
+
+    /// Set the URL for a specific provider kind.
+    pub fn set_url_for(&mut self, kind: ProviderKind, url: String) {
+        self.provider_urls.insert(kind, url);
+    }
+
+    /// Get the saved model for a specific provider kind, if any.
+    pub fn get_model_for(&self, kind: ProviderKind) -> Option<&str> {
+        self.provider_models.get(&kind).map(|s| s.as_str())
+    }
+
+    /// Set the model for a specific provider kind.
+    pub fn set_model_for(&mut self, kind: ProviderKind, model: String) {
+        self.provider_models.insert(kind, model);
+    }
+
+    /// Get the saved model for the current (`last_provider`) kind, if any.
+    pub fn get_current_model(&self) -> Option<&str> {
+        self.get_model_for(self.last_provider)
+    }
+
+    /// Get the saved URL for the current (`last_provider`) kind, if any.
+    pub fn get_current_url(&self) -> Option<&str> {
+        self.get_url_for(self.last_provider)
     }
 }
 
@@ -676,6 +713,32 @@ impl SettingsStore {
             }
         }
 
+        // Migrate legacy `last_model` and `last_provider_url` fields into
+        // the per-provider HashMaps. The key is `last_provider` (the
+        // provider that was active when the old config was saved).
+        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content)
+            && let Some(obj) = raw.as_object()
+        {
+            if settings.provider_models.is_empty()
+                && let Some(model) = obj.get("last_model")
+                && let Some(model_str) = model.as_str()
+                && !model_str.is_empty()
+            {
+                settings
+                    .provider_models
+                    .insert(settings.last_provider, model_str.to_string());
+            }
+            if settings.provider_urls.is_empty()
+                && let Some(url) = obj.get("last_provider_url")
+                && let Some(url_str) = url.as_str()
+                && !url_str.is_empty()
+            {
+                settings
+                    .provider_urls
+                    .insert(settings.last_provider, url_str.to_string());
+            }
+        }
+
         Ok(settings)
     }
 
@@ -723,14 +786,16 @@ impl SettingsStore {
 
 /// Load settings from the default path, returning defaults on any error.
 ///
-/// This is a convenience wrapper around [`SettingsStore::default_path().load_or_default()`].
+/// This is a convenience wrapper around
+/// [`SettingsStore::default_path`] followed by [`SettingsStore::load_or_default`].
 pub fn load_settings() -> Settings {
     SettingsStore::default_path().load_or_default()
 }
 
 /// Save settings to the default path atomically.
 ///
-/// This is a convenience wrapper around [`SettingsStore::default_path().save()`].
+/// This is a convenience wrapper around
+/// [`SettingsStore::default_path`] followed by [`SettingsStore::save`].
 /// On error, prints a warning to stderr (matching the original behaviour).
 pub fn save_settings(settings: &Settings) {
     let store = SettingsStore::default_path();
@@ -947,6 +1012,84 @@ mod tests {
             serde_json::from_str(r#"{"auto_accept_mode": "off", "auto_accept_all": true}"#)
                 .unwrap();
         assert_eq!(settings.auto_accept_mode, AutoAcceptMode::Off);
+    }
+
+    #[test]
+    fn migrate_legacy_last_model_and_url() {
+        let store = SettingsStore::new(temp_settings_path());
+        let json = r#"{"last_provider": "Ollama", "last_model": "qwen2.5:7b", "last_provider_url": "http://localhost:11434"}"#;
+        std::fs::write(store.path(), json).unwrap();
+        let settings = store.load().unwrap();
+        assert_eq!(
+            settings.get_model_for(ProviderKind::Ollama),
+            Some("qwen2.5:7b")
+        );
+        assert_eq!(
+            settings.get_url_for(ProviderKind::Ollama),
+            Some("http://localhost:11434")
+        );
+        let _ = std::fs::remove_file(store.path());
+    }
+
+    #[test]
+    fn migrate_legacy_fields_for_openai_compat() {
+        let store = SettingsStore::new(temp_settings_path());
+        let json = r#"{"last_provider": "OpenAiCompat", "last_model": "gpt-4o", "last_provider_url": "https://api.openai.com/v1"}"#;
+        std::fs::write(store.path(), json).unwrap();
+        let settings = store.load().unwrap();
+        assert_eq!(
+            settings.get_model_for(ProviderKind::OpenAiCompat),
+            Some("gpt-4o")
+        );
+        assert_eq!(
+            settings.get_url_for(ProviderKind::OpenAiCompat),
+            Some("https://api.openai.com/v1")
+        );
+        // Ollama should NOT have a model from this migration
+        assert_eq!(settings.get_model_for(ProviderKind::Ollama), None);
+        let _ = std::fs::remove_file(store.path());
+    }
+
+    #[test]
+    fn per_provider_model_and_url_accessors() {
+        let mut settings = Settings::default();
+        settings.set_model_for(ProviderKind::Ollama, "qwen2.5:7b".to_string());
+        settings.set_model_for(ProviderKind::LlamaCpp, "llama-3.1-8b".to_string());
+        settings.set_url_for(ProviderKind::LlamaCpp, "http://localhost:8080".to_string());
+
+        assert_eq!(
+            settings.get_model_for(ProviderKind::Ollama),
+            Some("qwen2.5:7b")
+        );
+        assert_eq!(
+            settings.get_model_for(ProviderKind::LlamaCpp),
+            Some("llama-3.1-8b")
+        );
+        assert_eq!(settings.get_model_for(ProviderKind::Vllm), None);
+        assert_eq!(
+            settings.get_url_for(ProviderKind::LlamaCpp),
+            Some("http://localhost:8080")
+        );
+        assert_eq!(settings.get_url_for(ProviderKind::Ollama), None);
+    }
+
+    #[test]
+    fn get_current_model_and_url_use_last_provider() {
+        let mut settings = Settings {
+            last_provider: ProviderKind::OpenAiCompat,
+            ..Settings::default()
+        };
+        settings.set_model_for(ProviderKind::OpenAiCompat, "gpt-4o".to_string());
+        settings.set_url_for(
+            ProviderKind::OpenAiCompat,
+            "https://api.openai.com/v1".to_string(),
+        );
+
+        assert_eq!(settings.get_current_model(), Some("gpt-4o"));
+        assert_eq!(
+            settings.get_current_url(),
+            Some("https://api.openai.com/v1")
+        );
     }
 
     fn temp_settings_path() -> std::path::PathBuf {

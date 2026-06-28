@@ -210,14 +210,14 @@ pub fn prompt_for_url(
 /// Resolve the URL to use for the given provider based on (in order of
 /// precedence):
 /// 1. `cli_url` (the value of `--url` if passed)
-/// 2. `last_provider_url` from settings (only if it matches `kind`)
+/// 2. URL from `settings.provider_urls` for the given `kind`
 /// 3. the hardcoded default for `kind`
 pub fn resolve_url(kind: ProviderKind, cli_url: &str, settings: &Settings) -> String {
     if !cli_url.is_empty() {
         return cli_url.to_string();
     }
-    if let Some(saved) = &settings.last_provider_url {
-        return saved.clone();
+    if let Some(saved) = settings.get_url_for(kind) {
+        return saved.to_string();
     }
     default_url_for(kind).to_string()
 }
@@ -240,7 +240,7 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
     // Load existing settings to preserve unrelated fields (mode, model, etc.)
     let mut s = tinyharness_lib::config::load_settings();
     s.last_provider = kind;
-    s.last_provider_url = Some(url.to_string());
+    s.set_url_for(kind, url.to_string());
     save_settings(&s);
 }
 
@@ -495,10 +495,8 @@ mod tests {
 
     #[test]
     fn resolve_url_cli_overrides_everything() {
-        let s = Settings {
-            last_provider_url: Some("http://saved:1234".to_string()),
-            ..Settings::default()
-        };
+        let mut s = Settings::default();
+        s.set_url_for(ProviderKind::Ollama, "http://saved:1234".to_string());
         assert_eq!(
             resolve_url(ProviderKind::Ollama, "http://cli:9999", &s),
             "http://cli:9999"
@@ -507,10 +505,8 @@ mod tests {
 
     #[test]
     fn resolve_url_uses_saved_when_no_cli() {
-        let s = Settings {
-            last_provider_url: Some("http://saved:1234".to_string()),
-            ..Settings::default()
-        };
+        let mut s = Settings::default();
+        s.set_url_for(ProviderKind::Ollama, "http://saved:1234".to_string());
         assert_eq!(
             resolve_url(ProviderKind::Ollama, "", &s),
             "http://saved:1234"

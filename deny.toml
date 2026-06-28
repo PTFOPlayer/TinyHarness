@@ -1,0 +1,43 @@
+# cargo-deny configuration for TinyHarness (MIT-licensed).
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Fail on any RUSTSEC advisory. Add IDs here with a reason if intentionally ignored.
+ignore = []
+
+[licenses]
+# Permissive licenses compatible with redistribution under MIT.
+# Copyleft licenses (GPL/LGPL/AGPL/MPL/EPL/CDDL/SSPL/BUSL) are intentionally
+# omitted — add only after legal review.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-2-Clause-Patent",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",  # Mozilla CA bundle (webpki-root-certs)
+    "Unicode-3.0",          # unicode-ident, icu
+    "Unicode-DFS-2016",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace members aren't published; allow path-only wildcards if any appear.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

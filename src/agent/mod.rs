@@ -443,8 +443,10 @@ pub async fn run_agent_loop(
                             break;
                         }
 
-                        // Show spinner animation while waiting for first chunk
-                        if waiting_for_first_chunk {
+                        // Show spinner animation while waiting for first chunk.
+                        // When show_thinking is enabled, skip the spinner — the
+                        // model's actual thinking content will stream in instead.
+                        if waiting_for_first_chunk && !ctx.show_thinking {
                             let frame = SPINNER_FRAMES[spinner_idx % SPINNER_FRAMES.len()];
                             spinner_idx += 1;
                             if has_shown_spinner {

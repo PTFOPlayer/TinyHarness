@@ -432,6 +432,13 @@ async fn stream_ollama_chat(
     let url = format!("{base_url}api/chat");
     let mut request = serde_json::to_value(request).map_err(|e| format!("serialize: {e}"))?;
 
+    // Force streaming — ollama-rs sets `stream: true` only inside its own
+    // `send_chat_messages_stream()` method, which we bypass. Without this,
+    // Ollama returns the entire response as a single JSON object instead of
+    // streaming line-by-line, causing the UI to block until the full message
+    // arrives.
+    request["stream"] = serde_json::Value::Bool(true);
+
     // Fix ollama-rs 0.3.4 serialization quirks for Ollama Cloud / Gemini compatibility:
     //
     // 1. ToolType::Function serializes as "Function" (uppercase F), but the

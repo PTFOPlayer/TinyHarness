@@ -165,7 +165,7 @@ pub trait Command: Send + Sync {
     /// One-line description for /help.
     fn description(&self) -> &'static str;
 
-    /// Usage string (e.g., "/model <name>"). Defaults to the command name.
+    /// Usage string (e.g., `/model <name>`). Defaults to the command name.
     fn usage(&self) -> &'static str {
         self.name()
     }
@@ -310,7 +310,7 @@ pub struct CommandRegistry {
     /// Alias descriptions for /help display.
     alias_descriptions: HashMap<&'static str, &'static str>,
     /// Pre-computed (usage, description) pairs for /help, including aliases.
-    /// Populated by [`freeze_descriptions`] after all registrations are done.
+    /// Populated by `freeze_descriptions` after all registrations are done.
     descriptions: Vec<(&'static str, &'static str)>,
     /// Subcommand completions for tab-completion (command name → argument completions).
     subcommands: HashMap<String, Vec<String>>,

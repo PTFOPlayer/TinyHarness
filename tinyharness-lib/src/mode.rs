@@ -50,7 +50,7 @@ impl AgentMode {
     /// Load the system prompt for this mode from `.md` files in `prompts_dir`.
     ///
     /// For Agent, Planning, and Research modes, the prompt is assembled as:
-    ///   header.md + blank line + <mode>.md
+    ///   `header.md` + blank line + `<mode>.md`
     ///
     /// Casual mode uses only its own file (self-contained).
     ///

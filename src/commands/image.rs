@@ -11,10 +11,10 @@ const MAX_PENDING_IMAGES: usize = 10;
 /// Execute the `/image` command.
 ///
 /// Usage:
-///   /image <path>        — Attach an image file
-///   /image               — Show pending images
-///   /image clear         — Clear all pending images
-///   /image drop <n>      — Remove a specific pending image by index
+///   `/image <path>`        — Attach an image file
+///   `/image`               — Show pending images
+///   `/image clear`         — Clear all pending images
+///   `/image drop <n>`      — Remove a specific pending image by index
 pub fn execute(ctx: &mut CommandContext, arg: Option<&str>) {
     match arg {
         None | Some("") => {
