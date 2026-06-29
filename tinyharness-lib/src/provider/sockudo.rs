@@ -308,7 +308,9 @@ impl SockudoProvider {
                         });
                         let _ = ws_write
                             .send(WsMessage::Text(
-                                serde_json::to_string(&subscribe_msg).unwrap_or_default().into(),
+                                serde_json::to_string(&subscribe_msg)
+                                    .unwrap_or_default()
+                                    .into(),
                             ))
                             .await;
                         continue;
