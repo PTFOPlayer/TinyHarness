@@ -4,3 +4,5 @@
 /.tinyharness
 /todo
 
+.envrc
+.direnv

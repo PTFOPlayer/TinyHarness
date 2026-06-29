@@ -12,6 +12,7 @@
 
 use std::io::{IsTerminal, Write};
 
+use tinyharness_lib::SecretString;
 use tinyharness_lib::config::{ProviderKind, Settings, load_settings, save_settings};
 use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
@@ -30,19 +31,18 @@ pub struct SetupResult {
 pub enum ApiKeyChoice {
     /// Keep the existing key (or no key) as-is.
     Keep,
-    /// Set a new key (the new value is in the `String`).
-    Set(String),
+    /// Set a new key (the new version is in the `SecretString`)
+    Set(SecretString),
     /// Remove the existing key.
     Clear,
 }
 
 /// Display a stored API key in masked form (first 4 + last 4 chars).
 /// Returns "****" for short keys and "(not set)" for `None`.
-pub fn mask_api_key(key: Option<&String>) -> String {
+pub fn mask_api_key(key: Option<&SecretString>) -> String {
     match key {
         None => "(not set)".to_string(),
-        Some(k) if k.len() > 8 => format!("{}...{}", &k[..4], &k[k.len() - 4..]),
-        Some(_) => "****".to_string(),
+        Some(k) => k.masked(),
     }
 }
 
@@ -93,7 +93,7 @@ pub fn prompt_for_api_key(out: &mut Output) -> Result<ApiKeyChoice, String> {
     } else if trimmed.eq_ignore_ascii_case("clear") {
         Ok(ApiKeyChoice::Clear)
     } else {
-        Ok(ApiKeyChoice::Set(trimmed.to_string()))
+        Ok(ApiKeyChoice::Set(SecretString::new(trimmed)))
     }
 }
 
@@ -258,13 +258,13 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
 /// `cli_api_key` semantics:
 /// * `None` — flag not passed; fall through to env/settings.
 /// * `Some("-")` — sentinel that clears any saved key. Returns `None`.
-/// * `Some("")` — explicit opt-out from auth. Returns `Some(String::new())`
+/// * `Some("")` — explicit opt-out from auth. Returns `Some(SecretString::default())`
 ///   so the provider can be constructed without an `Authorization` header.
 /// * `Some(key)` — use this key (and persist it).
 ///
 /// Returns `None` when no key should be sent. Only the `OpenAiCompat`
 /// provider uses this value; Ollama, llama.cpp, vLLM, and Sockudo ignore it.
-pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option<String> {
+pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option<SecretString> {
     let result = resolve_api_key_pure(cli_api_key, settings);
     // Persist side-effects only when the user actually passed `--api-key` on
     // the command line (cli_api_key is Some). The pure function is used in
@@ -278,7 +278,7 @@ pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option
                 s.openai_compat_api_key = None;
             }
             _ => {
-                s.openai_compat_api_key = Some(raw.to_string());
+                s.openai_compat_api_key = Some(SecretString::new(raw));
             }
         }
         save_settings(&s);
@@ -288,17 +288,20 @@ pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option
 
 /// Pure (side-effect-free) API key resolution.  Used by tests so they never
 /// touch the real `~/.config/tinyharness/settings.json`.
-pub fn resolve_api_key_pure(cli_api_key: Option<&str>, settings: &Settings) -> Option<String> {
+pub fn resolve_api_key_pure(
+    cli_api_key: Option<&str>,
+    settings: &Settings,
+) -> Option<SecretString> {
     match cli_api_key {
         Some("-") => return None,
-        Some("") => return Some(String::new()),
-        Some(k) => return Some(k.to_string()),
+        Some("") => return Some(SecretString::default()),
+        Some(k) => return Some(SecretString::new(k)),
         None => {}
     }
     if let Ok(env_key) = std::env::var("OPENAI_API_KEY")
         && !env_key.is_empty()
     {
-        return Some(env_key);
+        return Some(SecretString::new(env_key));
     }
     settings
         .openai_compat_api_key
@@ -405,7 +408,7 @@ fn prompt_for_sockudo_credentials(out: &mut Output) -> Result<(), String> {
         if trimmed.is_empty() {
             s.sockudo_app_secret.clone().unwrap_or_default()
         } else {
-            trimmed.to_string()
+            SecretString::new(trimmed)
         }
     };
 
@@ -541,12 +544,12 @@ mod tests {
     fn resolve_api_key_settings_fallback() {
         // When no CLI flag and no env var, fall back to settings.
         let s = Settings {
-            openai_compat_api_key: Some("sk-settings".to_string()),
+            openai_compat_api_key: Some(SecretString::new("sk-settings")),
             ..Settings::default()
         };
         assert_eq!(
             resolve_api_key_pure(None, &s),
-            Some("sk-settings".to_string())
+            Some(SecretString::new("sk-settings"))
         );
     }
 
@@ -559,7 +562,7 @@ mod tests {
     #[test]
     fn resolve_api_key_empty_string_in_settings_is_ignored() {
         let s = Settings {
-            openai_compat_api_key: Some(String::new()),
+            openai_compat_api_key: Some(SecretString::default()),
             ..Settings::default()
         };
         assert_eq!(resolve_api_key_pure(None, &s), None);
@@ -569,12 +572,12 @@ mod tests {
     fn resolve_api_key_cli_value_wins() {
         // CLI key takes precedence over env and settings.
         let s = Settings {
-            openai_compat_api_key: Some("sk-settings".to_string()),
+            openai_compat_api_key: Some(SecretString::new("sk-settings")),
             ..Settings::default()
         };
         assert_eq!(
             resolve_api_key_pure(Some("sk-from-cli"), &s),
-            Some("sk-from-cli".to_string())
+            Some(SecretString::new("sk-from-cli"))
         );
     }
 
@@ -582,7 +585,7 @@ mod tests {
     fn resolve_api_key_clear_sentinel() {
         // The sentinel "-" should return None (clear).
         let s = Settings {
-            openai_compat_api_key: Some("sk-settings".to_string()),
+            openai_compat_api_key: Some(SecretString::new("sk-settings")),
             ..Settings::default()
         };
         assert_eq!(resolve_api_key_pure(Some("-"), &s), None);
@@ -593,10 +596,13 @@ mod tests {
         // Explicit `--api-key ""` returns Some("") so the caller can
         // construct a no-auth provider, ignoring any stored key.
         let s = Settings {
-            openai_compat_api_key: Some("sk-settings".to_string()),
+            openai_compat_api_key: Some(SecretString::new("sk-settings")),
             ..Settings::default()
         };
-        assert_eq!(resolve_api_key_pure(Some(""), &s), Some(String::new()));
+        assert_eq!(
+            resolve_api_key_pure(Some(""), &s),
+            Some(SecretString::default())
+        );
     }
 
     #[test]
@@ -630,7 +636,7 @@ mod tests {
     fn mask_api_key_handles_long_keys() {
         // 12-char key → first 4 + "..." + last 4
         assert_eq!(
-            mask_api_key(Some(&"abcdef123456".to_string())),
+            mask_api_key(Some(&SecretString::new("abcdef123456".to_string()))),
             "abcd...3456"
         );
     }
@@ -638,14 +644,23 @@ mod tests {
     #[test]
     fn mask_api_key_handles_short_keys() {
         // 8 chars or fewer → fully masked
-        assert_eq!(mask_api_key(Some(&"abc".to_string())), "****");
-        assert_eq!(mask_api_key(Some(&"abcdefgh".to_string())), "****");
+        assert_eq!(
+            mask_api_key(Some(&SecretString::new("abc".to_string()))),
+            "****"
+        );
+        assert_eq!(
+            mask_api_key(Some(&SecretString::new("abcdefgh".to_string()))),
+            "****"
+        );
     }
 
     #[test]
     fn mask_api_key_handles_exactly_9_chars() {
         // 9 chars is the threshold: still show first/last 4
-        assert_eq!(mask_api_key(Some(&"abcdefghi".to_string())), "abcd...fghi");
+        assert_eq!(
+            mask_api_key(Some(&SecretString::new("abcdefghi".to_string()))),
+            "abcd...fghi"
+        );
     }
 
     #[test]
@@ -653,12 +668,27 @@ mod tests {
         assert_eq!(ApiKeyChoice::Keep, ApiKeyChoice::Keep);
         assert_ne!(ApiKeyChoice::Keep, ApiKeyChoice::Clear);
         assert_eq!(
-            ApiKeyChoice::Set("k".to_string()),
-            ApiKeyChoice::Set("k".to_string())
+            ApiKeyChoice::Set(SecretString::new("k")),
+            ApiKeyChoice::Set(SecretString::new("k"))
         );
         assert_ne!(
-            ApiKeyChoice::Set("a".to_string()),
-            ApiKeyChoice::Set("b".to_string())
+            ApiKeyChoice::Set(SecretString::new("a")),
+            ApiKeyChoice::Set(SecretString::new("b"))
+        );
+    }
+
+    #[test]
+    fn api_key_choice_debug_redacts_set_value() {
+        // The whole point of `Set(SecretString)` is that `Debug` cannot leak
+        // the freshly-typed key. If a future refactor unwraps the
+        // `SecretString` back to `String`, this test fails loudly.
+        let choice = ApiKeyChoice::Set(SecretString::new("sk-supersecret"));
+        let dbg = format!("{:?}", choice);
+        assert!(dbg.contains("[REDACTED]"), "expected REDACTED in {:?}", dbg);
+        assert!(
+            !dbg.contains("sk-supersecret"),
+            "key leaked via Debug: {:?}",
+            dbg
         );
     }
 

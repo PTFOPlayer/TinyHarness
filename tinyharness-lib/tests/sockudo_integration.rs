@@ -18,7 +18,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use tinyharness_lib::provider::{Message, Provider, Role, sockudo::SockudoProvider};
+use tinyharness_lib::{
+    SecretString,
+    provider::{Message, Provider, Role, sockudo::SockudoProvider},
+};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -34,7 +37,7 @@ fn make_provider() -> SockudoProvider {
         SOCKUDO_URL.to_string(),
         APP_ID.to_string(),
         APP_KEY.to_string(),
-        APP_SECRET.to_string(),
+        SecretString::new(APP_SECRET),
     )
 }
 

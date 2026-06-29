@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::config::load_settings;
-use crate::extract_args;
 use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
+use crate::{SecretString, extract_args};
 
 pub fn web_search_tool_entry() -> crate::tools::tool::Tool {
     make_tool(
@@ -32,7 +32,7 @@ pub fn web_fetch_tool_entry() -> crate::tools::tool::Tool {
 }
 
 /// Load the Ollama API key from settings, returning an error string if not set.
-fn get_api_key() -> Result<String, String> {
+fn get_api_key() -> Result<SecretString, String> {
     let settings = load_settings();
     settings
         .ollama_api_key
@@ -62,7 +62,10 @@ fn web_search_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> 
 
         let resp = match client
             .post("https://ollama.com/api/web_search")
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header(
+                "Authorization",
+                format!("Bearer {}", api_key.expose_secret()),
+            )
             .json(&body)
             .send()
             .await
@@ -129,7 +132,10 @@ fn web_fetch_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 
         let resp = match client
             .post("https://ollama.com/api/web_fetch")
-            .header("Authorization", format!("Bearer {}", api_key))
+            .header(
+                "Authorization",
+                format!("Bearer {}", api_key.expose_secret()),
+            )
             .json(&body)
             .send()
             .await

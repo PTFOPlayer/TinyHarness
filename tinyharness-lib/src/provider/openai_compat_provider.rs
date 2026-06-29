@@ -1,7 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::provider::{ChatMessageResponse, Message, Provider, ToolDefinition};
+use crate::{
+    SecretString,
+    provider::{ChatMessageResponse, Message, Provider, ToolDefinition},
+};
 
 use super::openai_compat::OpenAiCompatInner;
 
@@ -39,7 +42,7 @@ impl OpenAiCompatProvider {
     /// Create a new provider that sends `Authorization: Bearer <api_key>`
     /// on every request. Required by hosted OpenAI-compatible gateways
     /// (OpenRouter, Together, custom proxies, etc.).
-    pub fn with_api_key(base_url: String, api_key: String) -> Self {
+    pub fn with_api_key(base_url: String, api_key: SecretString) -> Self {
         OpenAiCompatProvider {
             inner: OpenAiCompatInner::with_api_key(base_url, Some(api_key)),
             static_models: None,

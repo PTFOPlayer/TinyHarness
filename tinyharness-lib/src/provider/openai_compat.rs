@@ -7,8 +7,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 
-use crate::provider::{
-    ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolDefinition,
+use crate::{
+    SecretString,
+    provider::{
+        ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolDefinition,
+    },
 };
 
 /// Shared inner state for OpenAI-compatible providers (llama.cpp, vLLM, etc.).
@@ -23,7 +26,7 @@ pub struct OpenAiCompatInner {
     /// Optional bearer token sent as `Authorization: Bearer <key>` on every
     /// request. Used by hosted OpenAI-compatible APIs (e.g. OpenRouter,
     /// Together, self-hosted gateways) that require authentication.
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
 }
 
 impl OpenAiCompatInner {
@@ -32,7 +35,7 @@ impl OpenAiCompatInner {
     }
 
     /// Create a new inner state with an optional bearer token.
-    pub fn with_api_key(base_url: String, api_key: Option<String>) -> Self {
+    pub fn with_api_key(base_url: String, api_key: Option<SecretString>) -> Self {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(300))
@@ -54,7 +57,7 @@ impl OpenAiCompatInner {
         Box::pin(async move {
             let mut req = client.get(&url);
             if let Some(key) = &api_key {
-                req = req.bearer_auth(key);
+                req = req.bearer_auth(key.expose_secret());
             }
             match req.send().await {
                 Ok(resp) if resp.status().is_success() => Ok(()),
@@ -97,7 +100,7 @@ impl OpenAiCompatInner {
         Box::pin(async move {
             let mut req = client.get(&url);
             if let Some(key) = &api_key {
-                req = req.bearer_auth(key);
+                req = req.bearer_auth(key.expose_secret());
             }
             match req.send().await {
                 Ok(resp) if resp.status().is_success() => {
@@ -146,7 +149,7 @@ impl OpenAiCompatInner {
         // Spawn the streaming work on a background task
         tokio::spawn(async move {
             let _usage =
-                stream_chat_completions(&client, &chat_url, &body, api_key.as_deref(), &send).await;
+                stream_chat_completions(&client, &chat_url, &body, api_key.as_ref(), &send).await;
         });
 
         Box::pin(async move { Ok(recv) })
@@ -391,12 +394,12 @@ pub async fn stream_chat_completions(
     client: &reqwest::Client,
     url: &str,
     body: &ChatRequest,
-    api_key: Option<&str>,
+    api_key: Option<&SecretString>,
     send: &tokio::sync::mpsc::Sender<ChatMessageResponse>,
 ) -> Option<crate::provider::TokenUsage> {
     let mut request = client.post(url).json(body);
     if let Some(key) = api_key {
-        request = request.bearer_auth(key);
+        request = request.bearer_auth(key.expose_secret());
     }
     let response = match request.send().await {
         Ok(r) => r,

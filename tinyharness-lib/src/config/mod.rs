@@ -4,6 +4,7 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+use crate::SecretString;
 use crate::mode::AgentMode;
 
 // ── AutoAccept Mode ────────────────────────────────────────────────────────
@@ -436,17 +437,17 @@ pub struct Settings {
     #[serde(default)]
     pub preferred_mode: AgentMode,
     #[serde(default)]
-    pub ollama_api_key: Option<String>,
+    pub ollama_api_key: Option<SecretString>,
     /// API key sent as `Authorization: Bearer <key>` by the OpenAI-compatible
     /// provider (`--openai-compat`). Set via `--api-key` or `OPENAI_API_KEY`
     /// env var. Not used by Ollama, llama.cpp, vLLM, or Sockudo.
-    pub openai_compat_api_key: Option<String>,
+    pub openai_compat_api_key: Option<SecretString>,
     /// Sockudo app ID for the AI Transport provider.
     pub sockudo_app_id: Option<String>,
     /// Sockudo app key (used as auth_key in signed API requests and WebSocket URL).
     pub sockudo_app_key: Option<String>,
     /// Sockudo app secret (used to sign API requests via HMAC-SHA256).
-    pub sockudo_app_secret: Option<String>,
+    pub sockudo_app_secret: Option<SecretString>,
     /// Timeout in seconds for Ollama requests (default: 5)
     #[serde(default)]
     pub ollama_timeout_secs: u64,

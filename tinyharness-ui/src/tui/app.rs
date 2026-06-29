@@ -1619,7 +1619,11 @@ mod tests {
 
     fn make_app() -> TuiApp<TestBackend> {
         let backend = TestBackend::new(Size::new(80, 24));
-        let terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend).unwrap();
+        // `Terminal::new` discovers size from the real terminal/env vars and ignores the writer's
+        // size. Pin it explicitly so layout- and scroll-dependent assertions don't flake on
+        // terminals of unexpected size.
+        terminal.set_size(Size::new(80, 24));
         let (user_action_tx, _user_action_rx) = mpsc::channel();
         let (_, agent_event_rx) = mpsc::channel();
         TuiApp::new(terminal, user_action_tx, agent_event_rx).unwrap()

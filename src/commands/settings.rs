@@ -48,12 +48,11 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
 
     match &settings.ollama_api_key {
         Some(key) => {
-            let masked = if key.len() > 8 {
-                format!("{}...{}", &key[..4], &key[key.len() - 4..])
-            } else {
-                "****".to_string()
-            };
-            let _ = writeln!(out, "{BOLD}│{RESET} API Key:   {BLUE}{masked}{RESET}");
+            let _ = writeln!(
+                out,
+                "{BOLD}│{RESET} API Key:   {BLUE}{}{RESET}",
+                key.masked()
+            );
         }
         None => {
             let _ = writeln!(out, "{BOLD}│{RESET} API Key:   {ORANGE}not set{RESET}");

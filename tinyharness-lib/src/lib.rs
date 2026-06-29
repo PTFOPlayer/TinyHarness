@@ -3,6 +3,7 @@ pub mod context;
 pub mod image;
 pub mod mode;
 pub mod provider;
+pub mod secret;
 pub mod session;
 pub mod skill;
 pub mod token;
@@ -22,6 +23,7 @@ pub use provider::{
     ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,
     ToolCallFunction, ToolDefinition,
 };
+pub use secret::SecretString;
 pub use session::{Session, SessionEntry, SessionMeta, SessionStore};
 pub use skill::{Skill, SkillRegistry, SkillSource, discover_skills};
 pub use token::ContextWindowSize;

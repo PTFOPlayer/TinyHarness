@@ -25,6 +25,7 @@ use sha2::Sha256;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+use crate::SecretString;
 use crate::provider::{
     ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,
     ToolCallFunction, ToolDefinition,
@@ -50,7 +51,7 @@ pub struct SockudoProvider {
     base_url: String,
     app_id: String,
     app_key: String,
-    app_secret: String,
+    app_secret: SecretString,
     model: Arc<Mutex<Option<String>>>,
     timeout_secs: u64,
 }
@@ -60,7 +61,12 @@ impl SockudoProvider {
     ///
     /// `base_url` is the Sockudo server HTTP root (e.g. `http://127.0.0.1:6001`).
     /// `app_id`, `app_key`, `app_secret` are the Sockudo app credentials.
-    pub fn new(base_url: String, app_id: String, app_key: String, app_secret: String) -> Self {
+    pub fn new(
+        base_url: String,
+        app_id: String,
+        app_key: String,
+        app_secret: SecretString,
+    ) -> Self {
         let http_client = Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(300))
@@ -133,8 +139,8 @@ impl SockudoProvider {
         let string_to_sign = format!("{method}\n{path}\n{qs}");
 
         let signature = {
-            let mut mac =
-                HmacSha256::new_from_slice(self.app_secret.as_bytes()).expect("HMAC key invalid");
+            let mut mac = HmacSha256::new_from_slice(self.app_secret.expose_secret().as_bytes())
+                .expect("HMAC key invalid");
             mac.update(string_to_sign.as_bytes());
             hex_encode(&mac.finalize().into_bytes())
         };
@@ -946,7 +952,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "app-key".to_string(),
-            "app-secret".to_string(),
+            SecretString::new("app-secret"),
         );
         assert_eq!(
             provider.ws_url(),
@@ -960,7 +966,7 @@ mod tests {
             "https://example.com".to_string(),
             "app-id".to_string(),
             "app-key".to_string(),
-            "app-secret".to_string(),
+            SecretString::new("app-secret"),
         );
         assert_eq!(
             provider.ws_url(),
@@ -974,7 +980,7 @@ mod tests {
             "http://127.0.0.1:6001/".to_string(),
             "app-id".to_string(),
             "app-key".to_string(),
-            "app-secret".to_string(),
+            SecretString::new("app-secret"),
         );
         assert_eq!(
             provider.ws_url(),
@@ -988,7 +994,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "my-app".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         assert_eq!(
             provider.events_url(),
@@ -1002,7 +1008,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "my-app".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         assert_eq!(provider.health_url(), "http://127.0.0.1:6001/up/my-app");
     }
@@ -1013,7 +1019,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "my-key".to_string(),
-            "my-secret".to_string(),
+            SecretString::new("my-secret"),
         );
         let params = provider.sign_request("POST", "/apps/app-id/events", r#"{"test":true}"#);
 
@@ -1044,7 +1050,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         let params = provider.sign_request("GET", "/apps/app-id/events", "body");
 
@@ -1062,7 +1068,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         // Same request → same signature (when timestamp is the same second)
         let p1 = provider.sign_request("POST", "/apps/app-id/events", "body");
@@ -1106,7 +1112,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         let p1 = provider.sign_request("POST", "/apps/app-id/events", "body1");
         let p2 = provider.sign_request("POST", "/apps/app-id/events", "body2");
@@ -1148,7 +1154,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         let p1 = provider.sign_request("POST", "/apps/app-id/events", "body");
         let p2 = provider.sign_request("GET", "/apps/app-id/events", "body");
@@ -1307,7 +1313,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         assert!(p.current_model().is_none());
         p.select_model("gpt-4".to_string());
@@ -1320,7 +1326,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
         assert_eq!(p.timeout_secs, 120);
         p.set_timeout(60);
@@ -1412,7 +1418,7 @@ mod tests {
             "http://127.0.0.1:6001".to_string(),
             "app-id".to_string(),
             "key".to_string(),
-            "secret".to_string(),
+            SecretString::new("secret"),
         );
 
         let data = serde_json::json!({

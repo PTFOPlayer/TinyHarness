@@ -247,6 +247,17 @@ impl<W: Write> Terminal<W> {
             .unwrap_or_else(|_| Size::from_env().unwrap_or_else(Size::default_size));
     }
 
+    /// Override the cached terminal size.
+    ///
+    /// In production, the size is discovered via `ioctl`/`COLUMNS`/`LINES`.
+    /// Tests construct a `Terminal` with a writer that has no real size
+    /// (e.g. `TestWriter`) or with a `TestBackend` whose size is ignored by
+    /// `new()`. This lets them pin a deterministic size so layout-dependent
+    /// assertions don't flake based on the host terminal.
+    pub fn set_size(&mut self, size: Size) {
+        self.size = size;
+    }
+
     /// Get the current terminal size.
     pub fn size(&self) -> Size {
         self.size

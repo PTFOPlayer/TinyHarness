@@ -9,6 +9,7 @@ use std::{
 };
 
 use tinyharness_lib::{
+    SecretString,
     config::{ProviderKind, Settings, ensure_prompts_initialized, load_settings, save_settings},
     context::WorkspaceContext,
     mode::AgentMode,
@@ -121,7 +122,7 @@ fn resolve_provider_kind(args: &Args, settings: &Settings) -> ProviderKind {
 async fn create_provider(
     kind: ProviderKind,
     url: String,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
     skip_health_check: bool,
     skip_health_check_source: &str,
     settings: &Settings,
