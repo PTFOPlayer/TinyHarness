@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::{SinkExt, StreamExt};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::Sha256;
@@ -275,7 +275,7 @@ impl SockudoProvider {
                         WsMessage::Text(t) => t.to_string(),
                         WsMessage::Binary(b) => String::from_utf8_lossy(&b).to_string(),
                         WsMessage::Ping(_) => {
-                            let _ = ws_write.send(WsMessage::Pong(vec![])).await;
+                            let _ = ws_write.send(WsMessage::Pong(vec![].into())).await;
                             continue;
                         }
                         WsMessage::Pong(_) | WsMessage::Close(_) | WsMessage::Frame(_) => continue,
@@ -308,7 +308,9 @@ impl SockudoProvider {
                         });
                         let _ = ws_write
                             .send(WsMessage::Text(
-                                serde_json::to_string(&subscribe_msg).unwrap_or_default(),
+                                serde_json::to_string(&subscribe_msg)
+                                    .unwrap_or_default()
+                                    .into(),
                             ))
                             .await;
                         continue;

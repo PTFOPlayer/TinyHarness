@@ -16,7 +16,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::{SinkExt, StreamExt};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tinyharness_lib::{
     SecretString,
@@ -501,7 +501,7 @@ async fn run_agent_worker(
                     WsMessage::Text(t) => t.to_string(),
                     WsMessage::Binary(b) => String::from_utf8_lossy(&b).to_string(),
                     WsMessage::Ping(_) => {
-                        let _ = ws_write.send(WsMessage::Pong(vec![])).await;
+                        let _ = ws_write.send(WsMessage::Pong(vec![].into())).await;
                         continue;
                     }
                     _ => continue,
@@ -532,7 +532,7 @@ async fn run_agent_worker(
                     });
                     let _ = ws_write
                         .send(WsMessage::Text(
-                            serde_json::to_string(&subscribe_msg).unwrap(),
+                            serde_json::to_string(&subscribe_msg).unwrap().into(),
                         ))
                         .await;
                     continue;
@@ -708,7 +708,7 @@ async fn subscribe_and_collect_response(channel: &str, app_key: &str) -> Result<
                     WsMessage::Text(t) => t.to_string(),
                     WsMessage::Binary(b) => String::from_utf8_lossy(&b).to_string(),
                     WsMessage::Ping(_) => {
-                        let _ = ws_write.send(WsMessage::Pong(vec![])).await;
+                        let _ = ws_write.send(WsMessage::Pong(vec![].into())).await;
                         continue;
                     }
                     _ => continue,
@@ -731,7 +731,7 @@ async fn subscribe_and_collect_response(channel: &str, app_key: &str) -> Result<
                     });
                     let _ = ws_write
                         .send(WsMessage::Text(
-                            serde_json::to_string(&subscribe_msg).unwrap(),
+                            serde_json::to_string(&subscribe_msg).unwrap().into(),
                         ))
                         .await;
                     continue;

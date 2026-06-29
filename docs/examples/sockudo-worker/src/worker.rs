@@ -122,7 +122,7 @@ impl SockudoWorker {
             tokio::select! {
                 // Periodic keepalive ping
                 _ = ping_ticker.tick() => {
-                    if ws_write.send(WsMessage::Ping(vec![])).await.is_err() {
+                    if ws_write.send(WsMessage::Ping(vec![].into())).await.is_err() {
                         return Err("WebSocket ping send failed".to_string());
                     }
                     continue;
@@ -148,7 +148,7 @@ impl SockudoWorker {
                         WsMessage::Text(t) => t.to_string(),
                         WsMessage::Binary(b) => String::from_utf8_lossy(&b).to_string(),
                         WsMessage::Ping(_) => {
-                            let _ = ws_write.send(WsMessage::Pong(vec![])).await;
+                            let _ = ws_write.send(WsMessage::Pong(vec![].into())).await;
                             continue;
                         }
                         WsMessage::Pong(_) | WsMessage::Close(_) | WsMessage::Frame(_) => continue,
@@ -179,7 +179,7 @@ impl SockudoWorker {
                         });
                         let _ = ws_write
                             .send(WsMessage::Text(
-                                serde_json::to_string(&subscribe_msg).unwrap_or_default(),
+                                serde_json::to_string(&subscribe_msg).unwrap_or_default().into(),
                             ))
                             .await;
                         continue;
