@@ -72,10 +72,21 @@ pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         const MAX_LINES: usize = 200;
         let mut output = String::new();
 
+        let file_count = results
+            .iter()
+            .map(|line| line.split(':').next().unwrap_or(""))
+            .collect::<std::collections::HashSet<&str>>()
+            .len();
+
+        output.push_str(&format!(
+            "{} matches in {} files\n",
+            total_matches, file_count
+        ));
+
         for (line_count, line) in results.iter().enumerate() {
             if line_count >= MAX_LINES {
                 output.push_str(&format!(
-                    "... and {} more matches (truncated)\n",
+                    "... and {} more (truncated)\n",
                     total_matches - line_count
                 ));
                 break;

@@ -912,7 +912,7 @@ async fn handle_tui_tool_calls(
         // Collect result for batching
         let (audit_tool_name, audit_detail) = audit_info_for_tool(call);
         generic_tool_results.push(GenericToolResult {
-            content: format!("### {} Tool Result\n\n{}", call.function.name, result),
+            content: format!("### {}\n\n{}", call.function.name, result),
             tool_call_id: call.id.clone().unwrap_or_default(),
             audit_tool_name,
             audit_detail,

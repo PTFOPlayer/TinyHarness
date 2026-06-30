@@ -9,7 +9,7 @@ use crate::tools::tool::{ToolCategory, build_string_params_schema, make_tool};
 pub fn run_tool_entry() -> crate::tools::tool::Tool {
     make_tool(
         "run",
-        "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Includes stdout, stderr, exit code, and duration. Output is truncated at 5000 chars for stdout and 2000 for stderr. Default timeout is 30 seconds.",
+        "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Returns stdout, stderr (if any), exit code, and duration. stdout is truncated at 5000 chars and stderr at 2000 chars. Default timeout is 30 seconds.",
         ToolCategory::Destructive,
         build_string_params_schema(
             &[("command", "The shell command to execute")],
@@ -105,11 +105,11 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
                 if stdout.chars().count() > max_chars {
                     let truncated: String = stdout.chars().take(max_chars).collect();
                     result.push_str(&format!(
-                        "stdout (truncated to {} chars):\n{}\n... (output truncated)\n",
-                        max_chars, truncated
+                        "{}\n... (truncated to {} chars)\n",
+                        truncated, max_chars
                     ));
                 } else {
-                    result.push_str(&format!("stdout:\n{}\n", stdout.trim_end()));
+                    result.push_str(stdout.trim_end());
                 }
             }
 
@@ -118,26 +118,23 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
                 if stderr.chars().count() > max_chars {
                     let truncated: String = stderr.chars().take(max_chars).collect();
                     result.push_str(&format!(
-                        "stderr (truncated to {} chars):\n{}\n... (stderr truncated)\n",
-                        max_chars, truncated
+                        "\n{}... (stderr truncated to {} chars)\n",
+                        truncated, max_chars
                     ));
                 } else {
-                    result.push_str(&format!("stderr:\n{}\n", stderr.trim_end()));
+                    result.push_str(&format!("\n{}", stderr.trim_end()));
                 }
             }
 
-            if status.success() {
-                result.push_str(&format!(
-                    "\nCommand completed successfully in {:.1}s (exit code: {})",
-                    elapsed.as_secs_f64(),
-                    status.code().unwrap_or(-1)
-                ));
+            let exit_summary = format!(
+                "(exit {} in {:.1}s)",
+                status.code().unwrap_or(-1),
+                elapsed.as_secs_f64()
+            );
+            if result.is_empty() {
+                result.push_str(&exit_summary);
             } else {
-                result.push_str(&format!(
-                    "\nCommand failed (exit code: {}) in {:.1}s",
-                    status.code().unwrap_or(-1),
-                    elapsed.as_secs_f64()
-                ));
+                result.push_str(&format!("\n{}", exit_summary));
             }
 
             result
