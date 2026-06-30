@@ -56,7 +56,7 @@ pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
             _ => match fs::read_to_string(&path) {
                 Ok(content) => {
                     let line_count = content.lines().count();
-                    format!("Read '{}' ({} lines)\n{}", path, line_count, content)
+                    format!("({} lines)\n{}", line_count, content)
                 }
                 Err(e) => format!("Error reading file: {}", e),
             },
@@ -156,8 +156,8 @@ fn read_partial(path: &str, from: usize, to: usize) -> String {
         format!("Error: No lines to read in '{}' at offset {}", path, from)
     } else {
         format!(
-            "Read '{}' ({} lines, starting at line {})\n{}",
-            path, lines_read, from, content
+            "({} lines from line {})\n{}",
+            lines_read, from, content
         )
     }
 }

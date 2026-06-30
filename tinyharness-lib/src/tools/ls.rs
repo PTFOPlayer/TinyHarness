@@ -38,7 +38,16 @@ pub fn ls_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
             .filter_map(|entry| entry.ok())
             .map(|entry| {
                 let file_name = entry.file_name();
-                file_name.to_string_lossy().to_string()
+                let name = file_name.to_string_lossy().to_string();
+                let is_dir = entry
+                    .file_type()
+                    .map(|ft| ft.is_dir())
+                    .unwrap_or(false);
+                if is_dir {
+                    format!("{}/", name)
+                } else {
+                    name
+                }
             })
             .collect();
 

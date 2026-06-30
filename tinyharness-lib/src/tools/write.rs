@@ -34,7 +34,7 @@ pub fn write_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
         }
 
         match fs::write(&path, &content) {
-            Ok(_) => format!("Successfully wrote {} bytes to '{}'", content.len(), path),
+            Ok(_) => format!("Wrote {} bytes to '{}'.", content.len(), path),
             Err(e) => format!("Error: Failed to write file: {}", e),
         }
     })

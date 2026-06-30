@@ -56,11 +56,7 @@ pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
 
         // Write the file
         match fs::write(&path, &new_content) {
-            Ok(_) => format!(
-                "Successfully edited '{}'. Replaced 1 occurrence ({} chars replaced).",
-                path,
-                old_str.len()
-            ),
+            Ok(_) => format!("Edited '{}' ({} chars replaced).", path, old_str.len()),
             Err(e) => format!("Error: Failed to write file '{}': {}", path, e),
         }
     })
