@@ -102,6 +102,15 @@ fn execute_show(out: &mut Output) {
         );
     }
 
+    // ── Auto-compact ──
+    let ac_val = if merged.auto_compact_enabled {
+        "on"
+    } else {
+        "off"
+    };
+    let (ac_str, ac_src) = format_setting(ac_val, merged.auto_compact_enabled_source, None);
+    let _ = writeln!(out, "{BOLD}│{RESET} Auto-Compact: {ac_str} {ac_src}");
+
     let _ = writeln!(
         out,
         "{BOLD}╰─────────────────────────────────────────────────╯{RESET}",
@@ -193,7 +202,11 @@ fn execute_init(out: &mut Output) {
 
   // Preferred agent mode for this project.
   // Valid modes: casual, planning, agent, research
-  // "preferred_mode": "agent"
+  // "preferred_mode": "agent",
+
+  // Enable or disable the auto_compact tool for this project.
+  // When false, the model will not see auto_compact as an available tool.
+  // "auto_compact_enabled": true
 }
 "#;
 

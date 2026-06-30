@@ -122,6 +122,9 @@ pub struct ProjectSettings {
     /// Override the preferred mode for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_mode: Option<AgentMode>,
+    /// Override auto-compact enabled setting for this project
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_enabled: Option<bool>,
 }
 
 /// Discover and load `.tinyharness/config.json` by walking up from CWD.
@@ -198,6 +201,8 @@ pub struct MergedSettings {
     pub project_md_files_source: SettingSource,
     pub preferred_mode: AgentMode,
     pub preferred_mode_source: SettingSource,
+    pub auto_compact_enabled: bool,
+    pub auto_compact_enabled_source: SettingSource,
 }
 
 /// Load and merge global + project settings.
@@ -243,6 +248,8 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
             project_md_files_source: SettingSource::Default,
             preferred_mode: global.preferred_mode,
             preferred_mode_source: SettingSource::Default,
+            auto_compact_enabled: global.auto_compact_enabled,
+            auto_compact_enabled_source: SettingSource::Default,
         },
         Some(p) => {
             // Safe commands: project extends global
@@ -292,6 +299,11 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 .map(|m| (m, SettingSource::Project))
                 .unwrap_or((global.preferred_mode, SettingSource::Default));
 
+            let (auto_compact_enabled, ac_source) = p
+                .auto_compact_enabled
+                .map(|v| (v, SettingSource::Project))
+                .unwrap_or((global.auto_compact_enabled, SettingSource::Default));
+
             MergedSettings {
                 safe_commands,
                 safe_commands_source: safe_source,
@@ -305,6 +317,8 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 project_md_files_source: md_source,
                 preferred_mode,
                 preferred_mode_source: mode_source,
+                auto_compact_enabled,
+                auto_compact_enabled_source: ac_source,
             }
         }
     }
@@ -321,6 +335,7 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
         context_limit: settings.context_limit,
         project_md_files: None, // user must fill this in
         preferred_mode: Some(settings.preferred_mode),
+        auto_compact_enabled: Some(settings.auto_compact_enabled),
     }
 }
 
@@ -489,6 +504,15 @@ pub struct Settings {
     /// Use `TINYHARNESS_MD_FILES` env var for the highest priority override.
     /// (default: None → use hardcoded defaults)
     pub project_md_files: Option<Vec<String>>,
+    /// Enable auto-compact tool (default: true).
+    /// When false, the auto_compact tool is not registered with the provider,
+    /// so the model cannot request conversation compaction.
+    #[serde(default = "default_true")]
+    pub auto_compact_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -513,6 +537,7 @@ impl Default for Settings {
             safe_command_prefixes: None,
             denied_command_prefixes: None,
             project_md_files: None,
+            auto_compact_enabled: true,
         }
     }
 }

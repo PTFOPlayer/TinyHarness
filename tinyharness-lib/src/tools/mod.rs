@@ -74,20 +74,39 @@ impl ToolManager {
     }
 
     /// Returns the tool definitions appropriate for the given agent mode.
-    pub fn tools_for_mode(&self, mode: AgentMode) -> Vec<ToolDefinition> {
+    /// When `auto_compact_enabled` is false, the `auto_compact` tool is excluded.
+    pub fn tools_for_mode(
+        &self,
+        mode: AgentMode,
+        auto_compact_enabled: bool,
+    ) -> Vec<ToolDefinition> {
+        let filter_compact = |t: &&Tool| {
+            if t.name == "auto_compact" {
+                auto_compact_enabled
+            } else {
+                true
+            }
+        };
         match mode {
-            AgentMode::Agent => self.get_all_tool_definitions(),
+            AgentMode::Agent => self
+                .tools
+                .iter()
+                .filter(filter_compact)
+                .map(|t| t.to_definition())
+                .collect(),
             AgentMode::Casual => self
                 .tools
                 .iter()
-                .filter(|t| t.name == "web_search" || t.name == "web_fetch")
+                .filter(|t| filter_compact(t) && (t.name == "web_search" || t.name == "web_fetch"))
                 .map(|t| t.to_definition())
                 .collect(),
             AgentMode::Planning => self
                 .tools
                 .iter()
                 .filter(|t| {
-                    t.category == ToolCategory::ReadOnly || t.category == ToolCategory::Signal
+                    filter_compact(t)
+                        && (t.category == ToolCategory::ReadOnly
+                            || t.category == ToolCategory::Signal)
                 })
                 .map(|t| t.to_definition())
                 .collect(),
@@ -95,7 +114,9 @@ impl ToolManager {
                 .tools
                 .iter()
                 .filter(|t| {
-                    t.category == ToolCategory::ReadOnly || t.category == ToolCategory::Signal
+                    filter_compact(t)
+                        && (t.category == ToolCategory::ReadOnly
+                            || t.category == ToolCategory::Signal)
                 })
                 .map(|t| t.to_definition())
                 .collect(),

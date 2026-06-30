@@ -136,6 +136,15 @@ pub fn build_registry() -> CommandRegistry {
         |arg, ctx, _msg| crate::commands::config_settings::execute_autoaccept(&mut ctx.output, arg),
     );
 
+    reg.register_sync_with_usage(
+        "/autocompact",
+        "Show or toggle the auto_compact tool (on/off). When off, the model cannot request conversation compaction.",
+        "/autocompact [on|off]",
+        |arg, ctx, _msg| {
+            crate::commands::config_settings::execute_autocompact(&mut ctx.output, arg)
+        },
+    );
+
     // ── Per-project settings ──────────────────────────────────────────────
 
     reg.register_sync_with_usage(
@@ -434,6 +443,7 @@ pub fn build_registry() -> CommandRegistry {
     reg.register_subcommands("/mode", vec!["agent", "casual", "planning", "research"]);
     reg.register_subcommands("/settings", vec!["all"]);
     reg.register_subcommands("/autoaccept", vec!["off", "safe", "all"]);
+    reg.register_subcommands("/autocompact", vec!["off", "on"]);
     reg.register_subcommands("/apikey", vec!["clear"]);
     reg.register_subcommands("/showthink", vec!["off", "on"]);
     reg.register_subcommands("/think", vec!["high", "low", "medium", "off"]);
