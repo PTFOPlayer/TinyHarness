@@ -185,6 +185,45 @@ pub fn execute_autoaccept(out: &mut Output, arg: Option<&str>) -> Result<Command
     Ok(CommandResult::Ok)
 }
 
+// ── AutoCompact (sync — no provider access needed) ───────────────────────────
+
+/// Execute the /autocompact command to toggle the auto_compact tool.
+pub fn execute_autocompact(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+    let a = arg.unwrap_or("");
+
+    if a.is_empty() {
+        let settings = load_settings();
+        let (status, color) = if settings.auto_compact_enabled {
+            ("on", GREEN)
+        } else {
+            ("off", ORANGE)
+        };
+        let _ = writeln!(out, "{BOLD}Auto-compact: {color}{status}{RESET}",);
+        return Ok(CommandResult::Ok);
+    }
+
+    let new_value = match a.to_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => true,
+        "off" | "false" | "no" | "0" => false,
+        _ => {
+            return Err("Invalid value. Use 'on' or 'off', e.g. /autocompact off".to_string());
+        }
+    };
+
+    let mut settings = load_settings();
+    settings.auto_compact_enabled = new_value;
+    save_settings(&settings);
+
+    let (status, color) = if new_value {
+        ("on", GREEN)
+    } else {
+        ("off", ORANGE)
+    };
+    let _ = writeln!(out, "{BOLD}Auto-compact set to {color}{status}{RESET}",);
+
+    Ok(CommandResult::Ok)
+}
+
 // ── Think Type (async — needs provider.lock().await) ───────────────────────
 
 async_command!(

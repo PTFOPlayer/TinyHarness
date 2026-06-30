@@ -92,6 +92,16 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
         "{BOLD}│{RESET} Auto-Accept: {auto_accept_color}{auto_accept_str}{RESET}",
     );
 
+    let (ac_str, ac_color) = if settings.auto_compact_enabled {
+        ("on", GREEN)
+    } else {
+        ("off", ORANGE)
+    };
+    let _ = writeln!(
+        out,
+        "{BOLD}│{RESET} Auto-Compact: {ac_color}{ac_str}{RESET}",
+    );
+
     let safe_commands = settings.get_safe_commands();
     let denied_commands = settings.get_denied_commands();
     let _ = writeln!(

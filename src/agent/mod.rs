@@ -22,6 +22,7 @@ use rustyline::Editor;
 use tokio::sync::Mutex;
 
 use tinyharness_lib::{
+    config::load_merged_settings,
     config::load_settings,
     mode::AgentMode,
     provider::{Message, Provider, Role},
@@ -314,8 +315,9 @@ pub async fn run_agent_loop(
         let mut auto_accept = false;
 
         loop {
-            // Filter tools based on current mode
-            let tools = tool_manager.tools_for_mode(ctx.current_mode);
+            // Filter tools based on current mode and settings
+            let (_, _, merged) = load_merged_settings();
+            let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.auto_compact_enabled);
 
             // Call the provider — it returns a receiver for streaming chunks
             let mut recv = {
