@@ -126,11 +126,16 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
                 }
             }
 
-            result.push_str(&format!(
-                "\n(exit {} in {:.1}s)",
+            let exit_summary = format!(
+                "(exit {} in {:.1}s)",
                 status.code().unwrap_or(-1),
                 elapsed.as_secs_f64()
-            ));
+            );
+            if result.is_empty() {
+                result.push_str(&exit_summary);
+            } else {
+                result.push_str(&format!("\n{}", exit_summary));
+            }
 
             result
         }
