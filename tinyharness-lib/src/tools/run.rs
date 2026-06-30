@@ -109,7 +109,7 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
                         truncated, max_chars
                     ));
                 } else {
-                    result.push_str(&stdout.trim_end());
+                    result.push_str(stdout.trim_end());
                 }
             }
 

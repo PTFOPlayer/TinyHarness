@@ -78,7 +78,10 @@ pub fn grep_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
             .collect::<std::collections::HashSet<&str>>()
             .len();
 
-        output.push_str(&format!("{} matches in {} files\n", total_matches, file_count));
+        output.push_str(&format!(
+            "{} matches in {} files\n",
+            total_matches, file_count
+        ));
 
         for (line_count, line) in results.iter().enumerate() {
             if line_count >= MAX_LINES {

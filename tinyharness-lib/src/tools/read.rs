@@ -155,10 +155,7 @@ fn read_partial(path: &str, from: usize, to: usize) -> String {
     if content.is_empty() {
         format!("Error: No lines to read in '{}' at offset {}", path, from)
     } else {
-        format!(
-            "({} lines from line {})\n{}",
-            lines_read, from, content
-        )
+        format!("({} lines from line {})\n{}", lines_read, from, content)
     }
 }
 
