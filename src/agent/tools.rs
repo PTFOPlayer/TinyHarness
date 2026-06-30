@@ -608,7 +608,7 @@ async fn execute_generic_tool<W: Write>(
     };
 
     GenericToolResult {
-        content: format!("### {} Tool Result\n\n{}", call.function.name, result),
+        content: format!("### {}\n\n{}", call.function.name, result),
         tool_call_id: String::new(), // set by caller
         audit_tool_name,
         audit_detail,

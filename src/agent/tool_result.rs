@@ -55,10 +55,7 @@ pub fn batch_tool_results(results: Vec<GenericToolResult>) -> Vec<Message> {
             let images = r.images;
             Message {
                 role: tinyharness_lib::provider::Role::Tool,
-                content: format!(
-                    "Tool results:\n{}\n\nUse these results to continue helping the user.",
-                    r.content
-                ),
+                content: format!("Tool results:\n{}", r.content),
                 tool_calls: vec![],
                 tool_call_id: Some(r.tool_call_id),
                 images,
