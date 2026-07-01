@@ -14,7 +14,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 - **Session Persistence**: JSONL-based sessions with UUIDs, saved in `~/.local/share/tinyharness/sessions/`. Supports session listing, switching by prefix, renaming, deletion, and auto-save every 5 messages.
 - **Async Streaming**: Built on `tokio` for efficient streaming with all providers. Ctrl+C interrupts generation gracefully.
 - **Experimental TUI**: Split-pane terminal UI with conversation view, sidebar, input bar, and tool output panel. Built from scratch with no external TUI framework. Activate with `--tui`. ⚠️ Experimental — may have rendering issues or incomplete features.
-- **Interactive CLI**: Color-coded terminal interface with 22+ slash commands for session management, configuration, file pinning, image attachment, audit logging, and tool control.
+- **Interactive CLI**: Color-coded terminal interface with 24+ slash commands for session management, configuration, file pinning, image attachment, audit logging, debug diagnostics, and tool control.
 - **Customizable Prompts**: System prompts are seeded from hardcoded defaults on first launch to `~/.config/tinyharness/prompts/` and can be freely edited.
 - **Command Safety**: Smart auto-accept for safe shell commands with prefix matching, deny lists, redirection stripping, and audit logging.
 - **Thinking Display**: Optionally render the model's reasoning chain inline during streaming (toggle via `/showthink`).
@@ -249,7 +249,8 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 | `/command [list\|add\|rm\|deny\|undeny\|reset\|resetdeny]` | Manage auto-accepted and denied commands |
 | `/apikey [key\|clear]` | Set, show, or clear the Ollama API key (needed for `web_search`) |
 | `/contextlimit [tokens]` | Show or set the context warning threshold |
-| `/autoaccept [on\|off]` | Toggle auto-accept for safe read-only commands |
+| `/autoaccept [all\|safe\|off]` | Show or set auto-accept mode (`off`, `safe` = read-only, `all` = all tools except `run`) |
+| `/autocompact [on\|off]` | Toggle the auto_compact tool (when off, the model cannot request compaction) |
 | `/showthink [on\|off]` | Toggle display of the model's thinking/reasoning chain |
 | `/timeout <seconds>` | Set Ollama request timeout (default: 5s) |
 | `/retries <count>` | Set Ollama max retries (default: 3) |
@@ -261,6 +262,7 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 |---------|-------------|
 | `/help` | Show available commands |
 | `/clear` | Clear terminal screen |
+| `/debug [path]` | Dump full conversation context to a log file (for diagnostics) |
 | `/exit` or `/quit` | Exit TinyHarness |
 
 ### Command Management
@@ -356,6 +358,7 @@ tinyharness-lib/src/
 ├── session.rs            JSONL session persistence with UUIDs, auto-save, atomic writes
 ├── token.rs              Token estimation, context window sizes (8K–256K), usage warnings
 ├── skill.rs              Skill discovery, registry, frontmatter parsing, indexing
+├── secret.rs             SecretString wrapper for API key redaction (custom Debug, serde support)
 ├── image.rs              Image attachment handling (base64 encoding, dimension detection)
 ├── prompts/              Hardcoded default system prompts (header.md, casual.md, planning.md, agent.md, research.md)
 └── tools/                15 tool implementations
@@ -428,17 +431,22 @@ src/
 │   ├── safety.rs         Shell command safety checker (prefix + deny list + redirection stripping)
 │   ├── setup.rs          Interactive provider setup (--config), URL prompting
 │   ├── display.rs        Context status formatting, args summaries, listing result summaries
-│   └── input.rs          Multi-line input reading with continuation prompt
+│   ├── input.rs          Multi-line input reading with continuation prompt
+│   ├── confirm.rs        Confirmation prompt rendering for tool calls
+│   ├── signal.rs         Signal tool handling (switch_mode, question, auto_compact, invoke_skill)
+│   ├── tool_result.rs    Tool result formatting and batching
+│   └── command_result.rs CommandResult enum definition
 └── commands/
-    ├── mod.rs            CommandRegistry, CommandDispatcher, build_registry() — 22+ commands
+    ├── mod.rs            CommandRegistry, CommandDispatcher, build_registry() — 24+ commands
     ├── registry.rs       CommandContext, CommandResult, AsyncCommand trait, async_command! macro
     ├── apikey.rs         /apikey — Ollama API key management
     ├── audit.rs          /audit — command execution audit log
     ├── clear.rs          /clear — terminal clear
     ├── command.rs        /command — safe/denied command management
     ├── compact.rs        /compact — cascading conversation summarization
-    ├── config_settings.rs /contextlimit, /autoaccept, /showthink, /timeout, /retries, /think
+    ├── config_settings.rs /contextlimit, /autoaccept, /autocompact, /showthink, /timeout, /retries, /think
     ├── context.rs        /context — workspace context display
+    ├── debug.rs          /debug — full conversation context dump to log file
     ├── exit.rs           /exit — graceful shutdown
     ├── files.rs          /add, /drop, /files, /dropall, /refresh — file pinning
     ├── help.rs           /help — command listing
@@ -446,6 +454,7 @@ src/
     ├── init.rs           /init — TINYHARNESS.md generation
     ├── mode.rs           /mode — mode switching
     ├── models.rs         /model — model listing and selection
+    ├── project_settings.rs /project-settings — per-project settings display and init
     ├── sessions.rs       /sessions, /session — session listing, switching, deletion
     ├── settings.rs       /settings — configuration display
     └── skill.rs          /skills, /skill, /use, /unload — skill management
@@ -492,7 +501,7 @@ TinyHarness grants LLMs the ability to interact with your filesystem through too
 - **Non-determinism**: LLMs may hallucinate or produce incorrect tool arguments. Always review proposed actions.
 - **Accountability**: You assume full responsibility for all operations performed by the AI. Ensure you have backups.
 
-The `run` tool can never be auto-accepted — even with auto-accept mode (`a`) — unlike `write` and `edit`. Safe commands (e.g., `ls`, `git status`) can be auto-accepted when `/autoaccept` is on.
+The `run` tool can never be auto-accepted — even in `all` mode — unlike `write` and `edit`. Safe commands (e.g., `ls`, `git status`) can be auto-accepted when `/autoaccept` is set to `safe` or `all`.
 
 ## Project Instructions (TINYHARNESS.md)
 
@@ -576,7 +585,7 @@ TinyHarness supports per-project configuration via `.tinyharness/config.json`, d
 {
   "safe_command_prefixes": ["python -m pytest", "npm run lint"],
   "denied_command_prefixes": ["git push --force"],
-  "auto_accept_safe_commands": false,
+  "auto_accept_mode": "off",
   "context_limit": 32768,
   "project_md_files": ["RULES.md", ".cursorrules"],
   "preferred_mode": "agent"
@@ -585,7 +594,7 @@ TinyHarness supports per-project configuration via `.tinyharness/config.json`, d
 
 - **`safe_command_prefixes`**: Extends (not replaces) the global safe list
 - **`denied_command_prefixes`**: Replaces the global deny list entirely
-- **`auto_accept_safe_commands`**: Overrides global toggle
+- **`auto_accept_mode`**: Overrides global auto-accept mode (`"off"`, `"safe"`, or `"all"`)
 - **`context_limit`**: Overrides context warning threshold
 - **`project_md_files`**: Additional instruction files loaded after the main one
 - **`preferred_mode`**: Default agent mode for this project

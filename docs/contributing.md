@@ -26,7 +26,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-This compiles all three crates and runs the test suite (~490 tests across all crates).
+This compiles all three crates and runs the test suite (~540 tests across all crates).
 
 ---
 
@@ -37,7 +37,7 @@ TinyHarness/                  Binary crate — CLI, agent loop, slash commands
 ├── src/
 │   ├── main.rs               Entry point, CLI parsing, provider creation
 │   ├── agent/                Agent loop, tool execution, safety, display, input
-│   └── commands/             22+ slash command modules + registry
+│   └── commands/             24+ slash command modules + registry
 │
 tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rustyline
 ├── src/
@@ -53,6 +53,7 @@ tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rust
 │   ├── session.rs            JSONL persistence, auto-save, atomic writes
 │   ├── token.rs              Token estimation, context windows, warnings
 │   ├── skill.rs              Skill discovery, registry, frontmatter parsing
+│   ├── secret.rs             SecretString wrapper for API key redaction
 │   ├── image.rs              Image attachment handling
 │   ├── mode.rs               AgentMode enum, prompt assembly
 │   └── prompts/              Hardcoded default system prompts (.md files)
@@ -194,7 +195,7 @@ Use `serde` + `schemars` for serialization and JSON Schema generation:
 
 - Use `tempfile` for test isolation — tool tests must not touch the real filesystem
 - Test modules go inline: `#[cfg(test)] mod tests { ... }`
-- `tinyharness-lib` has good coverage (~89 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~101 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has ~99 tests + 13 ignored (see `todo/01-testing-gaps.md`)
 
 ### Tool Categories
 

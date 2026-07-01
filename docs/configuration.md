@@ -39,7 +39,8 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
   "ollama_think_type": "medium",
   "show_thinking": false,
   "context_limit": null,
-  "auto_accept_safe_commands": true,
+  "auto_accept_mode": "safe",
+  "auto_compact_enabled": true,
   "safe_command_prefixes": null,
   "denied_command_prefixes": null,
   "project_md_files": null
@@ -137,7 +138,8 @@ Can be overridden per-project via `.tinyharness/config.json` → `preferred_mode
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `auto_accept_safe_commands` | bool | `true` | Whether safe commands auto-execute without confirmation. Toggle with `/autoaccept` |
+| `auto_accept_mode` | string | `"safe"` | Auto-accept mode: `"off"`, `"safe"` (read-only commands), or `"all"` (all destructive tools except `run`). Toggle with `/autoaccept`. Legacy `auto_accept_safe_commands` (bool) and `auto_accept_all` (bool) are auto-migrated to this field. |
+| `auto_compact_enabled` | bool | `true` | Whether the `auto_compact` tool is available to the model. Toggle with `/autocompact` |
 | `safe_command_prefixes` | vec\|null | `null` | Custom safe command prefixes. If `null`, uses the hardcoded default list (43 commands). Set via `/command add/rm/reset` |
 | `denied_command_prefixes` | vec\|null | `null` | Always-denied prefixes. Takes priority over safe list. Set via `/command deny/undeny/resetdeny` |
 
@@ -168,7 +170,7 @@ Overrides global settings for a specific project. See [Per-Project Settings](per
 {
   "safe_command_prefixes": ["python -m pytest", "npm run lint"],
   "denied_command_prefixes": ["git push --force"],
-  "auto_accept_safe_commands": false,
+  "auto_accept_mode": "off",
   "context_limit": 32768,
   "project_md_files": ["RULES.md", ".cursorrules"],
   "preferred_mode": "agent"
@@ -199,7 +201,7 @@ Shows every setting with its source annotation:
 safe_command_prefixes    (project):
   python -m pytest
   ...
-auto_accept_safe_commands (project): false
+auto_accept_mode         (project): off
 context_limit             (project): 32768
 last_provider             (global):  ollama
 ollama_timeout_secs       (default): 5

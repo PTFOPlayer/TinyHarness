@@ -27,7 +27,7 @@ This generates `.tinyharness/config.json` in your project root with all availabl
 
 ```json
 {
-  "auto_accept_safe_commands": true
+  "auto_accept_mode": "safe"
 }
 ```
 
@@ -57,17 +57,17 @@ Always blocks these commands from auto-accept, even if they'd match a safe prefi
 }
 ```
 
-### `auto_accept_safe_commands`
+### `auto_accept_mode`
 
-Toggle whether safe commands are auto-accepted without confirmation.
+Override the global auto-accept mode. Values: `"off"`, `"safe"` (read-only commands auto-accepted), or `"all"` (all destructive tools except `run`).
 
 ```json
 {
-  "auto_accept_safe_commands": false
+  "auto_accept_mode": "off"
 }
 ```
 
-Set to `false` on sensitive projects to require manual approval for every command.
+Set to `"off"` on sensitive projects to require manual approval for every command.
 
 ### `context_limit`
 
@@ -134,7 +134,7 @@ Legend: (project) = from .tinyharness/config.json
 
 ```json
 {
-  "auto_accept_safe_commands": false,
+  "auto_accept_mode": "off",
   "denied_command_prefixes": ["rm", "mv", "chmod", "chown", "sudo"]
 }
 ```
