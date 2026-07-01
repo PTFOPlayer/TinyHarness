@@ -168,7 +168,7 @@ pub fn print_conversation_history<W: Write>(
 
 /// Format a compact context status line (pi-style).
 ///
-/// Returns a string like: `5 msgs · 1.2K/8K (15%) · 2 pinned`
+/// Returns a string like: `5 msgs · 1.2K/8K (15%) · 3 tools · 5.2K total · 2 pinned`
 /// Colors are applied based on usage thresholds.
 /// When no token usage is available, shows `?/8K` in dim gray.
 pub fn format_context_status(
@@ -176,6 +176,8 @@ pub fn format_context_status(
     pinned_count: usize,
     token_usage: Option<&tinyharness_lib::provider::TokenUsage>,
     context_size: ContextWindowSize,
+    tool_call_count: u64,
+    total_tokens_used: u64,
 ) -> String {
     let max_str = format_token_count(context_size.tokens());
 
@@ -203,6 +205,17 @@ pub fn format_context_status(
     } else {
         parts.push(format!("{}{}/{}{}{}", GRAY, used_str, max_str, GRAY, RESET));
     }
+    if tool_call_count > 0 {
+        parts.push(format!("{}{} tools{}", GRAY, tool_call_count, RESET));
+    }
+    if total_tokens_used > 0 {
+        parts.push(format!(
+            "{}{} total{}",
+            GRAY,
+            format_token_count(total_tokens_used as u32),
+            RESET
+        ));
+    }
     if pinned_count > 0 {
         parts.push(format!("{}{} pinned{}", BLUE, pinned_count, RESET));
     }
@@ -225,6 +238,8 @@ pub fn display_context_status<W: Write>(
     pinned_count: usize,
     token_usage: Option<&tinyharness_lib::provider::TokenUsage>,
     stdout: &mut W,
+    tool_call_count: u64,
+    total_tokens_used: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings = load_settings();
     let context_size = settings
@@ -235,7 +250,14 @@ pub fn display_context_status<W: Write>(
     // Only use provider-reported token count.
     // If the LLM hasn't reported usage yet (first prompt of a new session),
     // we display "?" for the token count rather than making up numbers.
-    let status = format_context_status(messages.len(), pinned_count, token_usage, context_size);
+    let status = format_context_status(
+        messages.len(),
+        pinned_count,
+        token_usage,
+        context_size,
+        tool_call_count,
+        total_tokens_used,
+    );
     writeln!(stdout, "{}", status)?;
 
     // Show context warning if we have real token data
@@ -518,7 +540,7 @@ mod tests {
             completion_tokens: 100,
             total_tokens: 500,
         };
-        let result = format_context_status(5, 0, Some(&usage), ContextWindowSize::Small8K);
+        let result = format_context_status(5, 0, Some(&usage), ContextWindowSize::Small8K, 0, 0);
         // Should contain "5 msgs", token info, and percentage
         assert!(result.contains("5 msgs"));
         assert!(result.contains("500"));
@@ -526,6 +548,9 @@ mod tests {
         assert!(result.contains("6%"));
         // No pinned info when count is 0
         assert!(!result.contains("pinned"));
+        // No tools/total when 0
+        assert!(!result.contains("tools"));
+        assert!(!result.contains("total"));
     }
 
     #[test]
@@ -535,10 +560,23 @@ mod tests {
             completion_tokens: 500,
             total_tokens: 2000,
         };
-        let result = format_context_status(10, 3, Some(&usage), ContextWindowSize::Small8K);
+        let result = format_context_status(10, 3, Some(&usage), ContextWindowSize::Small8K, 0, 0);
         assert!(result.contains("10 msgs"));
         assert!(result.contains("3 pinned"));
         assert!(result.contains("2.0K/8.2K")); // 2000 = 2.0K, 8192 = 8.2K
+    }
+
+    #[test]
+    fn test_format_context_status_with_tools_and_total() {
+        let usage = tinyharness_lib::provider::TokenUsage {
+            prompt_tokens: 1500,
+            completion_tokens: 500,
+            total_tokens: 2000,
+        };
+        let result =
+            format_context_status(10, 0, Some(&usage), ContextWindowSize::Small8K, 3, 5200);
+        assert!(result.contains("3 tools"));
+        assert!(result.contains("5.2K total"));
     }
 
     #[test]
@@ -549,7 +587,7 @@ mod tests {
             completion_tokens: 500,
             total_tokens: 7500,
         };
-        let result = format_context_status(20, 0, Some(&usage), ContextWindowSize::Small8K);
+        let result = format_context_status(20, 0, Some(&usage), ContextWindowSize::Small8K, 0, 0);
         assert!(result.contains("20 msgs"));
         assert!(result.contains(RED));
     }
@@ -562,14 +600,14 @@ mod tests {
             completion_tokens: 1000,
             total_tokens: 6000,
         };
-        let result = format_context_status(10, 0, Some(&usage), ContextWindowSize::Small8K);
+        let result = format_context_status(10, 0, Some(&usage), ContextWindowSize::Small8K, 0, 0);
         assert!(result.contains(YELLOW));
     }
 
     #[test]
     fn test_format_context_status_no_usage() {
         // When no token usage is available, show "?"
-        let result = format_context_status(5, 0, None, ContextWindowSize::Small8K);
+        let result = format_context_status(5, 0, None, ContextWindowSize::Small8K, 0, 0);
         assert!(result.contains("5 msgs"));
         assert!(result.contains("?/8.2K")); // unknown / 8192
         // Should have dim gray color for the token part

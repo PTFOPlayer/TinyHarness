@@ -326,6 +326,21 @@ fn dump_token_usage(file: &mut std::fs::File, ctx: &CommandContext, messages: &[
         writeln!(file, "Last known token usage: (none)").unwrap();
     }
 
+    // Cumulative session stats from session metadata.
+    let store = tinyharness_lib::session::SessionStore::default_path();
+    if let Some(session_id) = &ctx.session_id
+        && let Ok((session, _)) = store.load(session_id)
+    {
+        let meta = session.meta();
+        writeln!(file, "Cumulative tool calls: {}", meta.total_tool_calls).unwrap();
+        writeln!(
+            file,
+            "Cumulative total tokens used: {}",
+            meta.total_tokens_used
+        )
+        .unwrap();
+    }
+
     // Rough estimate: ~4 characters per token across all message contents.
     let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
     let estimated_tokens = total_chars / 4;
@@ -372,6 +387,13 @@ fn dump_session_metadata(file: &mut std::fs::File, session_id: &str) {
                 )
                 .unwrap();
             }
+            writeln!(file, "Cumulative tool calls: {}", meta.total_tool_calls).unwrap();
+            writeln!(
+                file,
+                "Cumulative total tokens used: {}",
+                meta.total_tokens_used
+            )
+            .unwrap();
         }
         Err(e) => {
             writeln!(file, "Failed to load session metadata: {}", e).unwrap();

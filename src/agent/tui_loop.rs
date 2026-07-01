@@ -235,6 +235,10 @@ pub async fn run_tui_agent_loop(
     let mut last_known_token_usage: Option<tinyharness_lib::provider::TokenUsage> =
         session.meta().token_usage.clone();
 
+    // Cumulative stats for this session, seeded from session metadata.
+    let mut tool_call_count: u64 = session.meta().total_tool_calls;
+    let mut total_tokens_used: u64 = session.meta().total_tokens_used;
+
     // Send initial state to the TUI.
     // When no model is known yet (e.g. Sockudo before the first
     // response), don't send a model name — the TUI will display
@@ -256,6 +260,12 @@ pub async fn run_tui_agent_loop(
         send_context_warning_if_needed(usage.total_tokens, context_size, &agent_event_tx);
     }
 
+    // Send cumulative stats to TUI.
+    let _ = agent_event_tx.send(TuiAgentEvent::StatsUpdate {
+        tool_calls: tool_call_count,
+        total_tokens: total_tokens_used,
+    });
+
     // Handle initial prompt (from --prompt flag)
     if let Some(prompt) = initial_prompt
         && !prompt.trim().is_empty()
@@ -273,6 +283,8 @@ pub async fn run_tui_agent_loop(
             &agent_event_tx,
             &mut user_action_rx,
             &mut last_known_token_usage,
+            &mut tool_call_count,
+            &mut total_tokens_used,
             context_size,
         )
         .await;
@@ -311,6 +323,8 @@ pub async fn run_tui_agent_loop(
                         &interrupted,
                         &agent_event_tx,
                         &mut last_known_token_usage,
+                        &mut tool_call_count,
+                        &mut total_tokens_used,
                         context_size,
                     )
                     .await;
@@ -334,6 +348,8 @@ pub async fn run_tui_agent_loop(
                     &agent_event_tx,
                     &mut user_action_rx,
                     &mut last_known_token_usage,
+                    &mut tool_call_count,
+                    &mut total_tokens_used,
                     context_size,
                 )
                 .await;
@@ -370,6 +386,8 @@ async fn process_slash_command(
     _interrupted: &Arc<AtomicBool>,
     agent_event_tx: &mpsc::Sender<TuiAgentEvent>,
     last_known_token_usage: &mut Option<tinyharness_lib::provider::TokenUsage>,
+    tool_call_count: &mut u64,
+    total_tokens_used: &mut u64,
     context_size: ContextWindowSize,
 ) {
     match dispatch_command_to_tui(input, ctx, messages, registry, agent_event_tx).await {
@@ -394,6 +412,8 @@ async fn process_slash_command(
             } else {
                 let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(info.description));
                 *last_known_token_usage = session.meta().token_usage.clone();
+                *tool_call_count = session.meta().total_tool_calls;
+                *total_tokens_used = session.meta().total_tokens_used;
                 let _ =
                     agent_event_tx.send(TuiAgentEvent::ModeChanged(ctx.current_mode.to_string()));
             }
@@ -438,6 +458,8 @@ async fn process_user_message(
     agent_event_tx: &mpsc::Sender<TuiAgentEvent>,
     user_action_rx: &mut mpsc::Receiver<TuiUserAction>,
     last_known_token_usage: &mut Option<tinyharness_lib::provider::TokenUsage>,
+    tool_call_count: &mut u64,
+    total_tokens_used: &mut u64,
     context_size: ContextWindowSize,
 ) {
     let pending_images = std::mem::take(&mut ctx.pending_images);
@@ -500,10 +522,16 @@ async fn process_user_message(
                                 received_done = true;
                                 if let Some(ref usage) = msg.usage {
                                     *last_known_token_usage = Some(usage.clone());
+                                    *total_tokens_used += usage.total_tokens as u64;
+                                    session.add_tokens_used(usage.total_tokens as u64);
                                     session.set_token_usage(usage.clone());
                                     let _ = agent_event_tx.send(TuiAgentEvent::TokenUpdate {
                                         count: usage.total_tokens as u64,
                                         limit: Some(context_size.tokens() as u64),
+                                    });
+                                    let _ = agent_event_tx.send(TuiAgentEvent::StatsUpdate {
+                                        tool_calls: *tool_call_count,
+                                        total_tokens: *total_tokens_used,
                                     });
                                     send_context_warning_if_needed(
                                         usage.total_tokens,
@@ -603,6 +631,14 @@ async fn process_user_message(
             // Ensure every tool call has a non-empty id (some providers omit them)
             let mut tool_calls = tool_calls;
             ensure_tool_call_ids(&mut tool_calls);
+
+            // Track cumulative tool calls for session stats.
+            *tool_call_count += tool_calls.len() as u64;
+            session.add_tool_calls(tool_calls.len() as u64);
+            let _ = agent_event_tx.send(TuiAgentEvent::StatsUpdate {
+                tool_calls: *tool_call_count,
+                total_tokens: *total_tokens_used,
+            });
 
             // Push the assistant message with tool calls
             messages.push(Message {

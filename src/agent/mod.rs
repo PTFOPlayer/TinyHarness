@@ -141,6 +141,10 @@ pub async fn run_agent_loop(
     let mut last_known_token_usage: Option<tinyharness_lib::provider::TokenUsage> =
         session.meta().token_usage.clone();
 
+    // Cumulative stats for this session, seeded from session metadata.
+    let mut tool_call_count: u64 = session.meta().total_tool_calls;
+    let mut total_tokens_used: u64 = session.meta().total_tokens_used;
+
     // If the user passed --prompt / -p, treat it as the first user message.
     // We materialize it into a local `pending_user_input` buffer that the
     // input-reading block below drains on the first iteration. This lets the
@@ -175,6 +179,8 @@ pub async fn run_agent_loop(
             pinned_count,
             token_usage_for_status,
             context_size,
+            tool_call_count,
+            total_tokens_used,
         );
 
         // Include session name in prompt if available
@@ -255,6 +261,8 @@ pub async fn run_agent_loop(
                         let mut err_out = Output::stderr();
                         let _ = writeln!(err_out, "{BOLD}{}{RESET}", info.description);
                         last_known_token_usage = session.meta().token_usage.clone();
+                        tool_call_count = session.meta().total_tool_calls;
+                        total_tokens_used = session.meta().total_tokens_used;
                         print_conversation_history(messages, &mut stdout)?;
                         print_context_load_warning(
                             messages,
@@ -371,6 +379,8 @@ pub async fn run_agent_loop(
                                     // LLM provider (Ollama: prompt_eval_count, OpenAI-compat: usage).
                                     if let Some(ref usage) = msg.usage {
                                         last_known_token_usage = Some(usage.clone());
+                                        total_tokens_used += usage.total_tokens as u64;
+                                        session.add_tokens_used(usage.total_tokens as u64);
                                         // Persist in session so restarts don't lose the count.
                                         session.set_token_usage(usage.clone());
                                     }
@@ -563,6 +573,8 @@ pub async fn run_agent_loop(
             )
             .await?
             {
+                // Sync local cumulative stats from session (updated by handle_tool_calls).
+                tool_call_count = session.meta().total_tool_calls;
                 continue;
             }
 

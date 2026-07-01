@@ -39,6 +39,12 @@ pub struct SessionMeta {
     /// provider response, serialized so it survives restarts.
     #[serde(default)]
     pub token_usage: Option<TokenUsage>,
+    /// Cumulative tool calls made during this session (across all turns).
+    #[serde(default)]
+    pub total_tool_calls: u64,
+    /// Cumulative total tokens consumed across all LLM calls in this session.
+    #[serde(default)]
+    pub total_tokens_used: u64,
 }
 
 /// A single line in the session JSONL file.
@@ -153,6 +159,8 @@ impl SessionStore {
             name: Some(auto_name),
             message_count: 0,
             token_usage: None,
+            total_tool_calls: 0,
+            total_tokens_used: 0,
         };
 
         // Eagerly create the session file so callers get immediate feedback on errors
@@ -407,6 +415,20 @@ impl Session {
     /// This is stored in the session metadata so it survives restarts.
     pub fn set_token_usage(&mut self, usage: TokenUsage) {
         self.meta.token_usage = Some(usage);
+        self.meta.updated_at = now_timestamp();
+        self.dirty = true;
+    }
+
+    /// Add to the cumulative tool call count for this session.
+    pub fn add_tool_calls(&mut self, count: u64) {
+        self.meta.total_tool_calls += count;
+        self.meta.updated_at = now_timestamp();
+        self.dirty = true;
+    }
+
+    /// Add to the cumulative total tokens used in this session.
+    pub fn add_tokens_used(&mut self, count: u64) {
+        self.meta.total_tokens_used += count;
         self.meta.updated_at = now_timestamp();
         self.dirty = true;
     }
