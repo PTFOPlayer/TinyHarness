@@ -26,6 +26,10 @@ pub struct StatusBarWidget {
     pub pinned_file_count: usize,
     pub session_name: String,
     pub is_streaming: bool,
+    /// Cumulative tool calls in this session.
+    pub tool_call_count: u64,
+    /// Cumulative total tokens used across all LLM calls.
+    pub total_tokens_used: u64,
     /// Label for the currently focused widget (e.g., "input", "chat", "sidebar", "files").
     pub focus_label: String,
 }
@@ -49,6 +53,8 @@ impl StatusBarWidget {
             pinned_file_count: 0,
             session_name: String::from("unnamed"),
             is_streaming: false,
+            tool_call_count: 0,
+            total_tokens_used: 0,
             focus_label: String::from("input"),
         }
     }
@@ -79,6 +85,16 @@ impl StatusBarWidget {
     /// Set the token count (used, total).
     pub fn set_token_count(&mut self, used: u64, total: Option<u64>) {
         self.token_count = total.map(|t| (used as u32, t as u32));
+    }
+
+    /// Set the cumulative tool call count.
+    pub fn set_tool_call_count(&mut self, count: u64) {
+        self.tool_call_count = count;
+    }
+
+    /// Set the cumulative total tokens used.
+    pub fn set_total_tokens_used(&mut self, count: u64) {
+        self.total_tokens_used = count;
     }
 
     /// Set whether the assistant is currently streaming.
@@ -253,6 +269,59 @@ impl Widget for StatusBarWidget {
                 Style::dim(),
             );
             col += file_text.len() as u16;
+        }
+
+        // Tool call count (only if > 0)
+        if self.tool_call_count > 0 {
+            screen.write_str(
+                row,
+                col,
+                " │ ",
+                Color::Ansi(240),
+                styles::STATUS_BAR_BG,
+                Style::default(),
+            );
+            col += 3;
+            let tool_text = format!("{} tools", self.tool_call_count);
+            screen.write_str(
+                row,
+                col,
+                &tool_text,
+                Color::WHITE,
+                styles::STATUS_BAR_BG,
+                Style::dim(),
+            );
+            col += tool_text.len() as u16;
+        }
+
+        // Total tokens used (only if > 0)
+        if self.total_tokens_used > 0 {
+            screen.write_str(
+                row,
+                col,
+                " │ ",
+                Color::Ansi(240),
+                styles::STATUS_BAR_BG,
+                Style::default(),
+            );
+            col += 3;
+            let total_text = format!(
+                "{} total",
+                if self.total_tokens_used >= 1000 {
+                    format!("{:.1}k", self.total_tokens_used as f64 / 1000.0)
+                } else {
+                    self.total_tokens_used.to_string()
+                }
+            );
+            screen.write_str(
+                row,
+                col,
+                &total_text,
+                Color::WHITE,
+                styles::STATUS_BAR_BG,
+                Style::dim(),
+            );
+            col += total_text.len() as u16;
         }
 
         // Focus indicator (right of left-section, before session name)

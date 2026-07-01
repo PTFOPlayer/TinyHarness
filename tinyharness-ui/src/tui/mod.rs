@@ -74,6 +74,8 @@ pub enum TuiAgentEvent {
     ModelChanged(String),
     /// Token usage was updated.
     TokenUpdate { count: u64, limit: Option<u64> },
+    /// Cumulative session stats updated (tool calls, total tokens).
+    StatsUpdate { tool_calls: u64, total_tokens: u64 },
     /// Context window warning triggered (70%+ or 90%+).
     ContextWarning { percentage: f64, critical: bool },
     /// A system/info message to display.

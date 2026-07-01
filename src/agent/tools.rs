@@ -52,6 +52,8 @@ pub async fn handle_tool_calls<W: Write>(
     let tool_calls = tool_calls; // immutable from here
 
     let tool_count = tool_calls.len();
+    // Track cumulative tool calls for session stats.
+    session.add_tool_calls(tool_count as u64);
     writeln!(
         stdout,
         "\n{BG_TOOL}  {WHITE}{count} tool call(s){FILL_EOL}{RESET}",

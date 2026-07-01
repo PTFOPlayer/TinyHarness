@@ -57,6 +57,10 @@ pub struct TuiState {
     pub session_name: String,
     /// Message count.
     pub message_count: usize,
+    /// Cumulative tool calls in this session.
+    pub tool_call_count: u64,
+    /// Cumulative total tokens used across all LLM calls.
+    pub total_tokens_used: u64,
 }
 
 impl Default for TuiState {
@@ -70,6 +74,8 @@ impl Default for TuiState {
             token_limit: None,
             session_name: "unnamed".to_string(),
             message_count: 0,
+            tool_call_count: 0,
+            total_tokens_used: 0,
         }
     }
 }
@@ -240,6 +246,10 @@ impl<B: Backend> TuiApp<B> {
             self.status_bar
                 .set_token_count(count, self.state.token_limit);
         }
+        self.status_bar
+            .set_tool_call_count(self.state.tool_call_count);
+        self.status_bar
+            .set_total_tokens_used(self.state.total_tokens_used);
         self.status_bar.set_streaming(self.state.streaming);
 
         self.input_bar
@@ -1422,6 +1432,15 @@ impl<B: Backend> TuiApp<B> {
                 self.state.token_count = Some(count);
                 self.state.token_limit = limit;
                 self.status_bar.set_token_count(count, limit);
+            }
+            TuiAgentEvent::StatsUpdate {
+                tool_calls,
+                total_tokens,
+            } => {
+                self.state.tool_call_count = tool_calls;
+                self.state.total_tokens_used = total_tokens;
+                self.status_bar.set_tool_call_count(tool_calls);
+                self.status_bar.set_total_tokens_used(total_tokens);
             }
             TuiAgentEvent::ContextWarning {
                 percentage,
