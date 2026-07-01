@@ -14,8 +14,8 @@ TinyHarness provides 15 tools across three categories. Each tool has a JSON Sche
 
 - **ReadOnly tools** run immediately in all modes
 - **Destructive tools** prompt for confirmation (Yes/No/Auto-accept for all)
-  - `run` can **never** be auto-accepted in auto-accept mode (only `write`/`edit` can)
-  - Safe commands within `run` may still auto-accept if `/autoaccept` is on and the command passes safety checks
+  - `run` can **never** be auto-accepted, even in `all` mode (only `write`/`edit` can)
+  - Safe commands within `run` may still auto-accept if `/autoaccept` is `safe` or `all` and the command passes safety checks
 - **Signal tools** are intercepted by the agent loop before reaching generic tool execution
 
 ### Mode Filtering
@@ -55,7 +55,7 @@ Reads file content with optional line ranges. For image files (png, jpg, webp, g
 
 ### `write` — Write File
 
-**Category**: Destructive | **Auto-executes**: Only in auto-accept mode
+**Category**: Destructive | **Auto-executes**: Only in `all` auto-accept mode
 
 Writes content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories automatically.
 
@@ -68,7 +68,7 @@ Confirmation prompt shows the path and content preview. Use for new files or com
 
 ### `edit` — Edit File
 
-**Category**: Destructive | **Auto-executes**: Only in auto-accept mode
+**Category**: Destructive | **Auto-executes**: Only in `all` auto-accept mode
 
 Edits a file by finding an exact string and replacing it with new text. The `old_str` must appear exactly once in the file. Use for targeted changes.
 

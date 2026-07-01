@@ -178,20 +178,24 @@ Confirm? (Y)es / (N)o / (A)uto-accept future
 
 ### Auto-Accept Mode
 
-Toggle with `/autoaccept on` or `/autoaccept off`.
+Toggle with `/autoaccept off`, `/autoaccept safe`, or `/autoaccept all`.
 
-When on (`auto_accept_safe_commands: true`):
+**`off`** (default):
+- All destructive tools prompt for confirmation
+- No auto-accept toggle is offered
+
+**`safe`** (`auto_accept_mode: "safe"`):
 - **ReadOnly** tools auto-execute (always, regardless of this setting)
 - **Destructive** `write` and `edit` get a prompt — but pressing `A` during confirmation enables auto-accept for the rest of the session
 - **Destructive** `run` is NEVER auto-accepted, even with `A`
 
-When off:
-- All destructive tools prompt for confirmation
-- No auto-accept toggle is offered
+**`all`** (`auto_accept_mode: "all"`):
+- **Destructive** `write` and `edit` auto-execute without prompting
+- **Destructive** `run` still prompts — it is NEVER auto-accepted, even in `all` mode
 
 ### `run` Tool Special Rule
 
-The `run` tool can **never** be auto-accepted, even with `/autoaccept on` and pressing `A`. This is a hard rule — if commands are safe, they pass the safety checker and auto-execute. If they're not, you must confirm them individually.
+The `run` tool can **never** be auto-accepted, even with `/autoaccept all` and pressing `A`. This is a hard rule — if commands are safe, they pass the safety checker and auto-execute. If they're not, you must confirm them individually.
 
 ---
 
@@ -202,7 +206,7 @@ The `run` tool can **never** be auto-accepted, even with `/autoaccept on` and pr
 1. **Sandbox**: Run TinyHarness inside a Docker container or VM for untrusted models
 2. **Review before confirming**: Always read the proposed command before pressing `Y`
 3. **Use the deny list**: Block commands you never want auto-executed: `/command deny "git push --force"`
-4. **Per-project settings**: Set `auto_accept_safe_commands: false` for sensitive projects
+4. **Per-project settings**: Set `auto_accept_mode: "off"` for sensitive projects
 5. **Limit tools by mode**: Use `planning` mode for analysis, switch to `agent` only when you need destructive operations
 6. **Check the audit log**: `/audit last` shows recently executed commands; `/audit session` shows all in this session
 
@@ -212,7 +216,7 @@ The `run` tool can **never** be auto-accepted, even with `/autoaccept on` and pr
    ```json
    {
      "denied_command_prefixes": ["git push --force", "rm -rf"],
-     "auto_accept_safe_commands": false
+     "auto_accept_mode": "off"
    }
    ```
 2. **Use project-local skills** with `disable-model-invocation: true` for sensitive procedures

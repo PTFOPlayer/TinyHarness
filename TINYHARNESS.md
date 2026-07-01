@@ -29,13 +29,14 @@ Three crates in a Cargo workspace:
 - `context.rs` — Workspace metadata + instruction file discovery (TINYHARNESS.md → .tinyharness.md → AGENTS.md → CLAUDE.md)
 - `skill.rs` — Skill discovery from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`
 - `mode.rs` — Agent modes with `.md` system prompts
-- `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType
+- `secret.rs` — `SecretString` wrapper for API key redaction (custom `Debug` impl, serde support)
+- `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType, AutoAcceptMode (off/safe/all)
 
 ### Binary crate structure
 
-- `src/agent/` — Agent loop, tool execution, safety checks, display, multi-line input, provider setup
+- `src/agent/` — Agent loop (`mod.rs`), tool execution (`tools.rs`), safety checks (`safety.rs`), display (`display.rs`), multi-line input (`input.rs`), provider setup (`setup.rs`), confirmation prompts (`confirm.rs`), signal tool handling (`signal.rs`), tool result formatting (`tool_result.rs`), command result types (`command_result.rs`)
 - `src/agent/tui_loop.rs` — Background agent loop for TUI mode (communicates with TUI via mpsc channels)
-- `src/commands/` — 22+ slash commands (mode, model, sessions, compact, init, context, files, image, skill, settings, help, etc.), `CommandRegistry` and `async_command!` macro
+- `src/commands/` — 24+ slash commands (mode, model, sessions, compact, init, context, files, image, skill, settings, help, debug, project-settings, autocompact, etc.), `CommandRegistry` and `async_command!` macro
 
 ## Code Conventions
 
@@ -69,7 +70,7 @@ Three crates in a Cargo workspace:
 ## Testing
 
 - `cargo test --workspace` runs all tests
-- `tinyharness-lib` has good coverage (~89 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has limited coverage (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~101 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has ~99 tests + 13 ignored (see `todo/01-testing-gaps.md`)
 - Use `tempfile` for test isolation; tool tests must not touch the real filesystem
 - Run specific test: `cargo test <test_name>`
 - Run per crate: `cargo test -p tinyharness-lib`, `cargo test -p TinyHarness`, `cargo test -p tinyharness-ui`
@@ -80,7 +81,7 @@ Three crates in a Cargo workspace:
 - **Ollama specifics**: Own raw SSE parser (not ollama-rs streaming) to handle native and OpenAI-compatible formats; captures Gemini `thought_signature` from tool responses and re-injects them; fixes serialization quirks (lowercases tool type, injects `name` in tool results, synthesizes `tool_call_id` when missing for OpenAI-compatible servers).
 - **System prompts**: Assembled from `header.md` + `<mode>.md` for Agent/Planning/Research; Casual is self-contained. Prompts are refreshed on mode switch, file pinning changes, skill activation, and `/refresh`.
 - **Command safety** (`src/agent/safety.rs`): Prefix matching with word boundaries, deny list priority, strips redirections before matching; rejects `;`, `&`, `|`, `$()`, backticks, newlines. Redirections like `2>&1` are auto-accepted if base command is safe.
-- **Confirmation**: `run` tool cannot be auto-accepted even with 'a' (auto-accept mode); only `write` and `edit` can.
+- **Confirmation**: `run` tool cannot be auto-accepted even with 'a' (auto-accept mode); only `write` and `edit` can. Auto-accept has three modes: `off`, `safe` (read-only commands), `all` (all destructive tools except `run`).
 - **Compaction**: `/compact` uses single-pass for ≤200 intermediate messages, cascading (chunk+merge) for larger sessions.
 - **Context warnings**: Load warnings at 70%/90% thresholds based on last known token count (estimation).
 - **Session files**: JSONL (metadata line first, then message lines); malformed lines silently skipped on load; stored in `~/.local/share/tinyharness/sessions/`.
@@ -90,7 +91,7 @@ Three crates in a Cargo workspace:
 - **Image attachments**: Base64 data URIs, used by multimodal models; set via `/image`.
 - **`async_command!` macro**: Registers commands that need `provider.lock().await`.
 - **`CommandResult` variants**: `SwitchSession`, `RenameSession`, `Init`, `SkillUse`, `SkillUnload` carry data back to the agent loop.
-- **`CommandContext`** holds shared mutable state: provider, mode, file context, session ID, skill registry, active skills, pending images, thinking toggle, compaction token usage.
+- **`CommandContext`** holds shared mutable state: provider, mode, file context, session ID, skill registry, active skills, pending images, thinking toggle, compaction token usage, workspace context, prompts dir, output writer, exit flag.
 - **`extract_args!` macro** exported at `tinyharness_lib` root, not in `tools`.
 
 ## Verification Steps
