@@ -314,3 +314,57 @@ pub fn execute_showthink(
 
     Ok(CommandResult::Ok)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{captured_output, captured_string, strip_ansi};
+
+    #[test]
+    fn context_limit_invalid_value_returns_error() {
+        let (mut out, _buf) = captured_output();
+        let result = execute_context_limit(&mut out, Some("abc"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid context limit"));
+    }
+
+    #[test]
+    fn context_limit_zero_returns_error() {
+        let (mut out, _buf) = captured_output();
+        let result = execute_context_limit(&mut out, Some("0"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("positive number"));
+    }
+
+    #[test]
+    fn autoaccept_invalid_value_returns_error() {
+        let (mut out, _buf) = captured_output();
+        let result = execute_autoaccept(&mut out, Some("invalid"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid value"));
+    }
+
+    #[test]
+    fn autoaccept_empty_shows_current() {
+        let (mut out, buf) = captured_output();
+        let _ = execute_autoaccept(&mut out, None);
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Auto-accept:"));
+    }
+
+    #[test]
+    fn autocompact_invalid_value_returns_error() {
+        let (mut out, _buf) = captured_output();
+        let result = execute_autocompact(&mut out, Some("maybe"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid value"));
+    }
+
+    #[test]
+    fn autocompact_empty_shows_current() {
+        let (mut out, buf) = captured_output();
+        let _ = execute_autocompact(&mut out, None);
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Auto-compact:"));
+    }
+}
