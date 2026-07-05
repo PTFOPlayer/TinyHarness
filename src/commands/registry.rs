@@ -18,6 +18,7 @@ use crate::commands::init::InitResult;
 // ── CommandResult ────────────────────────────────────────────────────────────
 
 /// Result of dispatching a command.
+#[derive(Debug)]
 pub enum CommandResult {
     /// Command completed normally.
     Ok,
@@ -510,5 +511,182 @@ impl CommandRegistry {
             cmd.to_string(),
             subs.iter().map(|s| s.to_string()).collect(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{make_context, make_messages};
+
+    #[test]
+    fn registry_new_is_empty() {
+        let reg = CommandRegistry::new();
+        assert!(reg.command_names().is_empty());
+        assert!(!reg.contains("/help"));
+    }
+
+    #[test]
+    fn registry_register_sync_command() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/test", "Test command", |_arg, _ctx, _msg| {
+            Ok(CommandResult::Ok)
+        });
+        assert!(reg.contains("/test"));
+        assert!(reg.command_names().contains(&"/test"));
+    }
+
+    #[test]
+    fn registry_register_alias() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/mode", "Switch mode", |_arg, _ctx, _msg| {
+            Ok(CommandResult::Ok)
+        });
+        reg.register_alias("/plan", "/mode", Some("planning"), "Planning alias");
+        assert!(reg.contains("/plan"));
+        assert!(reg.contains("/mode"));
+        assert!(reg.command_names().contains(&"/plan"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_command_returns_error() {
+        let reg = CommandRegistry::new();
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg.dispatch("/nonexistent", &mut ctx, &mut messages).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown command"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_non_command_returns_error() {
+        let reg = CommandRegistry::new();
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg.dispatch("hello world", &mut ctx, &mut messages).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a command"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_known_command_succeeds() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/test", "Test command", |_arg, _ctx, _msg| {
+            Ok(CommandResult::Ok)
+        });
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg.dispatch("/test", &mut ctx, &mut messages).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dispatch_alias_resolves_to_target() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/mode", "Switch mode", |arg, _ctx, _msg| {
+            // Verify the alias passed the fixed arg
+            assert_eq!(arg, Some("planning"));
+            Ok(CommandResult::Ok)
+        });
+        reg.register_alias("/plan", "/mode", Some("planning"), "Planning alias");
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg.dispatch("/plan", &mut ctx, &mut messages).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dispatch_case_insensitive() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/test", "Test command", |_arg, _ctx, _msg| {
+            Ok(CommandResult::Ok)
+        });
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg.dispatch("/TEST", &mut ctx, &mut messages).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dispatch_passes_arg_to_handler() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync_with_usage(
+            "/rename",
+            "Rename session",
+            "/rename <name>",
+            |arg, _ctx, _msg| {
+                Ok(CommandResult::RenameSession(
+                    arg.unwrap_or("default").to_string(),
+                ))
+            },
+        );
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg
+            .dispatch("/rename my-session", &mut ctx, &mut messages)
+            .await;
+        assert!(
+            matches!(result.unwrap(), CommandResult::RenameSession(ref name) if name == "my-session")
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_strips_whitespace_from_arg() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync_with_usage(
+            "/rename",
+            "Rename session",
+            "/rename <name>",
+            |arg, _ctx, _msg| Ok(CommandResult::RenameSession(arg.unwrap_or("").to_string())),
+        );
+        let (mut ctx, _mock) = make_context();
+        let mut messages = make_messages("test");
+        let result = reg
+            .dispatch("/rename   spaced-name   ", &mut ctx, &mut messages)
+            .await;
+        assert!(
+            matches!(result.unwrap(), CommandResult::RenameSession(ref name) if name == "spaced-name")
+        );
+    }
+
+    #[test]
+    fn freeze_descriptions_includes_aliases() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/mode", "Switch mode", |_arg, _ctx, _msg| {
+            Ok(CommandResult::Ok)
+        });
+        reg.register_alias("/plan", "/mode", Some("planning"), "Planning alias");
+        reg.freeze_descriptions();
+        let descs = reg.descriptions();
+        let names: Vec<&str> = descs.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"/mode"));
+        assert!(names.contains(&"/plan"));
+    }
+
+    #[test]
+    fn register_subcommands_stores_completions() {
+        let mut reg = CommandRegistry::new();
+        reg.register_subcommands("/mode", vec!["agent", "casual", "planning", "research"]);
+        let subs = reg.subcommands();
+        assert!(subs.contains_key("/mode"));
+        assert_eq!(
+            subs.get("/mode").unwrap(),
+            &vec![
+                "agent".to_string(),
+                "casual".to_string(),
+                "planning".to_string(),
+                "research".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn command_names_sorted() {
+        let mut reg = CommandRegistry::new();
+        reg.register_sync("/zebra", "Z", |_arg, _ctx, _msg| Ok(CommandResult::Ok));
+        reg.register_sync("/alpha", "A", |_arg, _ctx, _msg| Ok(CommandResult::Ok));
+        reg.register_sync("/middle", "M", |_arg, _ctx, _msg| Ok(CommandResult::Ok));
+        let names = reg.command_names();
+        assert_eq!(names, vec!["/alpha", "/middle", "/zebra"]);
     }
 }

@@ -417,3 +417,87 @@ pub fn execute_reset_deny(out: &mut Output) {
         if count == 1 { "" } else { "s" },
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{captured_output, captured_string, strip_ansi};
+
+    #[test]
+    fn format_command_rows_basic() {
+        let cmds = vec!["ls", "cat", "pwd"];
+        let markers = vec!['·', '·', '·'];
+        let rows = format_command_rows(&cmds, &markers);
+        assert_eq!(rows.len(), 1);
+        // Each row should contain all three commands (after ANSI strip)
+        let plain = strip_ansi(&rows[0]);
+        assert!(plain.contains("ls"));
+        assert!(plain.contains("cat"));
+        assert!(plain.contains("pwd"));
+    }
+
+    #[test]
+    fn format_command_rows_wraps_to_multiple_rows() {
+        let cmds: Vec<&str> = (0..7)
+            .map(|i| ["cmd1", "cmd2", "cmd3", "cmd4", "cmd5", "cmd6", "cmd7"][i])
+            .collect();
+        let markers: Vec<char> = (0..7).map(|_| '·').collect();
+        let rows = format_command_rows(&cmds, &markers);
+        // 7 commands / 3 per row = 3 rows (3, 3, 1)
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn format_denied_command_rows_basic() {
+        let cmds = vec!["git push", "rm"];
+        let rows = format_denied_command_rows(&cmds);
+        assert_eq!(rows.len(), 1);
+        let plain = strip_ansi(&rows[0]);
+        assert!(plain.contains("git push"));
+        assert!(plain.contains("rm"));
+    }
+
+    #[test]
+    fn matches_safe_prefix_exact_match() {
+        let safe = vec!["ls".to_string(), "cat".to_string()];
+        assert!(matches_safe_prefix("ls", &safe));
+        assert!(matches_safe_prefix("ls -la", &safe));
+        assert!(matches_safe_prefix("cat file.txt", &safe));
+    }
+
+    #[test]
+    fn matches_safe_prefix_word_boundary() {
+        let safe = vec!["ls".to_string()];
+        assert!(!matches_safe_prefix("lsx", &safe));
+        assert!(!matches_safe_prefix("lsls", &safe));
+    }
+
+    #[test]
+    fn matches_safe_prefix_empty_safe_list() {
+        let safe: Vec<String> = vec![];
+        assert!(!matches_safe_prefix("ls", &safe));
+    }
+
+    #[test]
+    fn execute_list_shows_commands() {
+        let (mut out, buf) = captured_output();
+        execute_list(&mut out);
+        let plain = strip_ansi(&captured_string(&buf));
+        // Should contain the box header
+        assert!(plain.contains("Auto-Accepted Commands"));
+        // Should list some default commands
+        assert!(plain.contains("ls"));
+    }
+
+    #[test]
+    fn execute_help_shows_subcommands() {
+        let (mut out, buf) = captured_output();
+        execute_help(&mut out);
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Command management"));
+        assert!(plain.contains("add"));
+        assert!(plain.contains("deny"));
+        assert!(plain.contains("undeny"));
+        assert!(plain.contains("reset"));
+    }
+}

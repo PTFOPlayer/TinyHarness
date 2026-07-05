@@ -10,6 +10,7 @@ use crate::commands::registry::CommandResult;
 use tinyharness_ui::style::*;
 
 /// Result of the `/init` command.
+#[derive(Debug)]
 pub enum InitResult {
     /// The file was created from scratch.
     Created { path: PathBuf },

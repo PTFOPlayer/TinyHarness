@@ -155,3 +155,84 @@ pub fn execute_delete(out: &mut Output, session_id: &str, current_session_id: Op
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::strip_ansi;
+    use tinyharness_lib::mode::AgentMode;
+
+    fn test_meta(id: &str, name: Option<&str>, msgs: usize) -> SessionMeta {
+        SessionMeta {
+            id: id.to_string(),
+            working_dir: "/tmp/project".to_string(),
+            created_at: 1000,
+            updated_at: 2000,
+            mode: AgentMode::Agent,
+            provider: "ollama".to_string(),
+            model: Some("test-model".to_string()),
+            name: name.map(|s| s.to_string()),
+            message_count: msgs,
+            token_usage: None,
+            total_tool_calls: 0,
+            total_tokens_used: 0,
+        }
+    }
+
+    #[test]
+    fn format_empty_sessions() {
+        let output = format_session_list(&[], None);
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("No sessions found"));
+    }
+
+    #[test]
+    fn format_single_session() {
+        let sessions = vec![test_meta("abcdef1234567890", Some("my-project"), 5)];
+        let output = format_session_list(&sessions, None);
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("Available sessions"));
+        assert!(plain.contains("my-project"));
+        assert!(plain.contains("abcdef123456"));
+        assert!(plain.contains("5 msgs"));
+    }
+
+    #[test]
+    fn format_current_session_marked() {
+        let sessions = vec![test_meta("abcdef1234567890", Some("current"), 3)];
+        let output = format_session_list(&sessions, Some("abcdef1234567890"));
+        let raw = output;
+        // Current session should have the cyan marker
+        assert!(raw.contains("▸"));
+    }
+
+    #[test]
+    fn format_unnamed_session() {
+        let sessions = vec![test_meta("xyz1234567890", None, 1)];
+        let output = format_session_list(&sessions, None);
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("unnamed"));
+    }
+
+    #[test]
+    fn format_multiple_sessions() {
+        let sessions = vec![
+            test_meta("aaa1234567890", Some("first"), 10),
+            test_meta("bbb1234567890", Some("second"), 3),
+        ];
+        let output = format_session_list(&sessions, None);
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("first"));
+        assert!(plain.contains("second"));
+    }
+
+    #[test]
+    fn format_long_working_dir_truncated() {
+        let mut meta = test_meta("long1234567890", Some("test"), 1);
+        meta.working_dir = "/very/long/path/that/exceeds/forty/characters/here".to_string();
+        let sessions = vec![meta];
+        let output = format_session_list(&sessions, None);
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("..."));
+    }
+}

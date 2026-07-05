@@ -73,3 +73,83 @@ pub async fn execute_select(
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::registry::Command;
+    use crate::test_helpers::{captured_output, captured_string, make_context, strip_ansi};
+
+    #[tokio::test]
+    async fn list_models_shows_available() {
+        let (mut ctx, _mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        execute_list(&mut ctx.output, &*ctx.provider.lock().await)
+            .await
+            .unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Available models:"));
+        assert!(plain.contains("mock-model"));
+        assert!(plain.contains("other-model"));
+    }
+
+    #[tokio::test]
+    async fn list_models_shows_current() {
+        let (mut ctx, _mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        // Call the full command with no arg
+        let cmd = ModelCommand;
+        let mut messages = vec![];
+        cmd.execute(None, &mut ctx, &mut messages).await.unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Current model:"));
+        assert!(plain.contains("mock-model"));
+    }
+
+    #[tokio::test]
+    async fn select_known_model_switches() {
+        let (mut ctx, _mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        let cmd = ModelCommand;
+        let mut messages = vec![];
+        cmd.execute(Some("other-model"), &mut ctx, &mut messages)
+            .await
+            .unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Switched to model:"));
+        assert!(plain.contains("other-model"));
+        assert_eq!(
+            ctx.provider.lock().await.current_model(),
+            Some("other-model".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn select_unknown_model_still_sets() {
+        let (mut ctx, _mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        let cmd = ModelCommand;
+        let mut messages = vec![];
+        cmd.execute(Some("nonexistent-model"), &mut ctx, &mut messages)
+            .await
+            .unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Set model to:"));
+        assert_eq!(
+            ctx.provider.lock().await.current_model(),
+            Some("nonexistent-model".to_string())
+        );
+    }
+}

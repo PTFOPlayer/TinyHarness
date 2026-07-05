@@ -176,3 +176,151 @@ pub fn tool_display_content(
         _ => result.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tinyharness_lib::provider::{ToolCall, ToolCallFunction};
+
+    fn make_call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: Some("test-id".to_string()),
+            function: ToolCallFunction {
+                name: name.to_string(),
+                arguments: args,
+                thought_signature: None,
+            },
+        }
+    }
+
+    #[test]
+    fn ensure_tool_call_ids_assigns_missing_ids() {
+        let mut calls = vec![
+            ToolCall {
+                id: None,
+                function: ToolCallFunction {
+                    name: "ls".to_string(),
+                    arguments: json!({}),
+                    thought_signature: None,
+                },
+            },
+            ToolCall {
+                id: Some("".to_string()),
+                function: ToolCallFunction {
+                    name: "cat".to_string(),
+                    arguments: json!({}),
+                    thought_signature: None,
+                },
+            },
+            ToolCall {
+                id: Some("existing".to_string()),
+                function: ToolCallFunction {
+                    name: "grep".to_string(),
+                    arguments: json!({}),
+                    thought_signature: None,
+                },
+            },
+        ];
+        ensure_tool_call_ids(&mut calls);
+        assert_eq!(calls[0].id, Some("call_0".to_string()));
+        assert_eq!(calls[1].id, Some("call_1".to_string()));
+        assert_eq!(calls[2].id, Some("existing".to_string()));
+    }
+
+    #[test]
+    fn ensure_tool_call_ids_empty_slice() {
+        let mut calls: Vec<ToolCall> = vec![];
+        ensure_tool_call_ids(&mut calls);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn batch_tool_results_creates_tool_messages() {
+        let results = vec![
+            GenericToolResult {
+                content: "result 1".to_string(),
+                tool_call_id: "call_0".to_string(),
+                audit_tool_name: None,
+                audit_detail: None,
+                duration_ms: 10,
+                is_error: false,
+                images: vec![],
+            },
+            GenericToolResult {
+                content: "result 2".to_string(),
+                tool_call_id: "call_1".to_string(),
+                audit_tool_name: None,
+                audit_detail: None,
+                duration_ms: 5,
+                is_error: false,
+                images: vec![],
+            },
+        ];
+        let messages = batch_tool_results(results);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, tinyharness_lib::provider::Role::Tool);
+        assert_eq!(messages[0].content, "result 1");
+        assert_eq!(messages[0].tool_call_id, Some("call_0".to_string()));
+        assert_eq!(messages[1].content, "result 2");
+        assert_eq!(messages[1].tool_call_id, Some("call_1".to_string()));
+    }
+
+    #[test]
+    fn batch_tool_results_empty() {
+        let messages = batch_tool_results(vec![]);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn audit_info_for_run() {
+        let call = make_call("run", json!({"command": "ls -la"}));
+        let (tool, detail) = audit_info_for_tool(&call);
+        assert_eq!(tool, Some("run".to_string()));
+        assert_eq!(detail, Some("ls -la".to_string()));
+    }
+
+    #[test]
+    fn audit_info_for_write() {
+        let call = make_call("write", json!({"path": "/tmp/test.rs", "content": "hi"}));
+        let (tool, detail) = audit_info_for_tool(&call);
+        assert_eq!(tool, Some("write".to_string()));
+        assert_eq!(detail, Some("/tmp/test.rs".to_string()));
+    }
+
+    #[test]
+    fn audit_info_for_edit() {
+        let call = make_call(
+            "edit",
+            json!({"path": "/tmp/test.rs", "old_str": "a", "new_str": "b"}),
+        );
+        let (tool, detail) = audit_info_for_tool(&call);
+        assert_eq!(tool, Some("edit".to_string()));
+        assert_eq!(detail, Some("/tmp/test.rs".to_string()));
+    }
+
+    #[test]
+    fn audit_info_for_read_only_tool() {
+        let call = make_call("ls", json!({"path": "/tmp"}));
+        let (tool, detail) = audit_info_for_tool(&call);
+        assert_eq!(tool, None);
+        assert_eq!(detail, None);
+    }
+
+    #[test]
+    fn tool_display_content_for_non_edit_tool() {
+        let result = tool_display_content("ls", &json!({}), "file1\nfile2", false);
+        assert_eq!(result, "file1\nfile2");
+    }
+
+    #[test]
+    fn tool_display_content_error_passes_through() {
+        let result = tool_display_content(
+            "edit",
+            &json!({"path": "/nonexistent"}),
+            "Error: file not found",
+            true,
+        );
+        assert_eq!(result, "Error: file not found");
+    }
+}
