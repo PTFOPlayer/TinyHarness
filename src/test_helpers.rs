@@ -32,6 +32,12 @@ pub struct MockProvider {
     health_ok: bool,
 }
 
+impl Default for MockProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockProvider {
     pub fn new() -> Self {
         MockProvider {

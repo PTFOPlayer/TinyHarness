@@ -708,6 +708,10 @@ impl SettingsStore {
     /// Returns `Ok(Settings)` with defaults if the file doesn't exist,
     /// or an error if the file exists but cannot be parsed.
     pub fn load(&self) -> Result<Settings, SettingsError> {
+        // Clean up any stale temp files from a previous interrupted save.
+        // These would be named `.settings.json.tmp.<pid>.<timestamp>`.
+        self.cleanup_stale_temp_files();
+
         if !self.path.exists() {
             return Ok(Settings::default());
         }
@@ -768,18 +772,63 @@ impl SettingsStore {
         Ok(settings)
     }
 
+    /// Remove stale temp files from interrupted saves.
+    ///
+    /// These match the pattern `.settings.json.tmp.*` in the settings
+    /// directory. They're left behind if the process was killed (e.g.
+    /// Ctrl+C or SIGTERM) between `File::create` and `rename`.
+    fn cleanup_stale_temp_files(&self) {
+        let Some(dir) = self.path.parent() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(".settings.json.tmp.")
+                && let Err(e) = std::fs::remove_file(entry.path())
+            {
+                tracing::debug!("Could not remove stale temp file {name}: {e}");
+            }
+        }
+    }
+
     /// Load settings from disk, returning defaults on any error.
     ///
     /// This matches the original behaviour and is suitable for application
     /// startup where you don't want to fail on corrupt settings files.
+    /// If the file is present but unparseable, it is renamed to
+    /// `settings.json.corrupt` so the user can recover their data.
     pub fn load_or_default(&self) -> Settings {
         self.load().unwrap_or_else(|e| {
             tracing::warn!("Failed to load settings: {e}. Using defaults.");
+            // Back up the corrupted file so the user can recover their data.
+            // Without this, the next save_settings() call would silently
+            // overwrite the corrupted file with defaults, permanently losing
+            // the user's configuration.
+            if self.path.exists() {
+                let backup = self.path.with_extension("json.corrupt");
+                if let Err(backup_err) = std::fs::rename(&self.path, &backup) {
+                    tracing::warn!(
+                        "Could not back up corrupt settings to {}: {backup_err}",
+                        backup.display(),
+                    );
+                } else {
+                    tracing::warn!("Corrupt settings backed up to {}", backup.display(),);
+                }
+            }
             Settings::default()
         })
     }
 
-    /// Save settings to disk atomically (write to temp file, then rename).
+    /// Save settings to disk atomically (write to temp file, fsync, then rename).
+    ///
+    /// Uses a unique temp file name (with PID) to avoid collisions if two
+    /// saves overlap. The temp file is fsync'd before the rename to ensure
+    /// data durability — without this, a crash after rename but before the
+    /// kernel flushes the data could leave an empty or partial file.
     pub fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
         let dir = self.path.parent().ok_or_else(|| {
             SettingsError::Io(std::io::Error::new(
@@ -790,14 +839,33 @@ impl SettingsStore {
         std::fs::create_dir_all(dir)?;
 
         let json = serde_json::to_string_pretty(settings)?;
-        let tmp_path = dir.join("settings.json.tmp");
 
+        // Unique temp file name to avoid collisions between concurrent saves.
+        // Using PID + a timestamp makes it extremely unlikely two processes
+        // would write to the same temp path.
+        let tmp_name = format!(
+            ".settings.json.tmp.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
+        let tmp_path = dir.join(&tmp_name);
+
+        // Write to the temp file, fsync its data, then close.
         {
             let mut file = std::fs::File::create(&tmp_path)?;
             std::io::Write::write_all(&mut file, json.as_bytes())?;
             std::io::Write::flush(&mut file)?;
+            // fsync the file data so it's on disk before we rename.
+            // This is the key to crash-safety: if the system crashes
+            // after the rename but before the data is flushed, we'd
+            // get an empty file. fsync ensures the data is durable.
+            file.sync_all()?;
         }
 
+        // Rename is atomic on POSIX systems (same filesystem).
         std::fs::rename(&tmp_path, &self.path)?;
         Ok(())
     }
@@ -1119,12 +1187,135 @@ mod tests {
     }
 
     fn temp_settings_path() -> std::path::PathBuf {
+        // Use a unique subdirectory per test to avoid interference between
+        // parallel tests (especially the stale-temp-file cleanup which scans
+        // the parent directory).
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "tinyharness_test_{}_{:?}.json",
+            "tinyharness_test_{}_{}_{:?}",
             std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
             std::thread::current().id()
         ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.push("settings.json");
         dir
+    }
+
+    // ── Config corruption resilience tests ───────────────────────────────
+
+    /// Saving and loading should round-trip correctly.
+    #[test]
+    fn save_and_load_roundtrip() {
+        let store = SettingsStore::new(temp_settings_path());
+        let mut settings = Settings {
+            last_provider: ProviderKind::OpenAiCompat,
+            auto_accept_mode: AutoAcceptMode::All,
+            ..Settings::default()
+        };
+        settings.set_model_for(ProviderKind::OpenAiCompat, "gpt-4o".to_string());
+
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.last_provider, ProviderKind::OpenAiCompat);
+        assert_eq!(
+            loaded.get_model_for(ProviderKind::OpenAiCompat),
+            Some("gpt-4o")
+        );
+        assert_eq!(loaded.auto_accept_mode, AutoAcceptMode::All);
+
+        // Clean up
+        let dir = store.path().parent().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Loading a corrupt settings file should return defaults and back up
+    /// the corrupt file to `settings.json.corrupt`.
+    #[test]
+    fn corrupt_settings_backed_up_and_defaults_returned() {
+        let store = SettingsStore::new(temp_settings_path());
+        let corrupt_json = "{ this is not valid json !!!";
+        std::fs::write(store.path(), corrupt_json).unwrap();
+
+        let settings = store.load_or_default();
+        assert_eq!(settings.last_provider, ProviderKind::Ollama);
+        assert_eq!(settings.preferred_mode, AgentMode::Casual);
+
+        // The corrupt file should have been renamed to .corrupt
+        assert!(!store.path().exists());
+        let backup = store.path().with_extension("json.corrupt");
+        assert!(backup.exists(), "corrupt settings should be backed up");
+
+        // Verify the backup contains the original corrupt data
+        let backup_content = std::fs::read_to_string(&backup).unwrap();
+        assert_eq!(backup_content, corrupt_json);
+
+        // Clean up
+        let dir = store.path().parent().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Stale temp files from interrupted saves should be cleaned up on load.
+    #[test]
+    fn stale_temp_files_cleaned_up_on_load() {
+        let store = SettingsStore::new(temp_settings_path());
+        let dir = store.path().parent().unwrap();
+        let tmp1 = dir.join(".settings.json.tmp.12345.999999999");
+        let tmp2 = dir.join(".settings.json.tmp.67890.888888888");
+        std::fs::write(&tmp1, "stale data").unwrap();
+        std::fs::write(&tmp2, "more stale data").unwrap();
+        assert!(tmp1.exists());
+        assert!(tmp2.exists());
+
+        // Load should clean up stale temp files
+        let _ = store.load();
+
+        assert!(!tmp1.exists(), "stale temp file should be removed");
+        assert!(!tmp2.exists(), "stale temp file should be removed");
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Save should not leave temp files behind on success.
+    #[test]
+    fn save_leaves_no_temp_files() {
+        let store = SettingsStore::new(temp_settings_path());
+        store.save(&Settings::default()).unwrap();
+
+        let dir = store.path().parent().unwrap();
+        let entries = std::fs::read_dir(dir).unwrap();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            assert!(
+                !name.to_string_lossy().starts_with(".settings.json.tmp."),
+                "no temp files should remain after successful save"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Multiple saves should not corrupt the settings file.
+    #[test]
+    fn multiple_saves_are_consistent() {
+        let store = SettingsStore::new(temp_settings_path());
+
+        for i in 0..10 {
+            let settings = Settings {
+                ollama_timeout_secs: i,
+                ..Settings::default()
+            };
+            store.save(&settings).unwrap();
+        }
+
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.ollama_timeout_secs, 9);
+
+        let dir = store.path().parent().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
