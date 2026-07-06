@@ -119,6 +119,7 @@ async fn fixture_line_count_tool_executes() {
     let _ = std::fs::remove_file(&test_file);
 }
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 async fn fixture_before_llm_hook_injects_stdout() {
     let path = plugins_json_path();
