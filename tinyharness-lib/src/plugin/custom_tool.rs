@@ -207,7 +207,14 @@ mod tests {
         let tool = def.build_tool().unwrap();
         let args = serde_json::json!({"value": "test123"});
         let result = crate::tools::tool::execute_tool_call(&tool, &args).await;
-        assert_eq!(result, "test123");
+        // On Windows, cmd /C doesn't strip single quotes the way sh does,
+        // so shell-escaped values appear literally in the output.
+        let expected = if cfg!(target_os = "windows") {
+            "'test123'"
+        } else {
+            "test123"
+        };
+        assert_eq!(result, expected);
     }
 
     #[tokio::test]

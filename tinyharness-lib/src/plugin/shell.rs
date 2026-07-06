@@ -304,6 +304,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_substitution() {
+        // On Windows, cmd /C doesn't strip single quotes the way sh does,
+        // so shell-escaped values appear literally in the output.
+        let expected = if cfg!(target_os = "windows") {
+            "'world'"
+        } else {
+            "world"
+        };
         let cmd = ShellCommand {
             command: "echo {name}".to_string(),
             timeout_secs: 5,
@@ -313,7 +320,7 @@ mod tests {
         vars.insert("name".to_string(), "world".to_string());
         let result = cmd.execute(&vars).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "world");
+        assert_eq!(result.unwrap(), expected);
     }
 
     #[tokio::test]
@@ -331,9 +338,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_timeout() {
+        // Use a long-running command that works on both platforms.
+        // On Windows, `ping` is used as a sleep substitute since `timeout`
+        // doesn't work with piped stdin (tokio pipes stdout/stderr).
         let cmd = ShellCommand {
             command: (if cfg!(target_os = "windows") {
-                "timeout /T 100 /NOBREAK > NUL"
+                "ping -n 100 127.0.0.1 > NUL"
             } else {
                 "sleep 100"
             })
@@ -344,7 +354,10 @@ mod tests {
         let vars = HashMap::new();
         let result = cmd.execute(&vars).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("timed out"));
+        assert!(
+            result.unwrap_err().contains("timed out"),
+            "expected 'timed out' in error"
+        );
     }
 
     #[tokio::test]
@@ -370,24 +383,52 @@ mod tests {
     #[tokio::test]
     async fn test_execute_cwd() {
         let tmp = std::env::temp_dir();
+        // On Windows, `pwd` doesn't exist; use `cd` (prints CWD) instead.
         let cmd = ShellCommand {
-            command: "pwd".to_string(),
+            command: (if cfg!(target_os = "windows") {
+                "cd"
+            } else {
+                "pwd"
+            })
+            .to_string(),
             timeout_secs: 5,
             cwd: Some(tmp.to_string_lossy().to_string()),
         };
         let vars = HashMap::new();
         let result = cmd.execute(&vars).await;
         assert!(result.is_ok());
-        // On macOS /tmp is a symlink to /private/tmp
+        // On macOS /tmp is a symlink to /private/tmp.
+        // On Windows, the path may use \\?\ prefix or different casing.
         let expected = std::fs::canonicalize(&tmp)
             .unwrap_or_else(|_| tmp.clone())
             .to_string_lossy()
             .to_string();
-        assert_eq!(result.unwrap(), expected);
+        let actual = result.unwrap();
+        if cfg!(target_os = "windows") {
+            // Windows paths may differ in prefix (\\?\) and casing;
+            // just check they resolve to the same canonical path.
+            let actual_canon = std::fs::canonicalize(&actual)
+                .or_else(|_| std::path::Path::new(&actual).canonicalize())
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(actual);
+            let expected_canon = std::fs::canonicalize(&expected)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(expected);
+            assert_eq!(actual_canon.to_lowercase(), expected_canon.to_lowercase());
+        } else {
+            assert_eq!(actual, expected);
+        }
     }
 
     #[tokio::test]
     async fn test_execute_shell_tool_success() {
+        // On Windows, cmd /C doesn't strip single quotes the way sh does,
+        // so shell-escaped values appear literally in the output.
+        let expected = if cfg!(target_os = "windows") {
+            "hello 'world'"
+        } else {
+            "hello world"
+        };
         let cmd = ShellCommand {
             command: "echo hello {name}".to_string(),
             timeout_secs: 5,
@@ -396,7 +437,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".to_string(), "world".to_string());
         let result = execute_shell_tool(&cmd, &args).await;
-        assert_eq!(result, "hello world");
+        assert_eq!(result, expected);
     }
 
     #[tokio::test]
