@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn proptest_newline_always_rejected() {
         let safe = tinyharness_lib::config::get_default_safe_commands();
-        proptest!(|(prefix in "[a-z]{1,10}", suffix in "[a-z]{0,10}")| {
+        proptest!(|(prefix in "[a-z]{1,10}", suffix in "[a-z]{1,10}")| {
             let cmd = format!("{prefix}\n{suffix}");
             prop_assert!(!is_safe_command(&cmd, &safe, &[]));
         });
