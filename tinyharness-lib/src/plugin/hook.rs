@@ -204,13 +204,13 @@ mod tests {
         let json = r#"{
             "name": "logger",
             "event": "after_tool_call",
-            "command": "echo '{tool}'",
+            "command": "echo \"{tool}\"",
             "timeout_secs": 5
         }"#;
         let hook: HookDefinition = serde_json::from_str(json).unwrap();
         assert_eq!(hook.name, "logger");
         assert_eq!(hook.event, HookEvent::AfterToolCall);
-        assert_eq!(hook.command.command, "echo '{tool}'");
+        assert_eq!(hook.command.command, "echo \"{tool}\"");
         assert_eq!(hook.command.timeout_secs, 5);
         assert!(!hook.inject_stdout);
         assert!(hook.block_on_output.is_none());

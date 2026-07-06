@@ -105,7 +105,7 @@ mod tests {
                 },
                 "required": ["image", "command"]
             },
-            "command": "docker run --rm {image} sh -c '{command}'",
+            "command": "docker run --rm {image} sh -c \"$TH_COMMAND\"",
             "timeout_secs": 120
         }"#;
         let tool: CustomToolDefinition = serde_json::from_str(json).unwrap();
@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(tool.category, CustomToolCategory::Destructive);
         assert_eq!(
             tool.command.command,
-            "docker run --rm {image} sh -c '{command}'"
+            "docker run --rm {image} sh -c \"$TH_COMMAND\""
         );
         assert_eq!(tool.command.timeout_secs, 120);
     }

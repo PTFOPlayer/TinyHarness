@@ -48,6 +48,11 @@ tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rust
 │   │   ├── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
 │   │   └── sockudo.rs            SockudoProvider — AI Transport via WebSocket (⚠️ experimental)
 │   ├── tools/                15 tools + ToolManager with mode filtering
+│   ├── plugin/               Plugin system — hooks, custom tools, shell execution
+│   │   ├── mod.rs                PluginManager — load, merge, dispatch
+│   │   ├── hook.rs               HookEvent, HookDefinition, HookContext, HookOutcome
+│   │   ├── custom_tool.rs        CustomToolDefinition, CustomToolCategory
+│   │   └── shell.rs              ShellCommand — template substitution, timeout, env vars
 │   ├── config/mod.rs         Settings, project settings, prompt management
 │   ├── context.rs            Workspace detection, instruction file discovery
 │   ├── session.rs            JSONL persistence, auto-save, atomic writes

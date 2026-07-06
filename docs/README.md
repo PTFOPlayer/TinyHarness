@@ -4,6 +4,7 @@
 
 - [Skills Guide](skills.md) — creating and using SKILL.md skill modules
 - [Tools Reference](tools-reference.md) — tool categories, parameters, and behavior
+- [Plugins Guide](plugins.md) — custom tools and lifecycle hooks via `plugins.json`
 - [Configuration Guide](configuration.md) — all settings, XDG paths, prompt customization
 - [Safety & Security](safety.md) — command safety model, best practices
 - [Agent Modes](modes.md) — mode behavior, prompt architecture, escalation
@@ -46,6 +47,7 @@
 | "What's the difference between planning and agent?" | [Agent Modes](modes.md) |
 | "Can the AI auto-execute any command?" | [Safety & Security](safety.md#safe-commands) |
 | "How do I write a skill?" | [Skills Guide](skills.md#skill-file-format) |
+| "How do I add custom tools?" | [Plugins Guide](plugins.md) |
 | "What tools are available?" | [Tools Reference](tools-reference.md) |
 | "How do I override TINYHARNESS.md discovery?" | [Project Instructions](project-instructions.md#customizing-the-file-list) |
 | "What languages are auto-detected?" | [Language Detection](language-detection.md) |
@@ -59,6 +61,7 @@ TinyHarness stores data in standard XDG paths:
 ```
 ~/.config/tinyharness/
 ├── settings.json           Global settings
+├── plugins.json             Plugin config (hooks + custom tools)
 ├── prompts/                Customizable system prompt .md files
 │   ├── header.md           Shared header (agent, planning, research modes)
 │   ├── casual.md           Casual mode prompt
@@ -78,6 +81,7 @@ TinyHarness stores data in standard XDG paths:
 
 <project>/.tinyharness/
 ├── config.json             Per-project settings
+├── plugins.json            Project plugin config (extends global)
 └── skills/                 Project-local skills
     └── <name>/
         └── SKILL.md

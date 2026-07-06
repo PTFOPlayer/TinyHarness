@@ -260,7 +260,7 @@ mod tests {
                 {
                     "name": "log",
                     "event": "after_tool_call",
-                    "command": "echo '{tool}' >> /tmp/log.txt"
+                    "command": "echo \"{tool}\" >> /tmp/log.txt"
                 }
             ],
             "custom_tools": [

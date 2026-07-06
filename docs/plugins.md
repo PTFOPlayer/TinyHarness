@@ -30,7 +30,7 @@ Custom tools are shell commands that the LLM can call like built-in tools. You d
         },
         "required": ["image", "command"]
       },
-      "command": "docker run --rm {image} sh -c '{command}'",
+      "command": "docker run --rm {image} sh -c \"$TH_COMMAND\"",
       "timeout_secs": 120
     },
     {
@@ -63,20 +63,27 @@ Custom tools are shell commands that the LLM can call like built-in tools. You d
 Tool parameters are substituted into the command template using `{param_name}` placeholders:
 
 ```
-"command": "docker run --rm {image} sh -c '{command}'"
+"command": "docker run --rm {image} sh -c \"$TH_COMMAND\""
 ```
 
 When the LLM calls the tool with `{"image": "ubuntu:latest", "command": "ls"}`, the shell command becomes:
 
 ```
-docker run --rm ubuntu:latest sh -c 'ls'
+docker run --rm 'ubuntu:latest' sh -c "$TH_COMMAND"
 ```
 
-Parameters are also available as environment variables (uppercased, with `-` and spaces replaced by `_`):
+> **⚠️ Shell escaping:** `{var}` values are automatically shell-escaped
+> (wrapped in single quotes) before substitution. This prevents shell
+> injection from untrusted content (e.g. LLM responses, user input).
+> If you need the *raw* value without escaping (e.g. to let the shell
+> interpret it), use the `$TH_*` environment variable instead.
+>
+> For multi-word commands like `sh -c`, use `"$TH_COMMAND"` (in double
+> quotes) rather than `{command}` to avoid double-quoting issues.
 
-```
-$IMAGE, $COMMAND
-```
+Parameters are also available as environment variables in two forms:
+- `TH_<NAME>` — uppercased, with `-` and spaces replaced by `_` (e.g. `$TH_IMAGE`, `$TH_COMMAND`)
+- Raw key name — the parameter name as-is (e.g. `$image`, `$command`)
 
 ### Fields
 
@@ -100,7 +107,7 @@ Hooks are shell commands that fire automatically at specific lifecycle points du
     {
       "name": "log-tools",
       "event": "after_tool_call",
-      "command": "echo '[{tool}] {result}' >> ~/.local/share/tinyharness/tool-log.txt",
+      "command": "echo \"[{tool}] {result}\" >> ~/.local/share/tinyharness/tool-log.txt",
       "timeout_secs": 5
     },
     {
@@ -113,7 +120,7 @@ Hooks are shell commands that fire automatically at specific lifecycle points du
     {
       "name": "block-rm-rf",
       "event": "before_tool_call",
-      "command": "echo '{args}' | grep -q 'rm -rf' && echo BLOCKED || true",
+      "command": "echo \"{args}\" | grep -q \"rm -rf\" && echo BLOCKED || true",
       "timeout_secs": 1,
       "block_on_output": "BLOCKED"
     }
@@ -133,6 +140,11 @@ Hooks are shell commands that fire automatically at specific lifecycle points du
 | `after_tool_call` | After each tool returns | `tool`, `args`, `result` |
 | `on_exit` | When the agent loop exits | `message_count` |
 
+> **⚠️ TUI mode:** In `--tui` mode, only `before_llm_call`, `before_tool_call`,
+> and `after_tool_call` hooks fire. The `before_user_message`,
+> `after_user_message`, `after_llm_response`, and `on_exit` events are
+> CLI-only.
+
 ### Hook Features
 
 #### `inject_stdout`
@@ -150,8 +162,9 @@ This is useful for injecting dynamic context (e.g., `git status` output before e
 
 When set, if the hook's stdout starts with this string, the action is blocked:
 
-- `before_user_message`: The user message is not sent
+- `before_user_message`: The user message is skipped entirely (not sent to the LLM)
 - `before_tool_call`: The tool call is denied with a "blocked by hook" message
+- `after_llm_response`: Tool calls from the response are skipped (the response is saved as-is)
 
 Example: block `rm -rf` in the `run` tool:
 
@@ -159,7 +172,7 @@ Example: block `rm -rf` in the `run` tool:
 {
   "name": "block-rm-rf",
   "event": "before_tool_call",
-  "command": "echo '{args}' | grep -q 'rm -rf' && echo BLOCKED || true",
+  "command": "echo \"{args}\" | grep -q \"rm -rf\" && echo BLOCKED || true",
   "block_on_output": "BLOCKED"
 }
 ```
@@ -168,24 +181,31 @@ Example: block `rm -rf` in the `run` tool:
 
 Hook context is available in two ways:
 
-**Inline template substitution** (`{var}`):
+**Inline template substitution** (`{var}`) — values are **shell-escaped** automatically:
 ```json
-"command": "echo '[{tool}] {result}' >> log.txt"
+"command": "echo \"[{tool}] {result}\" >> log.txt"
 ```
 
-**Environment variables** (`TH_*`):
+**Environment variables** (`TH_*`) — raw values, no escaping:
 ```json
 "command": "echo $TH_TOOL_NAME >> log.txt"
 ```
+
+> **⚠️ Shell escaping:** `{var}` values are wrapped in single quotes
+> during substitution to prevent shell injection. Use `$TH_*` env vars
+> if you need the shell to interpret the value (e.g. subcommands).
+>
+> Missing variables (no value in the context) are left as-is — the
+> `{placeholder}` appears literally in the rendered command.
 
 | Variable | Env var | Available for events |
 |----------|---------|---------------------|
 | `{user_input}` | `TH_USER_INPUT` | `before_user_message`, `after_user_message` |
 | `{message_count}` | `TH_MESSAGE_COUNT` | Most events |
 | `{response}` | `TH_RESPONSE` | `after_llm_response` |
-| `{tool}` | `TH_TOOL` | `before_tool_call`, `after_tool_call` |
-| `{args}` | `TH_ARGS` | `before_tool_call`, `after_tool_call` |
-| `{result}` | `TH_RESULT` | `after_tool_call` |
+| `{tool}` | `TH_TOOL_NAME` | `before_tool_call`, `after_tool_call` |
+| `{args}` | `TH_TOOL_ARGS` | `before_tool_call`, `after_tool_call` |
+| `{result}` | `TH_TOOL_RESULT` | `after_tool_call` |
 | `{session_id}` | `TH_SESSION_ID` | All events |
 
 ### Hook Fields
@@ -263,7 +283,8 @@ Hook context is available in two ways:
 ## Safety
 
 - Custom tools with `category: "destructive"` always require user confirmation (same as built-in `write`/`edit`/`run` tools)
+- Custom tools are subject to mode filtering: `readonly` tools appear in planning/research/agent modes; `destructive` tools only in agent mode. Custom tools are **not** available in casual mode (only `web_search` and `web_fetch` are)
 - Hook commands execute via `sh -c` with a configurable timeout
 - Hook failures (non-zero exit, timeout) produce warnings but don't crash the agent loop
 - Multiple hooks for the same event fire in order (global config first, then project config)
-- Custom tool names that collide with built-in tools are silently skipped
+- Custom tool names that collide with built-in tools are silently skipped (a warning is logged)

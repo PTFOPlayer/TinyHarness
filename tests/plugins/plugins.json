@@ -3,7 +3,7 @@
     {
       "name": "before-msg-echo",
       "event": "before_user_message",
-      "command": "echo '[plugin] before_user_message fired — input: {user_input}' >> .tinyharness/plugin-test.log",
+      "command": "echo \"[plugin] before_user_message fired — input: {user_input}\" >> .tinyharness/plugin-test.log",
       "timeout_secs": 2
     },
     {
@@ -15,32 +15,32 @@
     {
       "name": "before-llm-inject-timestamp",
       "event": "before_llm_call",
-      "command": "echo 'Note: the current time is $(date) and you are in the directory $(pwd)'",
+      "command": "echo \"Note: the current time is $(date) and you are in the directory $(pwd)\"",
       "timeout_secs": 2,
       "inject_stdout": true
     },
     {
       "name": "after-llm-log",
       "event": "after_llm_response",
-      "command": "echo '[plugin] after_llm_response fired — response length: $(echo -n {response} | wc -c)' >> .tinyharness/plugin-test.log",
+      "command": "echo \"[plugin] after_llm_response fired — response length: $(echo -n {response} | wc -c)\" >> .tinyharness/plugin-test.log",
       "timeout_secs": 2
     },
     {
       "name": "before-tool-log",
       "event": "before_tool_call",
-      "command": "echo '[plugin] before_tool_call: {tool} args={args}' >> .tinyharness/plugin-test.log",
+      "command": "echo \"[plugin] before_tool_call: {tool} args={args}\" >> .tinyharness/plugin-test.log",
       "timeout_secs": 2
     },
     {
       "name": "after-tool-log",
       "event": "after_tool_call",
-      "command": "echo '[plugin] after_tool_call: {tool} result={result}' >> .tinyharness/plugin-test.log",
+      "command": "echo \"[plugin] after_tool_call: {tool} result={result}\" >> .tinyharness/plugin-test.log",
       "timeout_secs": 2
     },
     {
       "name": "on-exit-goodbye",
       "event": "on_exit",
-      "command": "echo '[plugin] on_exit fired — goodbye!' >> .tinyharness/plugin-test.log",
+      "command": "echo \"[plugin] on_exit fired — goodbye!\" >> .tinyharness/plugin-test.log",
       "timeout_secs": 2
     }
   ],

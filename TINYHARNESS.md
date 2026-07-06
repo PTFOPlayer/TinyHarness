@@ -24,7 +24,8 @@ Three crates in a Cargo workspace:
 ### Key `tinyharness-lib` modules
 
 - `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `OpenAiCompatProvider` (unified llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
-- `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering
+- `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering, `register_custom_tools()` for plugins
+- `plugin/` — Plugin system: `PluginManager` (load/merge global + project configs), `HookEvent` (7 lifecycle events), `HookDefinition`/`HookContext`/`HookOutcome`, `CustomToolDefinition`/`CustomToolCategory`, `ShellCommand` (template substitution, shell escaping, timeout, `TH_*` env vars)
 - `session.rs` — JSONL persistence, auto-save every 5 messages
 - `context.rs` — Workspace metadata + instruction file discovery (TINYHARNESS.md → .tinyharness.md → AGENTS.md → CLAUDE.md)
 - `skill.rs` — Skill discovery from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`
@@ -51,12 +52,13 @@ Three crates in a Cargo workspace:
 
 ## Architecture
 
-1. `main.rs` → parse CLI, create provider, health check, auto-select model, collect workspace context, initialize prompts, register tools, load/create session, build command registry, enter `run_agent_loop()`
+1. `main.rs` → parse CLI, create provider, health check, auto-select model, collect workspace context, initialize prompts, register tools, load plugins (`PluginManager::load()` + `register_custom_tools()`), load/create session, build command registry, enter `run_agent_loop()`
 2. Agent loop: read input (or `--prompt`), dispatch slash commands, send messages to provider, stream response, handle tool calls
 3. Signal tools (`switch_mode`, `question`, `auto_compact`, `invoke_skill`) bypass generic tool execution and are handled inline
 4. Destructive tools prompt for confirmation (except `run` which cannot be auto-accepted); ReadOnly tools run immediately
 5. Tool results are batched into a single `Role::Tool` message, appended to conversation. Each tool result carries `tool_call_id` linking it back to the originating `ToolCall.id` (required by OpenAI-compatible servers).
 6. Auto-save session every 5 messages; flush on mode switch, session switch, exit
+7. Hooks fire at lifecycle events (before/after user message, before LLM call, after LLM response, before/after tool call, on exit). In TUI mode, only `before_llm_call`, `before_tool_call`, and `after_tool_call` fire.
 
 ## Agent Modes
 
@@ -93,6 +95,7 @@ Three crates in a Cargo workspace:
 - **`CommandResult` variants**: `SwitchSession`, `RenameSession`, `Init`, `SkillUse`, `SkillUnload` carry data back to the agent loop.
 - **`CommandContext`** holds shared mutable state: provider, mode, file context, session ID, skill registry, active skills, pending images, thinking toggle, compaction token usage, workspace context, prompts dir, output writer, exit flag.
 - **`extract_args!` macro** exported at `tinyharness_lib` root, not in `tools`.
+- **Plugin system**: Config from `~/.config/tinyharness/plugins.json` (global) + `.tinyharness/plugins.json` (project, extends global). Custom tools are shell commands with `{param}` substitution (shell-escaped) and `TH_*` env vars. Hooks fire at 7 lifecycle events; `inject_stdout` injects output into conversation, `block_on_output` blocks actions. Custom tool names colliding with built-ins are skipped. In TUI mode, only `before_llm_call`/`before_tool_call`/`after_tool_call` hooks fire.
 
 ## Verification Steps
 

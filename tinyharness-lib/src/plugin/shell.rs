@@ -12,7 +12,7 @@ use tokio::io::AsyncReadExt;
 /// environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShellCommand {
-    /// Command template, e.g. `"docker run --rm {image} sh -c '{command}'"`.
+    /// Command template, e.g. `"docker run --rm {image} sh -c \"$TH_COMMAND\""`.
     pub command: String,
     /// Timeout in seconds. Default: 30.
     #[serde(default = "default_timeout")]
@@ -28,14 +28,31 @@ fn default_timeout() -> u64 {
 }
 
 impl ShellCommand {
+    /// Shell-escape a value for safe inline substitution into a shell command.
+    ///
+    /// Wraps the value in single quotes and escapes any single quotes within
+    /// it by replacing `'` with `'\''`. This prevents shell metacharacters
+    /// in the value (e.g. from LLM responses) from breaking the command.
+    fn shell_escape(value: &str) -> String {
+        // Replace ' with '\'' and wrap in single quotes.
+        // e.g.  I'll do it  →  'I'\''ll do it'
+        let escaped = value.replace('\'', "'\\''");
+        format!("'{}'", escaped)
+    }
+
     /// Render the command template by substituting `{var}` placeholders.
     ///
-    /// Missing variables are replaced with empty strings.
+    /// Variable values are shell-escaped (wrapped in single quotes) to
+    /// prevent shell injection from untrusted content like LLM responses.
+    ///
+    /// Missing variables (not present in `vars`) are left as-is — the
+    /// `{placeholder}` appears literally in the rendered command.
     pub fn render(&self, vars: &HashMap<String, String>) -> String {
         let mut result = self.command.clone();
         for (key, value) in vars {
             let placeholder = format!("{{{}}}", key);
-            result = result.replace(&placeholder, value);
+            let escaped = Self::shell_escape(value);
+            result = result.replace(&placeholder, &escaped);
         }
         result
     }
@@ -167,22 +184,57 @@ mod tests {
         };
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), "world".to_string());
-        assert_eq!(cmd.render(&vars), "echo world");
+        // Values are shell-escaped (wrapped in single quotes)
+        assert_eq!(cmd.render(&vars), "echo 'world'");
     }
 
     #[test]
     fn test_render_multiple_vars() {
         let cmd = ShellCommand {
-            command: "docker run --rm {image} sh -c '{command}'".to_string(),
+            command: "docker run --rm {image} sh -c {command}".to_string(),
             timeout_secs: 30,
             cwd: None,
         };
         let mut vars = HashMap::new();
         vars.insert("image".to_string(), "ubuntu:latest".to_string());
         vars.insert("command".to_string(), "ls -la".to_string());
+        // Each value is individually shell-escaped
         assert_eq!(
             cmd.render(&vars),
-            "docker run --rm ubuntu:latest sh -c 'ls -la'"
+            "docker run --rm 'ubuntu:latest' sh -c 'ls -la'"
+        );
+    }
+
+    #[test]
+    fn test_render_shell_escapes_single_quotes() {
+        let cmd = ShellCommand {
+            command: "echo {text}".to_string(),
+            timeout_secs: 5,
+            cwd: None,
+        };
+        let mut vars = HashMap::new();
+        vars.insert("text".to_string(), "I'll do it".to_string());
+        // Single quotes in the value are escaped: ' -> '\''
+        assert_eq!(cmd.render(&vars), "echo 'I'\\''ll do it'");
+    }
+
+    #[test]
+    fn test_render_shell_escapes_metacharacters() {
+        let cmd = ShellCommand {
+            command: "echo -n {response} | wc -c".to_string(),
+            timeout_secs: 5,
+            cwd: None,
+        };
+        let mut vars = HashMap::new();
+        vars.insert(
+            "response".to_string(),
+            "I'll find all files in `./src` and run $(whoami)".to_string(),
+        );
+        let rendered = cmd.render(&vars);
+        // The value is safely quoted — metacharacters are inert
+        assert_eq!(
+            rendered,
+            "echo -n 'I'\\''ll find all files in `./src` and run $(whoami)' | wc -c"
         );
     }
 
