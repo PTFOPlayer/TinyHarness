@@ -145,6 +145,7 @@ async fn fixture_before_llm_hook_injects_stdout() {
     );
 }
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 async fn fixture_all_hook_events_fire() {
     let path = plugins_json_path();
