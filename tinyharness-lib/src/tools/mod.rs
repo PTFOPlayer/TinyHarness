@@ -68,7 +68,7 @@ impl ToolManager {
         self.tools.push(tool);
     }
 
-    /// Register custom tools from a [`PluginManager`].
+    /// Register custom tools from [`crate::plugin::PluginManager`].
     /// Tools whose names collide with built-in tools are silently skipped.
     pub fn register_custom_tools(&mut self, tools: &[crate::plugin::CustomToolDefinition]) {
         let existing: std::collections::HashSet<String> =

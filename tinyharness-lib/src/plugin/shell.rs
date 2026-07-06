@@ -351,8 +351,12 @@ mod tests {
     async fn test_execute_env_var_available() {
         // The vars should be available as TH_* env vars
         let cmd = ShellCommand {
-            command: (if cfg!(target_os = "windows") { "echo %TH_NAME%" } else { "echo $TH_NAME" })
-                .to_string(),
+            command: (if cfg!(target_os = "windows") {
+                "echo %TH_NAME%"
+            } else {
+                "echo $TH_NAME"
+            })
+            .to_string(),
             timeout_secs: 5,
             cwd: None,
         };
