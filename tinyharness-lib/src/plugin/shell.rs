@@ -280,7 +280,12 @@ mod tests {
     #[tokio::test]
     async fn test_execute_timeout() {
         let cmd = ShellCommand {
-            command: "sleep 100".to_string(),
+            command: (if cfg!(target_os = "windows") {
+                "timeout /T 100 /NOBREAK > NUL"
+            } else {
+                "sleep 100"
+            })
+            .to_string(),
             timeout_secs: 1,
             cwd: None,
         };
