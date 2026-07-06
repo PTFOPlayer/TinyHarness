@@ -1,7 +1,7 @@
 PREFIX ?= $(HOME)/.local/bin
 BINARY  := tinyharness
 
-.PHONY: build install uninstall clean
+.PHONY: build install uninstall clean test test-plugins
 
 build:
 	cargo build --release
@@ -18,3 +18,9 @@ uninstall:
 
 clean:
 	cargo clean
+
+test:
+	cargo test --workspace
+
+test-plugins:
+	@bash tests/plugins/test-plugins.sh

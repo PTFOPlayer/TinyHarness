@@ -2,6 +2,7 @@ pub mod config;
 pub mod context;
 pub mod image;
 pub mod mode;
+pub mod plugin;
 pub mod provider;
 pub mod secret;
 pub mod session;
@@ -30,5 +31,7 @@ pub use token::ContextWindowSize;
 pub use tools::tool::ToolCategory;
 pub use tools::{SignalEvent, ToolManager};
 
-// #[macro_export] macro at crate root:
-// - extract_args!
+pub use plugin::{
+    CustomToolCategory, CustomToolDefinition, HookContext, HookDefinition, HookEvent, HookOutcome,
+    PluginConfig, PluginError, PluginManager, ShellCommand,
+};

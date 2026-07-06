@@ -1,0 +1,118 @@
+{
+  "hooks": [
+    {
+      "name": "before-msg-echo",
+      "event": "before_user_message",
+      "command": "echo '[plugin] before_user_message fired — input: {user_input}' >> .tinyharness/plugin-test.log",
+      "timeout_secs": 2
+    },
+    {
+      "name": "after-msg-echo",
+      "event": "after_user_message",
+      "command": "echo '[plugin] after_user_message fired — messages: {message_count}' >> .tinyharness/plugin-test.log",
+      "timeout_secs": 2
+    },
+    {
+      "name": "before-llm-inject-timestamp",
+      "event": "before_llm_call",
+      "command": "echo 'Note: the current time is $(date) and you are in the directory $(pwd)'",
+      "timeout_secs": 2,
+      "inject_stdout": true
+    },
+    {
+      "name": "after-llm-log",
+      "event": "after_llm_response",
+      "command": "echo '[plugin] after_llm_response fired — response length: $(echo -n {response} | wc -c)' >> .tinyharness/plugin-test.log",
+      "timeout_secs": 2
+    },
+    {
+      "name": "before-tool-log",
+      "event": "before_tool_call",
+      "command": "echo '[plugin] before_tool_call: {tool} args={args}' >> .tinyharness/plugin-test.log",
+      "timeout_secs": 2
+    },
+    {
+      "name": "after-tool-log",
+      "event": "after_tool_call",
+      "command": "echo '[plugin] after_tool_call: {tool} result={result}' >> .tinyharness/plugin-test.log",
+      "timeout_secs": 2
+    },
+    {
+      "name": "on-exit-goodbye",
+      "event": "on_exit",
+      "command": "echo '[plugin] on_exit fired — goodbye!' >> .tinyharness/plugin-test.log",
+      "timeout_secs": 2
+    }
+  ],
+  "custom_tools": [
+    {
+      "name": "line_count",
+      "description": "Count the number of lines in a file. Use this when you need to know how many lines a file has.",
+      "category": "readonly",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file to count lines in" }
+        },
+        "required": ["path"]
+      },
+      "command": "wc -l < {path}",
+      "timeout_secs": 5
+    },
+    {
+      "name": "word_count",
+      "description": "Count the number of words in a file. Use this when you need to know how many words a file has.",
+      "category": "readonly",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Path to the file to count words in" }
+        },
+        "required": ["path"]
+      },
+      "command": "wc -w < {path}",
+      "timeout_secs": 5
+    },
+    {
+      "name": "make_target",
+      "description": "Run a make target in the project. Use this when you need to build, test, or run any make target.",
+      "category": "destructive",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "The make target to run (e.g. build, test, fmt)" },
+          "cwd": { "type": "string", "description": "Working directory to run make in (optional)" }
+        },
+        "required": ["target"]
+      },
+      "command": "make {target}",
+      "timeout_secs": 120
+    },
+    {
+      "name": "git_branch",
+      "description": "List git branches in the current repository. Use this when you need to see available branches.",
+      "category": "readonly",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "command": "git branch -a",
+      "timeout_secs": 5
+    },
+    {
+      "name": "cargo_test_filtered",
+      "description": "Run a filtered cargo test. Use this when you need to run a specific test by name.",
+      "category": "destructive",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "test_name": { "type": "string", "description": "Test name filter (passed to -- filter)" }
+        },
+        "required": ["test_name"]
+      },
+      "command": "cargo test -- {test_name}",
+      "timeout_secs": 120
+    }
+  ]
+}

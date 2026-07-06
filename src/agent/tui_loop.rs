@@ -223,6 +223,7 @@ pub async fn run_tui_agent_loop(
     initial_prompt: Option<String>,
     mut user_action_rx: mpsc::Receiver<TuiUserAction>,
     agent_event_tx: mpsc::Sender<TuiAgentEvent>,
+    plugin_manager: tinyharness_lib::plugin::PluginManager,
 ) -> Result<(), String> {
     let registry = build_registry();
 
@@ -286,6 +287,7 @@ pub async fn run_tui_agent_loop(
             &mut tool_call_count,
             &mut total_tokens_used,
             context_size,
+            &plugin_manager,
         )
         .await;
     }
@@ -351,6 +353,7 @@ pub async fn run_tui_agent_loop(
                     &mut tool_call_count,
                     &mut total_tokens_used,
                     context_size,
+                    &plugin_manager,
                 )
                 .await;
             }
@@ -461,6 +464,7 @@ async fn process_user_message(
     tool_call_count: &mut u64,
     total_tokens_used: &mut u64,
     context_size: ContextWindowSize,
+    plugin_manager: &tinyharness_lib::plugin::PluginManager,
 ) {
     let pending_images = std::mem::take(&mut ctx.pending_images);
     messages.push(Message {
@@ -485,6 +489,27 @@ async fn process_user_message(
         let (_, _, merged) = load_merged_settings();
         let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.auto_compact_enabled);
 
+        // ── Hook: before_llm_call (TUI) ────────────────────────────────────
+        let injected_system_msg: Option<String> = {
+            let hook_ctx = tinyharness_lib::plugin::HookContext {
+                message_count: Some(messages.len()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(tinyharness_lib::plugin::HookEvent::BeforeLlmCall, &hook_ctx)
+                .await;
+            for warning in &outcome.warnings {
+                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
+            }
+            if let Some(injected) = outcome.injected_text {
+                messages.push(Message::simple(Role::System, injected.clone()));
+                Some(injected)
+            } else {
+                None
+            }
+        };
+
         // Call the provider
         let mut recv = {
             let mut p = provider.lock().await;
@@ -501,6 +526,12 @@ async fn process_user_message(
                 }
             }
         };
+
+        // Remove injected system message after provider call (TUI)
+        if injected_system_msg.is_some() && messages.last().is_some_and(|m| m.role == Role::System)
+        {
+            messages.pop();
+        }
 
         let mut response_content = String::new();
         let mut thinking_content = String::new();
@@ -673,6 +704,7 @@ async fn process_user_message(
                 user_action_rx,
                 &mut auto_accept,
                 context_size,
+                plugin_manager,
             )
             .await;
 
@@ -719,6 +751,7 @@ async fn handle_tui_tool_calls(
     user_action_rx: &mut mpsc::Receiver<TuiUserAction>,
     auto_accept: &mut bool,
     context_size: ContextWindowSize,
+    plugin_manager: &tinyharness_lib::plugin::PluginManager,
 ) -> bool {
     if tool_calls.is_empty() {
         return false;
@@ -856,6 +889,44 @@ async fn handle_tui_tool_calls(
 
         let needs_confirmation = tool_manager.needs_approval(&call.function.name);
 
+        // ── Hook: before_tool_call (TUI) ───────────────────────────────────
+        {
+            let hook_ctx = tinyharness_lib::plugin::HookContext {
+                tool_name: Some(call.function.name.clone()),
+                tool_args: Some(call.function.arguments.clone()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(
+                    tinyharness_lib::plugin::HookEvent::BeforeToolCall,
+                    &hook_ctx,
+                )
+                .await;
+            for warning in &outcome.warnings {
+                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
+            }
+            if outcome.blocked {
+                let reason = outcome.block_reason.as_deref().unwrap_or("(no reason)");
+                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(format!(
+                    "Tool '{}' blocked by hook: {}",
+                    call.function.name, reason
+                )));
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: format!(
+                        "[Tool blocked] A plugin hook blocked the '{}' tool call. Reason: {}",
+                        call.function.name, reason
+                    ),
+                    tool_calls: vec![],
+                    tool_call_id: call.id.clone(),
+                    images: vec![],
+                });
+                session.append_message(messages.last().expect("just pushed a message"));
+                continue;
+            }
+        }
+
         // Use shared decision logic for confirmation
         let decision = super::confirm::decide_tool_confirmation(
             call,
@@ -940,10 +1011,30 @@ async fn handle_tui_tool_calls(
 
         // Execute the tool
         let start_time = std::time::Instant::now();
-        let result = tool_manager
+        let mut result = tool_manager
             .execute_tool_call(&call.function.name, &call.function.arguments)
             .await;
         let duration_ms = start_time.elapsed().as_millis() as u64;
+
+        // ── Hook: after_tool_call (TUI) ────────────────────────────────────
+        {
+            let hook_ctx = tinyharness_lib::plugin::HookContext {
+                tool_name: Some(call.function.name.clone()),
+                tool_args: Some(call.function.arguments.clone()),
+                tool_result: Some(result.clone()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(tinyharness_lib::plugin::HookEvent::AfterToolCall, &hook_ctx)
+                .await;
+            for warning in &outcome.warnings {
+                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
+            }
+            if let Some(injected) = outcome.injected_text {
+                result.push_str(&injected);
+            }
+        }
 
         let is_error = result.starts_with("Error:");
 

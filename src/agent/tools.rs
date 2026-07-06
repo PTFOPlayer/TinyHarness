@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use tinyharness_lib::{
     config::load_settings,
     image::ImageAttachment,
+    plugin::{HookContext, HookEvent, PluginManager},
     provider::{Message, Role, ToolCall},
     session::Session,
     tools::SignalEvent,
@@ -39,6 +40,7 @@ pub async fn handle_tool_calls<W: Write>(
     session: &mut Session,
     provider: std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
     interrupted: &std::sync::atomic::AtomicBool,
+    plugin_manager: &PluginManager,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if tool_calls.is_empty() {
         return Ok(false);
@@ -118,6 +120,44 @@ pub async fn handle_tool_calls<W: Write>(
 
         let needs_confirmation = tool_manager.needs_approval(&call.function.name);
 
+        // ── Hook: before_tool_call ──────────────────────────────────────────
+        // Hooks can block a tool call before it executes.
+        {
+            let hook_ctx = HookContext {
+                tool_name: Some(call.function.name.clone()),
+                tool_args: Some(call.function.arguments.clone()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(HookEvent::BeforeToolCall, &hook_ctx)
+                .await;
+            for warning in &outcome.warnings {
+                let _ = writeln!(stdout, "  {DIM}⚠ {warning}{RESET}");
+            }
+            if outcome.blocked {
+                let reason = outcome.block_reason.as_deref().unwrap_or("(no reason)");
+                writeln!(
+                    stdout,
+                    "  {ORANGE}⊘ Tool '{}' blocked by hook: {reason}{RESET}",
+                    call.function.name
+                )?;
+                stdout.flush()?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: format!(
+                        "[Tool blocked] A plugin hook blocked the '{}' tool call. Reason: {}",
+                        call.function.name, reason
+                    ),
+                    tool_call_id: call.id.clone(),
+                    tool_calls: vec![],
+                    images: vec![],
+                });
+                session.append_message(messages.last().expect("just pushed a message"));
+                continue;
+            }
+        }
+
         // Load settings to check auto_accept_mode preference and safe/denied commands
         let settings = load_settings();
         let auto_accept_mode = settings.auto_accept_mode;
@@ -177,7 +217,28 @@ pub async fn handle_tool_calls<W: Write>(
         }
 
         // Generic tool execution — collect result for batching
-        let result = execute_generic_tool(&call, tool_manager, stdout, auto_accepted).await;
+        let mut result = execute_generic_tool(&call, tool_manager, stdout, auto_accepted).await;
+
+        // ── Hook: after_tool_call ───────────────────────────────────────────
+        // Hooks can inspect the tool result and optionally modify it.
+        {
+            let hook_ctx = HookContext {
+                tool_name: Some(call.function.name.clone()),
+                tool_args: Some(call.function.arguments.clone()),
+                tool_result: Some(result.content.clone()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(HookEvent::AfterToolCall, &hook_ctx)
+                .await;
+            for warning in &outcome.warnings {
+                let _ = writeln!(stdout, "  {DIM}⚠ {warning}{RESET}");
+            }
+            if let Some(injected) = outcome.injected_text {
+                result.content.push_str(&injected);
+            }
+        }
 
         // Log to audit if this was an auditable tool (run/write/edit)
         log_tool_audit(

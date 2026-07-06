@@ -25,6 +25,7 @@ use tinyharness_lib::{
     config::load_merged_settings,
     config::load_settings,
     mode::AgentMode,
+    plugin::{HookContext, HookEvent, PluginManager},
     provider::{Message, Provider, Role},
     session::Session,
     token::ContextWindowSize,
@@ -44,6 +45,7 @@ pub use input::read_multiline_input;
 pub use safety::{is_safe_command, strip_safe_descriptor_redirections};
 pub use tools::handle_tool_calls;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
     tool_manager: ToolManager,
@@ -52,6 +54,7 @@ pub async fn run_agent_loop(
     session: &mut Session,
     interrupted: &Arc<AtomicBool>,
     initial_prompt: Option<&str>,
+    plugin_manager: &PluginManager,
 ) -> Result<(), Box<dyn Error>> {
     // Build the command registry once at startup
     let registry = build_registry();
@@ -308,17 +311,63 @@ pub async fn run_agent_loop(
         }
 
         let pending_images = std::mem::take(&mut ctx.pending_images);
-        messages.push(Message {
-            role: Role::User,
-            content: user_input.clone(),
-            tool_calls: vec![],
-            tool_call_id: None,
-            images: pending_images,
-            thinking: None,
-        });
+        // ── Hook: before_user_message ────────────────────────────────────
+        // Hooks can inject text (prepending to the user message) or block
+        // the message entirely.
+        {
+            let hook_ctx = HookContext {
+                user_input: Some(user_input.clone()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(HookEvent::BeforeUserMessage, &hook_ctx)
+                .await;
+            for warning in &outcome.warnings {
+                let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+            }
+            if outcome.blocked {
+                let reason = outcome.block_reason.as_deref().unwrap_or("(no reason)");
+                let _ = writeln!(
+                    stdout,
+                    "\n{ORANGE}⊘ Message blocked by hook: {reason}{RESET}\n"
+                );
+                continue;
+            }
+            // If hooks injected text, prepend it to the user message
+            let final_input = if let Some(injected) = outcome.injected_text {
+                format!("{injected}\n\n{user_input}")
+            } else {
+                user_input.clone()
+            };
+            messages.push(Message {
+                role: Role::User,
+                content: final_input,
+                tool_calls: vec![],
+                tool_call_id: None,
+                images: pending_images,
+                thinking: None,
+            });
+        }
 
         // Auto-save: user message
         session.append_message(messages.last().expect("just pushed a message"));
+
+        // ── Hook: after_user_message ──────────────────────────────────────
+        {
+            let hook_ctx = HookContext {
+                user_input: Some(user_input.clone()),
+                message_count: Some(messages.len()),
+                session_id: ctx.session_id.clone(),
+                ..Default::default()
+            };
+            let outcome = plugin_manager
+                .run_hooks(HookEvent::AfterUserMessage, &hook_ctx)
+                .await;
+            for warning in &outcome.warnings {
+                let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+            }
+        }
 
         // auto_accept persists across all agent iterations within this user turn,
         let mut auto_accept = false;
@@ -328,12 +377,44 @@ pub async fn run_agent_loop(
             let (_, _, merged) = load_merged_settings();
             let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.auto_compact_enabled);
 
+            // ── Hook: before_llm_call ──────────────────────────────────────
+            // Hooks can inject a system message into the conversation before
+            // the LLM is called. This is useful for injecting dynamic context
+            // (e.g., git status, project-specific info).
+            // The injected message is removed after the call to avoid accumulation.
+            let injected_system_msg: Option<String> = {
+                let hook_ctx = HookContext {
+                    message_count: Some(messages.len()),
+                    session_id: ctx.session_id.clone(),
+                    ..Default::default()
+                };
+                let outcome = plugin_manager
+                    .run_hooks(HookEvent::BeforeLlmCall, &hook_ctx)
+                    .await;
+                for warning in &outcome.warnings {
+                    let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+                }
+                if let Some(injected) = outcome.injected_text {
+                    messages.push(Message::simple(Role::System, injected.clone()));
+                    Some(injected)
+                } else {
+                    None
+                }
+            };
+
             // Call the provider — it returns a receiver for streaming chunks
             let mut recv = {
                 let mut provider = provider.lock().await;
                 match provider.chat(messages.clone(), tools).await {
                     Ok(recv) => recv,
                     Err(e) => {
+                        // Remove injected system message if present
+                        if injected_system_msg.is_some() {
+                            // Remove the last message only if it's a system message we added
+                            if messages.last().is_some_and(|m| m.role == Role::System) {
+                                messages.pop();
+                            }
+                        }
                         stdout.write_all(RESET.as_bytes())?;
                         writeln!(
                             stdout,
@@ -346,6 +427,15 @@ pub async fn run_agent_loop(
                     }
                 }
             };
+
+            // Remove the injected system message after the provider call
+            // (we cloned messages into provider.chat, so the injected msg
+            // was sent but we don't want it polluting future turns).
+            if injected_system_msg.is_some()
+                && messages.last().is_some_and(|m| m.role == Role::System)
+            {
+                messages.pop();
+            }
 
             let mut response_content = String::new();
             let mut tool_calls: Vec<tinyharness_lib::provider::ToolCall> = Vec::new();
@@ -565,6 +655,46 @@ pub async fn run_agent_loop(
 
             stdout.write_all(RESET.as_bytes())?;
 
+            // ── Hook: after_llm_response ─────────────────────────────────────
+            // Hooks can inspect the response and tool calls. They can inject
+            // text (appended to response content) or block tool execution.
+            {
+                let hook_ctx = HookContext {
+                    response_content: Some(response_content.clone()),
+                    message_count: Some(messages.len()),
+                    session_id: ctx.session_id.clone(),
+                    ..Default::default()
+                };
+                let outcome = plugin_manager
+                    .run_hooks(HookEvent::AfterLlmResponse, &hook_ctx)
+                    .await;
+                for warning in &outcome.warnings {
+                    let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+                }
+                if let Some(injected) = outcome.injected_text {
+                    // Append injected text to the response content
+                    response_content.push_str(&injected);
+                }
+                if outcome.blocked {
+                    // Skip tool calls — treat as if no tool calls were present
+                    let _ = writeln!(
+                        stdout,
+                        "\n{ORANGE}⊘ Tool calls blocked by hook: {}{RESET}",
+                        outcome.block_reason.as_deref().unwrap_or("(no reason)")
+                    );
+                    // Push assistant message without processing tools
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: response_content.clone(),
+                        tool_calls: vec![],
+                        tool_call_id: None,
+                        images: vec![],
+                    });
+                    session.append_message(messages.last().expect("just pushed a message"));
+                    break;
+                }
+            }
+
             if handle_tool_calls(
                 &tool_calls,
                 &response_content,
@@ -581,6 +711,7 @@ pub async fn run_agent_loop(
                 session,
                 Arc::clone(&provider),
                 interrupted,
+                plugin_manager,
             )
             .await?
             {
@@ -608,6 +739,19 @@ pub async fn run_agent_loop(
 
         // Blank line after agent response for visual separation
         writeln!(stdout)?;
+    }
+
+    // ── Hook: on_exit ──────────────────────────────────────────────────────
+    {
+        let hook_ctx = HookContext {
+            message_count: Some(messages.len()),
+            session_id: ctx.session_id.clone(),
+            ..Default::default()
+        };
+        let outcome = plugin_manager.run_hooks(HookEvent::OnExit, &hook_ctx).await;
+        for warning in &outcome.warnings {
+            let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+        }
     }
 
     // Save history on exit

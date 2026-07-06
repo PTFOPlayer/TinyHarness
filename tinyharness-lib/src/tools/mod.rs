@@ -68,6 +68,26 @@ impl ToolManager {
         self.tools.push(tool);
     }
 
+    /// Register custom tools from a [`PluginManager`].
+    /// Tools whose names collide with built-in tools are silently skipped.
+    pub fn register_custom_tools(&mut self, tools: &[crate::plugin::CustomToolDefinition]) {
+        let existing: std::collections::HashSet<String> =
+            self.tools.iter().map(|t| t.name.clone()).collect();
+        for def in tools {
+            if existing.contains(&def.name) {
+                tracing::warn!(
+                    "Custom tool '{}' collides with an existing tool — skipping",
+                    def.name
+                );
+                continue;
+            }
+            match def.build_tool() {
+                Ok(tool) => self.register_tool(tool),
+                Err(e) => tracing::warn!("Failed to register custom tool '{}': {}", def.name, e),
+            }
+        }
+    }
+
     /// Returns the tool definitions for all registered tools.
     pub fn get_all_tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tools.iter().map(|t| t.to_definition()).collect()
