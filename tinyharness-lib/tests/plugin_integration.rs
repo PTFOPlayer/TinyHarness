@@ -321,7 +321,8 @@ async fn hook_context_env_vars_available() {
         name: "env-test".to_string(),
         event: HookEvent::AfterToolCall,
         command: ShellCommand {
-            command: "echo $TH_TOOL".to_string(),
+            command: (if cfg!(target_os = "windows") { "echo %TH_TOOL%" } else { "echo $TH_TOOL" })
+                .to_string(),
             timeout_secs: 5,
             cwd: None,
         },
