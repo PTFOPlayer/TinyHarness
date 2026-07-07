@@ -45,6 +45,45 @@ pub use input::read_multiline_input;
 pub use safety::{is_safe_command, strip_safe_descriptor_redirections};
 pub use tools::handle_tool_calls;
 
+/// Print hook warnings and prompt the user whether to continue.
+///
+/// Returns `true` if the user wants to continue (or there were no warnings),
+/// `false` if the user chose to abort. The full untruncated warning text is
+/// printed — no truncation is applied.
+pub fn prompt_hook_failure<W: Write>(
+    stdout: &mut W,
+    warnings: &[String],
+) -> Result<bool, Box<dyn Error>> {
+    if warnings.is_empty() {
+        return Ok(true);
+    }
+
+    // Print all warnings in full
+    for warning in warnings {
+        writeln!(stdout, "{DIM}⚠ {warning}{RESET}")?;
+    }
+
+    // Prompt the user
+    loop {
+        write!(stdout, "{BOLD}Hook failed. Continue? [Y/n]{RESET} ")?;
+        stdout.flush()?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .expect("Failed to read line");
+        let answer = answer.trim().to_lowercase();
+
+        if answer.is_empty() || answer == "y" || answer == "yes" {
+            return Ok(true);
+        } else if answer == "n" || answer == "no" {
+            return Ok(false);
+        } else {
+            writeln!(stdout, "{GRAY}Please answer y or n.{RESET}")?;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     provider: Arc<Mutex<dyn Provider + Send + Sync>>,
@@ -154,6 +193,10 @@ pub async fn run_agent_loop(
     // rest of the loop body (the LLM-call flow, tool handling, etc.) run
     // unmodified for the initial turn.
     let mut pending_user_input: Option<String> = initial_prompt.map(|s| s.to_string());
+
+    // Flag to abort the entire agent loop when the user declines to continue
+    // after a hook failure.
+    let mut should_exit = false;
 
     loop {
         // Clear any stale interrupt flag from a previous turn.
@@ -323,8 +366,8 @@ pub async fn run_agent_loop(
             let outcome = plugin_manager
                 .run_hooks(HookEvent::BeforeUserMessage, &hook_ctx)
                 .await;
-            for warning in &outcome.warnings {
-                let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+            if !prompt_hook_failure(&mut stdout, &outcome.warnings)? {
+                break;
             }
             if outcome.blocked {
                 let reason = outcome.block_reason.as_deref().unwrap_or("(no reason)");
@@ -364,8 +407,8 @@ pub async fn run_agent_loop(
             let outcome = plugin_manager
                 .run_hooks(HookEvent::AfterUserMessage, &hook_ctx)
                 .await;
-            for warning in &outcome.warnings {
-                let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+            if !prompt_hook_failure(&mut stdout, &outcome.warnings)? {
+                break;
             }
         }
 
@@ -391,16 +434,20 @@ pub async fn run_agent_loop(
                 let outcome = plugin_manager
                     .run_hooks(HookEvent::BeforeLlmCall, &hook_ctx)
                     .await;
-                for warning in &outcome.warnings {
-                    let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
-                }
-                if let Some(injected) = outcome.injected_text {
+                if !prompt_hook_failure(&mut stdout, &outcome.warnings)? {
+                    should_exit = true;
+                    None
+                } else if let Some(injected) = outcome.injected_text {
                     messages.push(Message::simple(Role::System, injected.clone()));
                     Some(injected)
                 } else {
                     None
                 }
             };
+
+            if should_exit {
+                break;
+            }
 
             // Call the provider — it returns a receiver for streaming chunks
             let mut recv = {
@@ -668,8 +715,9 @@ pub async fn run_agent_loop(
                 let outcome = plugin_manager
                     .run_hooks(HookEvent::AfterLlmResponse, &hook_ctx)
                     .await;
-                for warning in &outcome.warnings {
-                    let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+                if !prompt_hook_failure(&mut stdout, &outcome.warnings)? {
+                    should_exit = true;
+                    break;
                 }
                 if let Some(injected) = outcome.injected_text {
                     // Append injected text to the response content
@@ -712,12 +760,20 @@ pub async fn run_agent_loop(
                 Arc::clone(&provider),
                 interrupted,
                 plugin_manager,
+                &mut should_exit,
             )
             .await?
             {
+                if should_exit {
+                    break;
+                }
                 // Sync local cumulative stats from session (updated by handle_tool_calls).
                 tool_call_count = session.meta().total_tool_calls;
                 continue;
+            }
+
+            if should_exit {
+                break;
             }
 
             messages.push(Message {
@@ -737,6 +793,11 @@ pub async fn run_agent_loop(
             break;
         }
 
+        // If a hook failure caused the user to abort, exit the main loop.
+        if should_exit {
+            break;
+        }
+
         // Blank line after agent response for visual separation
         writeln!(stdout)?;
     }
@@ -749,8 +810,9 @@ pub async fn run_agent_loop(
             ..Default::default()
         };
         let outcome = plugin_manager.run_hooks(HookEvent::OnExit, &hook_ctx).await;
-        for warning in &outcome.warnings {
-            let _ = writeln!(stdout, "{DIM}⚠ {warning}{RESET}");
+        if !prompt_hook_failure(&mut stdout, &outcome.warnings)? {
+            // User chose to abort — skip saving history
+            return Ok(());
         }
     }
 

@@ -65,6 +65,44 @@ fn send_context_warning_if_needed(
     }
 }
 
+/// Send hook warnings to the TUI and ask the user whether to continue.
+///
+/// Returns `true` if the user wants to continue (or there were no warnings),
+/// `false` if the user chose to abort.
+fn prompt_hook_failure_tui(
+    warnings: &[String],
+    agent_event_tx: &mpsc::Sender<TuiAgentEvent>,
+    user_action_rx: &mpsc::Receiver<TuiUserAction>,
+) -> bool {
+    if warnings.is_empty() {
+        return true;
+    }
+
+    // Send all warnings as system messages
+    for warning in warnings {
+        let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
+    }
+
+    // Ask the user via the TUI question flow
+    let _ = agent_event_tx.send(TuiAgentEvent::Question {
+        question: "Hook failed. Continue?".to_string(),
+        answers: vec!["Yes".to_string(), "No".to_string()],
+    });
+
+    loop {
+        match user_action_rx.recv() {
+            Ok(TuiUserAction::QuestionAnswer(ans)) => {
+                let ans = ans.trim().to_lowercase();
+                return !(ans == "no" || ans == "n" || ans.starts_with("skip"));
+            }
+            Ok(TuiUserAction::Interrupt) => return false,
+            Ok(TuiUserAction::Quit) => return false,
+            Ok(_) => continue,
+            Err(_) => return false,
+        }
+    }
+}
+
 /// A writer that captures output into a shared buffer, allowing the captured
 /// text to be retrieved later. Used in TUI mode to intercept command output
 /// that would otherwise go to stdout (which is invisible in alternate-screen mode).
@@ -481,6 +519,8 @@ async fn process_user_message(
 
     let mut auto_accept = false;
 
+    let mut should_exit = false;
+
     loop {
         // Clear interrupt flag for this turn
         interrupted.store(false, Ordering::SeqCst);
@@ -499,16 +539,20 @@ async fn process_user_message(
             let outcome = plugin_manager
                 .run_hooks(tinyharness_lib::plugin::HookEvent::BeforeLlmCall, &hook_ctx)
                 .await;
-            for warning in &outcome.warnings {
-                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
-            }
-            if let Some(injected) = outcome.injected_text {
+            if !prompt_hook_failure_tui(&outcome.warnings, agent_event_tx, user_action_rx) {
+                should_exit = true;
+                None
+            } else if let Some(injected) = outcome.injected_text {
                 messages.push(Message::simple(Role::System, injected.clone()));
                 Some(injected)
             } else {
                 None
             }
         };
+
+        if should_exit {
+            return;
+        }
 
         // Call the provider
         let mut recv = {
@@ -903,8 +947,8 @@ async fn handle_tui_tool_calls(
                     &hook_ctx,
                 )
                 .await;
-            for warning in &outcome.warnings {
-                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
+            if !prompt_hook_failure_tui(&outcome.warnings, agent_event_tx, user_action_rx) {
+                return false;
             }
             if outcome.blocked {
                 let reason = outcome.block_reason.as_deref().unwrap_or("(no reason)");
@@ -1028,8 +1072,8 @@ async fn handle_tui_tool_calls(
             let outcome = plugin_manager
                 .run_hooks(tinyharness_lib::plugin::HookEvent::AfterToolCall, &hook_ctx)
                 .await;
-            for warning in &outcome.warnings {
-                let _ = agent_event_tx.send(TuiAgentEvent::SystemMessage(warning.clone()));
+            if !prompt_hook_failure_tui(&outcome.warnings, agent_event_tx, user_action_rx) {
+                return false;
             }
             if let Some(injected) = outcome.injected_text {
                 result.push_str(&injected);

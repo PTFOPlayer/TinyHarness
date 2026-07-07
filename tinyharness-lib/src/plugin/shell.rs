@@ -141,14 +141,7 @@ async fn read_pipe<T: tokio::io::AsyncRead + Unpin>(mut pipe: Option<T>) -> Stri
     if let Some(ref mut r) = pipe.as_mut() {
         let mut buf = String::new();
         let _ = r.read_to_string(&mut buf).await;
-        // Truncate at 10 KB to avoid huge outputs
-        let max_chars = 10_000;
-        if buf.chars().count() > max_chars {
-            let truncated: String = buf.chars().take(max_chars).collect();
-            format!("{}\n... (truncated)", truncated)
-        } else {
-            buf
-        }
+        buf
     } else {
         String::new()
     }

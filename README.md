@@ -3,7 +3,8 @@
 Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM), built-in tool calling, agent skills, and customizable system prompts.
 
 ![TinyHarness screenshot](screenshots/image.png)
-
+> screenshot was done using tui mode (--tui)
+ 
 ## Features
 
 - **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.

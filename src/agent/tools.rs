@@ -27,6 +27,7 @@ use super::tool_result::{
 ///
 /// Returns `Ok(true)` if tool results were added to messages (the caller should
 /// continue the inner loop), or `Ok(false)` if no tool calls were present.
+/// Sets `should_exit` to `true` if the user chose to abort after a hook failure.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_tool_calls<W: Write>(
     tool_calls: &[ToolCall],
@@ -41,6 +42,7 @@ pub async fn handle_tool_calls<W: Write>(
     provider: std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
     interrupted: &std::sync::atomic::AtomicBool,
     plugin_manager: &PluginManager,
+    should_exit: &mut bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if tool_calls.is_empty() {
         return Ok(false);
@@ -132,8 +134,9 @@ pub async fn handle_tool_calls<W: Write>(
             let outcome = plugin_manager
                 .run_hooks(HookEvent::BeforeToolCall, &hook_ctx)
                 .await;
-            for warning in &outcome.warnings {
-                let _ = writeln!(stdout, "  {DIM}⚠ {warning}{RESET}");
+            if !crate::agent::prompt_hook_failure(stdout, &outcome.warnings)? {
+                *should_exit = true;
+                return Ok(false);
             }
             if outcome.blocked {
                 let reason = outcome.block_reason.as_deref().unwrap_or("(no reason)");
@@ -232,8 +235,9 @@ pub async fn handle_tool_calls<W: Write>(
             let outcome = plugin_manager
                 .run_hooks(HookEvent::AfterToolCall, &hook_ctx)
                 .await;
-            for warning in &outcome.warnings {
-                let _ = writeln!(stdout, "  {DIM}⚠ {warning}{RESET}");
+            if !crate::agent::prompt_hook_failure(stdout, &outcome.warnings)? {
+                *should_exit = true;
+                return Ok(false);
             }
             if let Some(injected) = outcome.injected_text {
                 result.content.push_str(&injected);
