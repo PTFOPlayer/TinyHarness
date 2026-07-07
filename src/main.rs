@@ -500,7 +500,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let api_key = agent_setup::resolve_api_key(args.api_key.as_deref(), &settings);
 
     // Reload settings to include any API key persisted by resolve_api_key
-    let settings = load_settings();
+    let mut settings = load_settings();
 
     let skip_hc = args.skip_health_check || settings.skip_health_check;
     let skip_hc_source = if args.skip_health_check {
@@ -549,13 +549,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // If auto_select_model fell back to a different model (because the saved
+    // one was unavailable), persist the corrected model so the warning
+    // doesn't reappear on every launch.
+    if provider_kind != ProviderKind::Sockudo {
+        let p = provider.lock().await;
+        if let Some(current) = p.current_model() {
+            let saved = settings.get_model_for(provider_kind);
+            if saved != Some(current.as_str()) {
+                settings.set_model_for(provider_kind, current.to_string());
+                save_settings(&settings);
+            }
+        }
+    }
+
     // Save the provider kind + URL now that we know which one is active.
     // We persist whenever anything was explicitly chosen via CLI (provider
     // flag or --url) so the next run doesn't have to re-prompt. The
     // URL-resolution block above already calls `save_provider_settings` when
     // a provider flag was passed without --url, so we only need to cover
     // the remaining cases here.
-    let mut settings = settings;
     let explicit_provider =
         args.ollama || args.llama_cpp || args.vllm || args.sockudo || args.openai_compat;
     if explicit_provider && !args.url.is_empty() {
