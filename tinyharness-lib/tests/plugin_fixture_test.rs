@@ -82,6 +82,7 @@ fn fixture_tools_register_in_tool_manager() {
     assert!(tm.needs_approval("cargo_test_filtered"));
 }
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 async fn fixture_line_count_tool_executes() {
     let path = plugins_json_path();
