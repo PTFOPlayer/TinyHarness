@@ -13,9 +13,9 @@ use super::shell::ShellCommand;
 /// | `BeforeUserMessage` | After input is read, before pushing to messages | `user_input` |
 /// | `AfterUserMessage` | After user message is pushed | `user_input`, `message_count` |
 /// | `BeforeLlmCall` | Before `provider.chat()` | `message_count` |
-/// | `AfterLlmResponse` | After LLM streaming completes | `response_content`, `message_count` |
-/// | `BeforeToolCall` | Before each tool execution | `tool_name`, `tool_args` |
-/// | `AfterToolCall` | After each tool returns | `tool_name`, `tool_args`, `tool_result` |
+/// | `AfterLlmResponse` | After LLM streaming completes | `response`, `message_count` |
+/// | `BeforeToolCall` | Before each tool execution | `tool`, `args` |
+/// | `AfterToolCall` | After each tool returns | `tool`, `args`, `result` |
 /// | `OnExit` | When the agent loop exits | `message_count` |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
