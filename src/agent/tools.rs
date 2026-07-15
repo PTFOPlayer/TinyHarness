@@ -30,6 +30,7 @@ use super::tool_result::{
 pub async fn handle_tool_calls<W: Write>(
     tool_calls: &[ToolCall],
     response_content: &str,
+    thinking: Option<&str>,
     messages: &mut Vec<Message>,
     tool_manager: &ToolManager,
     ctx: &mut CommandContext,
@@ -66,6 +67,7 @@ pub async fn handle_tool_calls<W: Write>(
         tool_calls: tool_calls.clone(),
         tool_call_id: None,
         images: vec![],
+        thinking: thinking.map(|s| s.to_string()),
     });
     session.append_message(messages.last().expect("just pushed a message"));
 
@@ -168,6 +170,7 @@ pub async fn handle_tool_calls<W: Write>(
                 ),
                 tool_call_id: call.id.clone(),
                 tool_calls: vec![], images: vec![],
+            thinking: None,
             });
             session.append_message(messages.last().expect("just pushed a message"));
             continue;

@@ -469,6 +469,7 @@ async fn process_user_message(
         tool_calls: vec![],
         tool_call_id: None,
         images: pending_images,
+        thinking: None,
     });
 
     // Auto-save: user message
@@ -502,6 +503,7 @@ async fn process_user_message(
         };
 
         let mut response_content = String::new();
+        let mut thinking_content = String::new();
         let mut tool_calls: Vec<tinyharness_lib::provider::ToolCall> = Vec::new();
         let mut received_done = false;
         let mut is_error = false;
@@ -548,11 +550,13 @@ async fn process_user_message(
                             // Send thinking content if present
                             if let Some(ref thinking) = msg.message.thinking
                                 && !thinking.is_empty()
-                                && ctx.show_thinking
                             {
-                                let _ = agent_event_tx.send(TuiAgentEvent::StreamingThinking(
-                                    thinking.clone(),
-                                ));
+                                thinking_content.push_str(thinking);
+                                if ctx.show_thinking {
+                                    let _ = agent_event_tx.send(TuiAgentEvent::StreamingThinking(
+                                        thinking.clone(),
+                                    ));
+                                }
                             }
 
                             // Send content chunks
@@ -589,6 +593,7 @@ async fn process_user_message(
                                 tool_calls: vec![],
                                 tool_call_id: None,
                                 images: vec![],
+                                thinking: if thinking_content.is_empty() { None } else { Some(std::mem::take(&mut thinking_content)) },
                             });
                             session.append_message(messages.last().expect("just pushed a message"));
                         } else {
@@ -647,6 +652,11 @@ async fn process_user_message(
                 tool_calls: tool_calls.clone(),
                 tool_call_id: None,
                 images: vec![],
+                thinking: if thinking_content.is_empty() {
+                    None
+                } else {
+                    Some(thinking_content.clone())
+                },
             });
             session.append_message(messages.last().expect("just pushed a message"));
 
@@ -681,6 +691,11 @@ async fn process_user_message(
             tool_calls: vec![],
             tool_call_id: None,
             images: vec![],
+            thinking: if thinking_content.is_empty() {
+                None
+            } else {
+                Some(thinking_content)
+            },
         });
         session.append_message(messages.last().expect("just pushed a message"));
         return;
@@ -910,6 +925,7 @@ async fn handle_tui_tool_calls(
                 tool_calls: vec![],
                 tool_call_id: call.id.clone(),
                 images: vec![],
+                thinking: None,
             });
             session.append_message(messages.last().expect("just pushed a message"));
             continue;

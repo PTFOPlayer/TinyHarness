@@ -472,7 +472,7 @@ pub struct Settings {
     /// Controls the think/reasoning level for Ollama (default: Medium)
     #[serde(default)]
     pub ollama_think_type: OllamaThinkType,
-    /// Show the model's thinking/reasoning chain inline during streaming (default: false)
+    /// Show the model's thinking/reasoning chain inline during streaming (default: true)
     #[serde(default)]
     pub show_thinking: bool,
     /// Context limit for warning calculations only (default: None, uses model default)
@@ -530,7 +530,7 @@ impl Default for Settings {
             ollama_timeout_secs: 5,
             ollama_max_retries: 3,
             ollama_think_type: OllamaThinkType::Medium,
-            show_thinking: false,
+            show_thinking: true,
             context_limit: None,
             auto_accept_mode: AutoAcceptMode::Safe,
             skip_health_check: false,

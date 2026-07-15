@@ -372,6 +372,7 @@ mod tests {
             tool_calls: vec![],
             tool_call_id: None,
             images: vec![],
+            thinking: None,
         }];
 
         inject_into_system_prompt(&mut messages, &ctx);
@@ -390,6 +391,7 @@ mod tests {
             role: Role::System,
             content: "Base prompt\n\nThe following files are pinned in context\n--- old ---\nold content\n--- End of pinned files ---".to_string(),
             tool_calls: vec![], tool_call_id: None, images: vec![],
+            thinking: None,
         }];
 
         inject_into_system_prompt(&mut messages, &ctx);

@@ -114,11 +114,13 @@ async fn call_llm_summarize(
                        and current task status. Do NOT add information that was not in the original conversation."
                 .to_string(),
             tool_calls: vec![], tool_call_id: None, images: vec![],
+            thinking: None,
         },
         Message {
             role: Role::User,
             content: format!("{}\n\n{}", summarization_prompt, text_to_summarize),
             tool_calls: vec![], tool_call_id: None, images: vec![],
+            thinking: None,
         },
     ];
 
@@ -392,6 +394,7 @@ fn reconstruct_messages(
             tool_calls: sys.tool_calls,
             tool_call_id: sys.tool_call_id,
             images: sys.images,
+            thinking: None,
         });
     }
 
@@ -423,6 +426,7 @@ mod tests {
             tool_calls: vec![],
             tool_call_id: None,
             images: vec![],
+            thinking: None,
         };
         let formatted = format_messages_for_summary(&[&msg]);
         assert!(formatted.contains("[USER]:"));
@@ -441,6 +445,7 @@ mod tests {
             tool_calls: vec![],
             tool_call_id: None,
             images: vec![],
+            thinking: None,
         };
         let formatted = format_messages_for_summary(&[&msg]);
         assert!(formatted.contains("[ASSISTANT]: Hello world"));
@@ -455,6 +460,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::User,
@@ -462,6 +468,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::Assistant,
@@ -469,6 +476,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::Tool,
@@ -476,6 +484,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
         ];
         let refs: Vec<&Message> = msgs.iter().collect();
@@ -521,6 +530,7 @@ mod tests {
             tool_calls: vec![],
             tool_call_id: None,
             images: vec![],
+            thinking: None,
         };
         let mut messages = vec![
             system.clone(),
@@ -530,6 +540,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::Assistant,
@@ -537,6 +548,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::User,
@@ -544,6 +556,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::Assistant,
@@ -551,6 +564,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::User,
@@ -558,6 +572,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::Assistant,
@@ -565,6 +580,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::User,
@@ -572,6 +588,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message {
                 role: Role::Assistant,
@@ -579,6 +596,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
         ];
         let ctx = CompactContext {

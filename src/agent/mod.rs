@@ -314,6 +314,7 @@ pub async fn run_agent_loop(
             tool_calls: vec![],
             tool_call_id: None,
             images: pending_images,
+            thinking: None,
         });
 
         // Auto-save: user message
@@ -504,6 +505,11 @@ pub async fn run_agent_loop(
                         tool_calls: vec![],
                         tool_call_id: None,
                         images: vec![],
+                        thinking: if thinking_content.is_empty() {
+                            None
+                        } else {
+                            Some(std::mem::take(&mut thinking_content))
+                        },
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                 } else {
@@ -562,6 +568,11 @@ pub async fn run_agent_loop(
             if handle_tool_calls(
                 &tool_calls,
                 &response_content,
+                if thinking_content.is_empty() {
+                    None
+                } else {
+                    Some(&thinking_content)
+                },
                 messages,
                 &tool_manager,
                 ctx,
@@ -584,6 +595,11 @@ pub async fn run_agent_loop(
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: if thinking_content.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(&mut thinking_content))
+                },
             });
             session.append_message(messages.last().expect("just pushed a message"));
 
