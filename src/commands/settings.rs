@@ -70,6 +70,19 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
         settings.ollama_max_retries,
     );
 
+    let _ = writeln!(
+        out,
+        "{BOLD}│{RESET} Think:     {BLUE}{}{RESET}",
+        settings.ollama_think_type,
+    );
+
+    let (st_str, st_color) = if settings.show_thinking {
+        ("on", GREEN)
+    } else {
+        ("off", ORANGE)
+    };
+    let _ = writeln!(out, "{BOLD}│{RESET} Show Think: {st_color}{st_str}{RESET}",);
+
     match settings.context_limit {
         Some(limit) => {
             let _ = writeln!(out, "{BOLD}│{RESET} Ctx Limit: {BLUE}{limit} tokens{RESET}",);

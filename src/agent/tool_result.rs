@@ -59,6 +59,7 @@ pub fn batch_tool_results(results: Vec<GenericToolResult>) -> Vec<Message> {
                 tool_calls: vec![],
                 tool_call_id: Some(r.tool_call_id),
                 images,
+                thinking: None,
             }
         })
         .collect()

@@ -93,6 +93,7 @@ pub async fn handle_signal_event(
                         tool_calls: vec![],
                         tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
+            thinking: None,
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                     SignalResult::SwitchMode {
@@ -108,6 +109,7 @@ pub async fn handle_signal_event(
                         tool_calls: vec![],
                         tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
+                        thinking: None,
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                     SignalResult::SwitchMode {
@@ -157,6 +159,7 @@ pub async fn handle_signal_event(
                         tool_calls: vec![],
                         tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
+                        thinking: None,
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                     SignalResult::AutoCompact {
@@ -175,6 +178,7 @@ pub async fn handle_signal_event(
                         tool_calls: vec![],
                         tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
+                        thinking: None,
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                     SignalResult::AutoCompact {
@@ -206,6 +210,7 @@ pub async fn handle_signal_event(
                             tool_calls: vec![],
                             tool_call_id: Some(tool_call_id.to_string()),
                             images: vec![],
+            thinking: None,
                         });
                         session.append_message(messages.last().expect("just pushed a message"));
                         SignalResult::InvokeSkill {
@@ -222,6 +227,7 @@ pub async fn handle_signal_event(
                             tool_calls: vec![],
                             tool_call_id: None,
                             images: vec![],
+                            thinking: None,
                         });
                         session.append_message(messages.last().expect("just pushed a message"));
                         ctx.refresh_system_prompt(messages);
@@ -250,6 +256,7 @@ pub async fn handle_signal_event(
                         tool_calls: vec![],
                         tool_call_id: Some(tool_call_id.to_string()),
                         images: vec![],
+            thinking: None,
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                     SignalResult::InvokeSkill {
@@ -293,6 +300,7 @@ pub fn apply_question_answer(
         tool_calls: vec![],
         tool_call_id: Some(tool_call_id.to_string()),
         images: vec![],
+        thinking: None,
     });
     session.append_message(messages.last().expect("just pushed a message"));
 }
@@ -327,6 +335,7 @@ pub fn apply_question_error(
         tool_calls: vec![],
         tool_call_id: Some(tool_call_id.to_string()),
         images: vec![],
+        thinking: None,
     });
     session.append_message(messages.last().expect("just pushed a message"));
 }
@@ -347,6 +356,7 @@ pub fn apply_signal_parse_error(
         tool_calls: vec![],
         tool_call_id: Some(tool_call_id.to_string()),
         images: vec![],
+        thinking: None,
     });
     session.append_message(messages.last().expect("just pushed a message"));
 }

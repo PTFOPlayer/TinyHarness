@@ -84,11 +84,13 @@ pub async fn execute_init(
                        the code alone: build commands, conventions, gotchas, architecture decisions. \
                        Output ONLY the raw markdown content — no code fences, no explanations before or after.".to_string(),
             tool_calls: vec![], tool_call_id: None, images: vec![],
+            thinking: None,
         },
         Message {
             role: Role::User,
             content: prompt,
             tool_calls: vec![], tool_call_id: None, images: vec![],
+            thinking: None,
         },
     ];
 

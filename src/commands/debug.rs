@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use tinyharness_lib::config::load_settings;
+use tinyharness_lib::config::{load_settings, save_settings};
 use tinyharness_lib::provider::{Message, Role};
 use tinyharness_ui::style::*;
 
@@ -250,6 +250,16 @@ pub fn execute(
 
         writeln!(file, "--- Message {} [{}] ---", i + 1, role_str).unwrap();
 
+        // Thinking/reasoning chain (if present) — shown before content since
+        // the model reasons before producing its answer.
+        if let Some(thinking) = &msg.thinking
+            && !thinking.is_empty()
+        {
+            writeln!(file, "[Thinking]").unwrap();
+            writeln!(file, "{}", thinking).unwrap();
+            writeln!(file).unwrap();
+        }
+
         // Content (may be very long, dump in full)
         writeln!(file, "{}", msg.content).unwrap();
 
@@ -269,6 +279,13 @@ pub fn execute(
         }
 
         writeln!(file).unwrap();
+    }
+
+    // Persist the current show_thinking state so it survives restarts.
+    let mut settings = load_settings();
+    if settings.show_thinking != ctx.show_thinking {
+        settings.show_thinking = ctx.show_thinking;
+        save_settings(&settings);
     }
 
     let _ = writeln!(
@@ -585,6 +602,7 @@ mod tests {
                 }],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             },
             Message::simple(Role::Tool, "file contents here"),
         ];
@@ -626,5 +644,29 @@ mod tests {
         assert!(content.contains("=== Workspace Context ==="));
         assert!(content.contains("=== Pinned Files ==="));
         assert!(content.contains("=== Skills ==="));
+    }
+
+    #[test]
+    fn test_execute_includes_thinking() {
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: "Here is my answer.".to_string(),
+            tool_calls: vec![],
+            tool_call_id: None,
+            images: vec![],
+            thinking: Some("Let me reason about this...".to_string()),
+        }];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("debug-thinking.log");
+        let path_str = path.to_string_lossy().to_string();
+
+        let mut ctx = make_test_ctx();
+        let result = execute(&mut ctx, Some(&path_str), &messages);
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[Thinking]"));
+        assert!(content.contains("Let me reason about this..."));
     }
 }

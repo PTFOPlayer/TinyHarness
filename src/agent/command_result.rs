@@ -138,6 +138,7 @@ pub fn apply_skill_use(
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             });
             session.append_message(messages.last().expect("just pushed a message"));
             ctx.refresh_system_prompt(messages);
@@ -178,6 +179,7 @@ pub fn apply_skill_unload(
                 tool_calls: vec![],
                 tool_call_id: None,
                 images: vec![],
+                thinking: None,
             });
             session.append_message(messages.last().expect("just pushed a message"));
             ctx.refresh_system_prompt(messages);

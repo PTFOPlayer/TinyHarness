@@ -278,6 +278,7 @@ fn create_initial_session(
         tool_calls: vec![],
         tool_call_id: None,
         images: vec![],
+        thinking: None,
     }];
     (sess, msgs)
 }

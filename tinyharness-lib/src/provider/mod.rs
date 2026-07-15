@@ -106,6 +106,11 @@ pub struct Message {
     /// Only meaningful for `User` role messages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageAttachment>,
+    /// Thinking/reasoning chain from the model, captured during streaming
+    /// and persisted for debugging. Not sent to the provider in API requests
+    /// (skipped in serialization for request types; only stored in sessions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 impl Default for Message {
@@ -123,6 +128,7 @@ impl Message {
             tool_calls: vec![],
             tool_call_id: None,
             images: vec![],
+            thinking: None,
         }
     }
 }
