@@ -175,7 +175,7 @@ pub fn build_registry() -> CommandRegistry {
     reg.register_sync_with_usage(
         "/debug",
         "Dump the current conversation context to a log file",
-        "/debug [path]",
+        "/debug [--json] [path]",
         |arg, ctx, msg| crate::commands::debug::execute(ctx, arg, msg),
     );
 
