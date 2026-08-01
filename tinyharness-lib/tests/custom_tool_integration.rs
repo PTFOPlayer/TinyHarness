@@ -28,7 +28,14 @@ async fn custom_tool_end_to_end() {
     let tool = def.build_tool().expect("build_tool should succeed");
     let args = serde_json::json!({"name": "World"});
     let result = tinyharness_lib::tools::tool::execute_tool_call(&tool, &args).await;
-    assert_eq!(result, "Hello, World!");
+    // On Windows, cmd /C doesn't strip single quotes the way sh does,
+    // so the shell-escaped value appears literally in the output.
+    let expected = if cfg!(target_os = "windows") {
+        "Hello, 'World'!"
+    } else {
+        "Hello, World!"
+    };
+    assert_eq!(result, expected);
 }
 
 /// Integration test: custom tools register in ToolManager and appear in tool definitions.
