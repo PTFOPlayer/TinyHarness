@@ -1,5 +1,6 @@
 pub mod config;
 pub mod context;
+pub mod custom_tools;
 pub mod image;
 pub mod mode;
 pub mod provider;
@@ -17,6 +18,10 @@ pub use config::{
     resolve_project_md_files, save_settings,
 };
 pub use context::WorkspaceContext;
+pub use custom_tools::{
+    CustomToolCategory, CustomToolConfig, CustomToolDefinition, CustomToolError, CustomToolManager,
+    ShellCommand,
+};
 pub use image::ImageAttachment;
 pub use mode::AgentMode;
 pub use provider::{

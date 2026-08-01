@@ -14,6 +14,7 @@ use tinyharness_lib::{
     SecretString,
     config::{ProviderKind, Settings, ensure_prompts_initialized, load_settings, save_settings},
     context::WorkspaceContext,
+    custom_tools::CustomToolManager,
     mode::AgentMode,
     provider::{
         Message, Provider, Role, ollama::OllamaProvider,
@@ -577,6 +578,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register_defaults();
+
+    // Load custom tools (shell-command tools configured via custom_tools.json)
+    let custom_tool_manager = CustomToolManager::load();
+    tool_manager.register_custom_tools(custom_tool_manager.custom_tools());
 
     let initial_mode = settings.preferred_mode;
 

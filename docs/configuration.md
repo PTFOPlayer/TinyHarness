@@ -264,6 +264,7 @@ To restore a default, delete the file and restart TinyHarness — it will re-see
 ```
 ~/.config/tinyharness/
 ├── settings.json           Global settings
+├── custom_tools.json       Custom-tools config (shell-command tools)
 ├── prompts/                Customizable system prompt .md files
 │   ├── header.md
 │   ├── casual.md
@@ -283,6 +284,7 @@ To restore a default, delete the file and restart TinyHarness — it will re-see
 
 <project>/.tinyharness/
 ├── config.json             Per-project settings
+├── custom_tools.json       Project custom-tools config (extends global)
 └── skills/                 Project-local skills
     └── <name>/
         └── SKILL.md
