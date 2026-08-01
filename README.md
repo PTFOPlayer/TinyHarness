@@ -8,6 +8,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 
 - **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
 - **Tool System**: 15 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `web_search`, `web_fetch`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, `screenshot`, plus the built-in `read` image loader for multimodal models).
+- **Custom Tools**: Extend TinyHarness with shell-command-based tools the LLM can call — defined in `custom_tools.json` (`~/.config/tinyharness/custom_tools.json` global, `.tinyharness/custom_tools.json` per-project), no Rust code or recompilation required. Supports `{param}` template substitution, `TH_*` env vars, `readonly`/`destructive` categories, and timeouts.
 - **Agent Modes**: Four modes — `casual` (web-only), `planning` (read-only + signals), `agent` (full access), and `research` (web-focused) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
 - **Skills**: Pluggable SKILL.md modules discovered from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`. Invokable by the AI via `invoke_skill` or by the user via `/use <name>`. Supports YAML frontmatter with name, description, compatibility, licensing, and model-invocation controls.
 - **Context Management**: Token estimation with per-model context window sizes (8K–256K), load warnings at 70%/90% thresholds, and cascading conversation compaction via `/compact`.
@@ -360,6 +361,10 @@ tinyharness-lib/src/
 ├── skill.rs              Skill discovery, registry, frontmatter parsing, indexing
 ├── secret.rs             SecretString wrapper for API key redaction (custom Debug, serde support)
 ├── image.rs              Image attachment handling (base64 encoding, dimension detection)
+├── custom_tools/         Custom-tools system — shell-command tools via custom_tools.json
+│   ├── mod.rs            CustomToolManager — load/merge global + project configs
+│   ├── custom_tool.rs    CustomToolDefinition, CustomToolCategory, build_tool()
+│   └── shell.rs          ShellCommand — template substitution, timeout, env vars
 ├── prompts/              Hardcoded default system prompts (header.md, casual.md, planning.md, agent.md, research.md)
 └── tools/                15 tool implementations
     ├── mod.rs            ToolManager with mode-based filtering, signal event parsing

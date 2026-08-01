@@ -215,7 +215,9 @@ The model emits tool calls in XML block format with `tool_calls` and `invoke` el
 
 ## Adding a Custom Tool
 
-While the binary crate registers tools via `ToolManager::register_defaults()`, the `tinyharness-lib` API allows registering additional tools programmatically:
+The easiest way to add custom tools is via the **custom-tools system** — define shell-command-based tools in `custom_tools.json` without writing any Rust code. See the [Custom Tools Guide](custom-tools.md) for details.
+
+For programmatic registration (e.g. in library usage), the `tinyharness-lib` API allows registering tools directly:
 
 ```rust
 use tinyharness_lib::tools::tool::{make_tool, build_string_params_schema, ToolCategory, require_arg};
@@ -233,5 +235,3 @@ let tool = make_tool(
 
 manager.register_tool(tool);
 ```
-
-Custom tools are uncommon — most users extend functionality via skills rather than writing Rust code.
