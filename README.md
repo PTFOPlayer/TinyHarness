@@ -2,8 +2,6 @@
 
 Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM), built-in tool calling, agent skills, and customizable system prompts.
 
-![TinyHarness screenshot](screenshots/image.png)
-
 ## Features
 
 - **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
@@ -14,7 +12,6 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 - **Context Management**: Token estimation with per-model context window sizes (8K–256K), load warnings at 70%/90% thresholds, and cascading conversation compaction via `/compact`.
 - **Session Persistence**: JSONL-based sessions with UUIDs, saved in `~/.local/share/tinyharness/sessions/`. Supports session listing, switching by prefix, renaming, deletion, and auto-save every 5 messages.
 - **Async Streaming**: Built on `tokio` for efficient streaming with all providers. Ctrl+C interrupts generation gracefully.
-- **Experimental TUI**: Split-pane terminal UI with conversation view, sidebar, input bar, and tool output panel. Built from scratch with no external TUI framework. Activate with `--tui`. ⚠️ Experimental — may have rendering issues or incomplete features.
 - **Interactive CLI**: Color-coded terminal interface with 24+ slash commands for session management, configuration, file pinning, image attachment, audit logging, debug diagnostics, and tool control.
 - **Customizable Prompts**: System prompts are seeded from hardcoded defaults on first launch to `~/.config/tinyharness/prompts/` and can be freely edited.
 - **Command Safety**: Smart auto-accept for safe shell commands with prefix matching, deny lists, redirection stripping, and audit logging.
@@ -110,7 +107,7 @@ Connects to `http://127.0.0.1:8000` by default.
 ```bash
 tinyharness --openai-compat --url https://openrouter.ai/api/v1 --api-key <YOUR_KEY>
 ```
-Requires `--url` (no default URL) and an API key. You can also set the `OPENAI_API_KEY` environment variable instead of `--api-key`. Bearer auth is sent on every request. Use `--skip-health-check` if the gateway doesn't expose a `/health` endpoint.
+Requires `--url` (no default URL) and an API key. You can also set the `OPENAI_API_KEY` environment variable instead of `--api-key`. Bearer auth is sent on every request. A failed health check only warns — use `--skip-health-check` if the gateway doesn't expose a `/health` endpoint.
 
 **Sockudo** (⚠️ highly experimental):
 ```bash
@@ -141,12 +138,6 @@ tinyharness --prompt "Explain the architecture"
 ```
 Sends an initial prompt and then drops into the interactive loop for follow-up turns.
 
-**Terminal UI (experimental)**:
-```bash
-tinyharness --tui
-```
-Launches a split-pane TUI with conversation view, sidebar, input bar, and tool output panel. Built from scratch using raw ANSI escape sequences — no external TUI framework. This is experimental and may have rendering issues or incomplete features.
-
 **Interactive setup**:
 ```bash
 tinyharness --config
@@ -164,11 +155,10 @@ Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when 
 | `--sockudo` | Use the Sockudo AI Transport provider (⚠️ highly experimental) |
 | `-u`, `--url <url>` | Custom base URL for the provider |
 | `--api-key <key>` | Bearer token for `--openai-compat` (use `-` to clear saved key) |
-| `--skip-health-check` | Skip provider health check at startup |
+| `--skip-health-check` | Skip provider health check at startup (a failure is otherwise just a warning) |
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `--config` | Run interactive provider setup, then exit |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
-| `--tui` | Launch the experimental terminal UI (split-pane TUI) |
 
 ## Agent Modes
 
@@ -386,36 +376,19 @@ tinyharness-lib/src/
 
 ### UI library (`tinyharness-ui/`)
 
-Terminal UI abstractions — reusable output formatting, diff display, confirmation prompts, and the experimental TUI.
+Terminal UI abstractions — reusable output formatting, diff display, and confirmation prompts.
 
 ```
 tinyharness-ui/src/
 ├── lib.rs               Module declarations
 ├── output.rs            Structured output writer (stdout/stderr abstraction)
 ├── style.rs             ANSI color constants (BOLD, CYAN, RED, BG_TOOL, SPINNER_FRAMES, etc.)
-├── ui/
-│   ├── mod.rs            Module declarations
-│   ├── confirm.rs        Tool call confirmation prompts (Yes/No/Auto-accept)
-│   ├── diff.rs           Unified diff display
-│   ├── input.rs          CommandHelper for rustyline tab-completion
-│   └── wrap.rs           Word-wrapped output with ANSI-aware line filling
-└── tui/                  ⚠️ Experimental TUI subsystem
-    ├── mod.rs             TUI module declarations + agent integration types (TuiAgentEvent, TuiUserAction)
-    ├── app.rs             Main TUI application loop, widget layout, event dispatch
-    ├── backend.rs         Backend trait (StdioBackend + TestBackend for testing)
-    ├── cell.rs            Color/style representation for the screen buffer (raw ANSI, no framework)
-    ├── event.rs           Event system (keyboard, mouse, paste)
-    ├── layout.rs          Rect/constraint-based layout (inspired by ratatui, from scratch)
-    ├── screen.rs          Screen buffer with differential rendering, Unicode width support (CJK/combining marks)
-    ├── terminal.rs        Raw terminal control, alternate screen, signal handling
-    ├── widget.rs          Widget trait, Action enum, shared style helpers
-    └── widgets/
-        ├── conversation.rs Conversation pane (streaming text, thinking, tool calls)
-        ├── input_bar.rs   Multi-line input with history, word-wrap, paste
-        ├── sidebar.rs     Context panel (files, tools, mode, model info)
-        ├── spinner.rs     Streaming indicator
-        ├── status_bar.rs  Top bar (mode, model, token count)
-        └── tool_output.rs Tool result viewer
+└── ui/
+    ├── mod.rs            Module declarations
+    ├── confirm.rs        Tool call confirmation prompts (Yes/No/Auto-accept)
+    ├── diff.rs           Unified diff display
+    ├── input.rs          CommandHelper for rustyline tab-completion
+    └── wrap.rs           Word-wrapped output with ANSI-aware line filling
 ```
 
 ### Binary crate (`src/`)
@@ -428,10 +401,9 @@ CLI application — argument parsing, agent loop, slash commands, tool dispatch,
 
 ```
 src/
-├── main.rs               Entry point, CLI parsing (clap), provider creation, session init, TUI launch
+├── main.rs               Entry point, CLI parsing (clap), provider creation, session init
 ├── agent/
 │   ├── mod.rs            Main interaction loop, streaming response display, spinner, thinking chain
-│   ├── tui_loop.rs       Background agent loop for TUI mode (communicates via channels)
 │   ├── tools.rs          Tool call dispatch, confirmation, generic execution, signal handlers
 │   ├── safety.rs         Shell command safety checker (prefix + deny list + redirection stripping)
 │   ├── setup.rs          Interactive provider setup (--config), URL prompting

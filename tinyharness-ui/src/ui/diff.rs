@@ -464,8 +464,7 @@ pub fn show_edit_diff<W: Write>(
     Ok(())
 }
 
-/// Render a [`DiffLine`] sequence into a plain-text string (no ANSI codes),
-/// suitable for display in the TUI cell-based renderer.
+/// Render a [`DiffLine`] sequence into a plain-text string (no ANSI codes).
 ///
 /// Returns a string with lines prefixed by `  ` (keep), `- ` (remove), or `+ ` (add),
 /// and line numbers if requested.

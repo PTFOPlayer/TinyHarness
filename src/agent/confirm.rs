@@ -1,11 +1,10 @@
-// ── Shared Tool Confirmation Logic ─────────────────────────────────────────
+// ── Tool Confirmation Logic ────────────────────────────────────────────────
 //
-// The decision tree for whether a tool call is approved is identical in both
-// CLI and TUI loops. The only difference is what happens at the "ask user"
-// step — CLI uses an interactive terminal prompt, TUI sends a channel event.
+// The decision tree for whether a tool call is approved lives here. At the
+// "ask user" step, the CLI uses an interactive terminal prompt.
 //
-// This module extracts the pure decision logic so both loops share the same
-// branching, and each only needs to implement the I/O part.
+// This module extracts the pure decision logic so the loop only needs to
+// implement the I/O part.
 
 use tinyharness_lib::config::AutoAcceptMode;
 use tinyharness_lib::provider::ToolCall;

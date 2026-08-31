@@ -67,7 +67,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>`, `OPENAI_API_KEY` env var, or `--config` interactive setup. Use `--api-key -` to clear the saved key |
-| `skip_health_check` | bool | `false` | Skip the provider health check at startup. Useful for gateways without a `/health` endpoint. Set via `--skip-health-check` |
+| `skip_health_check` | bool | `false` | Skip the provider health check at startup. A failed health check only warns and doesn't block startup; errors surface on the first request. Set via `--skip-health-check` to suppress the warning |
 
 **API key resolution precedence:**
 1. `--api-key <key>` CLI flag (highest — also persists to settings)
@@ -305,11 +305,10 @@ All CLI flags override settings:
 | `--sockudo` | `last_provider = "sockudo"` (⚠️ experimental) |
 | `-u`, `--url <url>` | `last_provider_url = <url>` |
 | `--api-key <key>` | `openai_compat_api_key = <key>` (only affects `--openai-compat`; use `-` to clear) |
-| `--skip-health-check` | Skips provider health check at startup |
+| `--skip-health-check` | Skips provider health check at startup (a failed health check is otherwise a warning, not fatal) |
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
 | `--config` | Runs interactive setup, saves, exits |
 | `-p`, `--prompt <text>` | Sends initial prompt then enters interactive mode |
-| `--tui` | Launch the experimental terminal UI (split-pane TUI) |
 
 ---
 

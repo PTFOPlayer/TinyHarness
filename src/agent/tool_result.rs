@@ -1,6 +1,6 @@
-// ── Shared Tool Result Types ───────────────────────────────────────────────
+// ── Tool Result Types ──────────────────────────────────────────────────────
 //
-// Generic tool result struct and batching logic shared between CLI and TUI loops.
+// Generic tool result struct and batching logic for the agent loop.
 
 use tinyharness_lib::{image::ImageAttachment, provider::Message};
 
@@ -21,7 +21,7 @@ pub fn ensure_tool_call_ids(tool_calls: &mut [tinyharness_lib::provider::ToolCal
 
 /// Result from executing a generic (non-signal) tool call.
 ///
-/// Used by both CLI and TUI agent loops to track tool execution results
+/// Used by the agent loop to track tool execution results
 /// before batching them into a single `Role::Tool` message.
 pub struct GenericToolResult {
     /// Formatted content for the conversation message.

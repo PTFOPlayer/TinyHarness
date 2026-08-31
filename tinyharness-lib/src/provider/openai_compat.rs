@@ -61,6 +61,12 @@ impl OpenAiCompatInner {
             }
             match req.send().await {
                 Ok(resp) if resp.status().is_success() => Ok(()),
+                // A 404 usually means the server simply has no /health
+                // endpoint. Don't dump its response body (often a large HTML
+                // or JSON error page) into the warning.
+                Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
+                    Err("Server returned 404 (no /health endpoint)".to_string())
+                }
                 Ok(resp) => Err(format!(
                     "Server returned {}: {}",
                     resp.status().as_u16(),
