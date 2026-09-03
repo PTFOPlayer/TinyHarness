@@ -1,13 +1,11 @@
-// ── Shared Signal Handling ──────────────────────────────────────────────────
+// ── Signal Handling ─────────────────────────────────────────────────────────
 //
 // Signal tools (switch_mode, question, auto_compact, invoke_skill) produce
-// structured side-effects on the conversation state. Both the CLI and TUI loops
-// handle the same state mutations — the only difference is how they report
-// results to the user.
+// structured side-effects on the conversation state. The agent loop applies
+// these mutations and reports the results to the user.
 //
 // This module extracts the business logic into pure functions that return
-// `SignalResult`, so both loops can share the mutation code and only differ
-// in rendering.
+// `SignalResult`, so the mutation code is independent of rendering.
 
 use tinyharness_lib::{
     mode::AgentMode,
@@ -67,8 +65,8 @@ pub enum SignalResult {
 /// - Updates `CommandContext` state (mode, skills, compaction token usage)
 /// - Refreshes the system prompt when needed
 ///
-/// The caller is responsible for rendering the result to the user (CLI: ANSI
-/// output; TUI: channel events).
+/// The caller is responsible for rendering the result to the user (ANSI
+/// output).
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_signal_event(
     event: &SignalEvent,
@@ -274,7 +272,7 @@ pub async fn handle_signal_event(
 /// Apply the user's answer to a question signal event.
 ///
 /// This is called after the caller has obtained the user's answer through
-/// its own I/O mechanism (CLI prompt or TUI channel).
+/// its own I/O mechanism (CLI prompt).
 pub fn apply_question_answer(
     question: &str,
     answer: &str,

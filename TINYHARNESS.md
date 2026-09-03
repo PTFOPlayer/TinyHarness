@@ -1,6 +1,6 @@
 # TinyHarness
 
-Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM, OpenAI-compatible gateways, and experimental Sockudo AI Transport), built-in tool calling, and an experimental terminal UI (TUI).
+Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama, llama.cpp, vLLM, OpenAI-compatible gateways, and experimental Sockudo AI Transport) and built-in tool calling.
 
 ## Commands
 
@@ -11,14 +11,13 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 - Formatting: `cargo fmt --all`
 - Install: `make install` (builds release + copies to `~/.local/bin`)
 - Run: `cargo run` (Ollama default) or `cargo run -- --llama-cpp` / `--vllm` / `--openai-compat --url <url> --api-key <key>` / `--sockudo`
-- TUI (experimental): `cargo run -- --tui`
 
 ## Workspace Structure
 
 Three crates in a Cargo workspace:
 
 - **`tinyharness-lib`** — Core library: providers, tools, sessions, context, skills, tokens. No terminal I/O.
-- **`tinyharness-ui`** — UI library: ANSI output, confirmation prompts, diff display, command input, experimental TUI subsystem.
+- **`tinyharness-ui`** — UI library: ANSI output, confirmation prompts, diff display, command input.
 - **`TinyHarness`** — Binary CLI: agent loop, slash commands, tool dispatch, setup.
 
 ### Key `tinyharness-lib` modules
@@ -36,7 +35,6 @@ Three crates in a Cargo workspace:
 ### Binary crate structure
 
 - `src/agent/` — Agent loop (`mod.rs`), tool execution (`tools.rs`), safety checks (`safety.rs`), display (`display.rs`), multi-line input (`input.rs`), provider setup (`setup.rs`), confirmation prompts (`confirm.rs`), signal tool handling (`signal.rs`), tool result formatting (`tool_result.rs`), command result types (`command_result.rs`)
-- `src/agent/tui_loop.rs` — Background agent loop for TUI mode (communicates with TUI via mpsc channels)
 - `src/commands/` — 24+ slash commands (mode, model, sessions, compact, init, context, files, image, skill, settings, help, debug, project-settings, autocompact, etc.), `CommandRegistry` and `async_command!` macro
 
 ## Code Conventions
@@ -71,14 +69,14 @@ Three crates in a Cargo workspace:
 ## Testing
 
 - `cargo test --workspace` runs all tests
-- `tinyharness-lib` has good coverage (~101 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has ~99 tests + 13 ignored (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests (see `todo/01-testing-gaps.md`)
 - Use `tempfile` for test isolation; tool tests must not touch the real filesystem
 - Run specific test: `cargo test <test_name>`
 - Run per crate: `cargo test -p tinyharness-lib`, `cargo test -p TinyHarness`, `cargo test -p tinyharness-ui`
 
 ## Important Rules & Gotchas
 
-- **Provider startup**: All providers run a health check (Ollama calls `list_local_models`). If saved model is unavailable, auto-select picks the first available with a warning. Use `--skip-health-check` to bypass (useful for gateways without `/health`). `--openai-compat` requires `--api-key` (or `OPENAI_API_KEY` env var) and `--url`.
+- **Provider startup**: All providers run a health check (Ollama calls `list_local_models`). A failed health check is a non-fatal warning — the agent starts anyway and errors surface on the first request. Use `--skip-health-check` to skip the check entirely. If saved model is unavailable, auto-select picks the first available with a warning. `--openai-compat` requires `--api-key` (or `OPENAI_API_KEY` env var) and `--url`.
 - **Ollama specifics**: Own raw SSE parser (not ollama-rs streaming) to handle native and OpenAI-compatible formats; captures Gemini `thought_signature` from tool responses and re-injects them; fixes serialization quirks (lowercases tool type, injects `name` in tool results, synthesizes `tool_call_id` when missing for OpenAI-compatible servers).
 - **System prompts**: Assembled from `header.md` + `<mode>.md` for Agent/Planning/Research; Casual is self-contained. Prompts are refreshed on mode switch, file pinning changes, skill activation, and `/refresh`.
 - **Command safety** (`src/agent/safety.rs`): Prefix matching with word boundaries, deny list priority, strips redirections before matching; rejects `;`, `&`, `|`, `$()`, backticks, newlines. Redirections like `2>&1` are auto-accepted if base command is safe.

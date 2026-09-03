@@ -62,23 +62,12 @@ tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rust
 │   ├── mode.rs               AgentMode enum, prompt assembly
 │   └── prompts/              Hardcoded default system prompts (.md files)
 │
-tinyharness-ui/               UI library — terminal output abstractions + experimental TUI
+tinyharness-ui/               UI library — terminal output abstractions
 ├── src/
 │   ├── lib.rs                Module declarations
 │   ├── output.rs             Structured output writer
 │   ├── style.rs              ANSI color constants, spinner frames
-│   ├── ui/                   confirm.rs, diff.rs, input.rs, wrap.rs
-│   └── tui/                  ⚠️ Experimental TUI subsystem
-│       ├── mod.rs             Agent integration types (TuiAgentEvent, TuiUserAction)
-│       ├── app.rs             Main TUI application loop
-│       ├── backend.rs         Backend trait (StdioBackend + TestBackend)
-│       ├── cell.rs            Color/style for screen buffer (raw ANSI, no framework)
-│       ├── event.rs           Keyboard/mouse/paste events
-│       ├── layout.rs          Constraint-based layout
-│       ├── screen.rs          Differential rendering screen buffer with Unicode width support
-│       ├── terminal.rs        Raw terminal control, alternate screen
-│       ├── widget.rs          Widget trait, Action enum
-│       └── widgets/           conversation, input_bar, sidebar, spinner, status_bar, tool_output
+│   └── ui/                   confirm.rs, diff.rs, input.rs, wrap.rs
 │
 docs/examples/                Example code (not part of Cargo workspace)
 └── sockudo-worker/           ⚠️ Example Sockudo AI Transport worker bridge
@@ -97,7 +86,7 @@ docs/                         User-facing documentation
 ### Crate Rules
 
 - **`tinyharness-lib`**: Must not use terminal I/O, ANSI escape codes, or `rustyline`. Uses `tracing` for logging.
-- **`tinyharness-ui`**: Terminal UI abstractions — ANSI colors, confirmation prompts, diff display, word wrapping. Includes an experimental TUI subsystem (`tui/` module) built from scratch with raw ANSI escape sequences (no ratatui/crossterm). The TUI is feature-gated behind the `tui` Cargo feature.
+- **`tinyharness-ui`**: Terminal UI abstractions — ANSI colors, confirmation prompts, diff display, word wrapping.
 - **`src/` (binary)**: Wires everything together. Handles I/O, user interaction, and the agent loop.
 
 ---
@@ -199,7 +188,7 @@ Use `serde` + `schemars` for serialization and JSON Schema generation:
 
 - Use `tempfile` for test isolation — tool tests must not touch the real filesystem
 - Test modules go inline: `#[cfg(test)] mod tests { ... }`
-- `tinyharness-lib` has good coverage (~101 tests); `tinyharness-ui` has extensive coverage (~325 tests, including TUI rendering, Unicode width, scroll/clipping, and overflow tests); binary crate has ~99 tests + 13 ignored (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests (see `todo/01-testing-gaps.md`)
 
 ### Tool Categories
 

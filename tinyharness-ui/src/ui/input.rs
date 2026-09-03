@@ -50,6 +50,12 @@ impl Validator for CommandHelper {
     }
 }
 
+impl Default for CommandHelper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandHelper {
     /// Create a `CommandHelper` with no command data (no completions or hints).
     pub fn new() -> Self {

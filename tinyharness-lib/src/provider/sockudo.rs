@@ -533,6 +533,11 @@ impl Provider for SockudoProvider {
         Box::pin(async move {
             match client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => Ok(()),
+                // 404 = no such endpoint; skip the response body (often a
+                // large HTML/JSON error page).
+                Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err(format!(
+                    "Sockudo health check failed: HTTP 404 (no endpoint at {url})"
+                )),
                 Ok(resp) => Err(format!(
                     "Sockudo health check failed: HTTP {}: {}",
                     resp.status().as_u16(),

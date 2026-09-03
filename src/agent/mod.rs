@@ -7,7 +7,6 @@ pub mod setup;
 pub mod signal;
 pub mod tool_result;
 pub mod tools;
-pub mod tui_loop;
 
 use std::{
     error::Error,

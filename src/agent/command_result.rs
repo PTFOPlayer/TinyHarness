@@ -1,11 +1,11 @@
-// ── Shared Command Result Handling ─────────────────────────────────────────
+// ── Command Result Handling ────────────────────────────────────────────────
 //
-// When slash commands return `CommandResult` variants, both CLI and TUI loops
-// need to apply the same state mutations (session switches, skill activation,
-// etc.). This module extracts that shared logic.
+// When slash commands return `CommandResult` variants, the agent loop needs
+// to apply the same state mutations (session switches, skill activation,
+// etc.). This module extracts that logic.
 //
 // Each handler returns a `CommandResultInfo` describing what happened, so
-// callers can render appropriate output for their UI.
+// the caller can render appropriate output.
 
 use tinyharness_lib::{
     context::WorkspaceContext,
@@ -17,7 +17,7 @@ use crate::commands::CommandContext;
 
 /// Information about what happened when a command result was applied.
 ///
-/// Callers use this to render appropriate output (CLI: ANSI text, TUI: events).
+/// Callers use this to render appropriate output (ANSI text).
 #[derive(Debug)]
 pub struct CommandResultInfo {
     /// A human-readable summary of what happened.
