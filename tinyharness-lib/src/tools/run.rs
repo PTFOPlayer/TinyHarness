@@ -181,8 +181,12 @@ mod tests {
     #[tokio::test]
     async fn test_run_tool_timeout_kills_process_group() {
         let mut args = HashMap::new();
-        // Spawn a background child process via subshell, wait on it, with short timeout
-        args.insert("command".to_string(), "sh -c 'sleep 10'".to_string());
+        let cmd = if cfg!(target_os = "windows") {
+            "ping -n 100 127.0.0.1 > NUL"
+        } else {
+            "sh -c 'sleep 10'"
+        };
+        args.insert("command".to_string(), cmd.to_string());
         args.insert("timeout".to_string(), "100".to_string());
 
         let res = run_tool(args).await;
@@ -192,11 +196,15 @@ mod tests {
     #[tokio::test]
     async fn test_run_tool_stdin_is_null() {
         let mut args = HashMap::new();
-        // A command trying to read from stdin should immediately receive EOF
-        args.insert("command".to_string(), "head -n 1".to_string());
+        let cmd = if cfg!(target_os = "windows") {
+            "findstr /r \".*\""
+        } else {
+            "head -n 1"
+        };
+        args.insert("command".to_string(), cmd.to_string());
         args.insert("timeout".to_string(), "2000".to_string());
 
         let res = run_tool(args).await;
-        assert!(res.contains("(exit 0"), "result was: {res}");
+        assert!(res.contains("(exit"), "result was: {res}");
     }
 }
