@@ -6,6 +6,21 @@ use tokio::io::AsyncReadExt;
 use crate::extract_args;
 use crate::tools::tool::{ToolCategory, build_string_params_schema, make_tool};
 
+/// Terminate a child process and, on Unix, its entire process group.
+pub(crate) async fn kill_child(mut child: tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(id) = child.id() {
+            // Send SIGKILL to the process group (-pgid)
+            unsafe {
+                libc::kill(-(id as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await; // reap zombie process
+}
+
 pub fn run_tool_entry() -> crate::tools::tool::Tool {
     make_tool(
         "run",
@@ -59,8 +74,12 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
         cmd.current_dir(dir);
     }
 
-    // Start the command
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    // Start the command non-interactively with stdin disconnected
     let mut child = match cmd
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -141,18 +160,51 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
         }
         Ok(Err(e)) => {
             // Error while waiting for the command
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            kill_child(child).await;
             format!("Error: Failed to wait for command: {}", e)
         }
         Err(_elapsed) => {
-            // Command timed out — kill it
-            let _ = child.kill().await;
-            let _ = child.wait().await; // reap zombie process
+            // Command timed out — kill the process and its child processes
+            kill_child(child).await;
             format!(
                 "Error: Command timed out after {}ms\nCommand: {}\nConsider increasing the timeout or simplifying the command.",
                 timeout_ms, command
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_run_tool_timeout_kills_process_group() {
+        let mut args = HashMap::new();
+        let cmd = if cfg!(target_os = "windows") {
+            "ping -n 100 127.0.0.1 > NUL"
+        } else {
+            "sh -c 'sleep 10'"
+        };
+        args.insert("command".to_string(), cmd.to_string());
+        args.insert("timeout".to_string(), "100".to_string());
+
+        let res = run_tool(args).await;
+        assert!(res.contains("timed out after 100ms"), "result was: {res}");
+    }
+
+    #[tokio::test]
+    async fn test_run_tool_stdin_is_null() {
+        let mut args = HashMap::new();
+        let cmd = if cfg!(target_os = "windows") {
+            "findstr /r \".*\""
+        } else {
+            "head -n 1"
+        };
+        args.insert("command".to_string(), cmd.to_string());
+        args.insert("timeout".to_string(), "2000".to_string());
+
+        let res = run_tool(args).await;
+        assert!(res.contains("(exit"), "result was: {res}");
     }
 }
