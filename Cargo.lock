@@ -2194,6 +2194,7 @@ dependencies = [
  "futures-util",
  "glob",
  "hmac",
+ "libc",
  "md5",
  "ollama-rs",
  "regex",

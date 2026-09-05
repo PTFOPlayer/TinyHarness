@@ -164,7 +164,11 @@ impl ShellCommand {
             cmd.current_dir(cwd);
         }
 
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let mut child = cmd
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -193,13 +197,11 @@ impl ShellCommand {
                 }
             }
             Ok(Err(e)) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                crate::tools::run::kill_child(child).await;
                 Err(format!("Failed to wait for command: {}", e))
             }
             Err(_) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                crate::tools::run::kill_child(child).await;
                 Err(format!(
                     "Command timed out after {}s: {}",
                     self.timeout_secs, rendered
