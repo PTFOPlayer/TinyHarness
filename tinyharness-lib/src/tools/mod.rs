@@ -318,7 +318,7 @@ fn check_tool_args_sandboxed(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use crate::sandbox::Sandbox;

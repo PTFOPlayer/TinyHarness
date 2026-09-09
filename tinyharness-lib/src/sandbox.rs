@@ -166,7 +166,10 @@ impl Sandbox {
     }
 }
 
-#[cfg(test)]
+// Sandbox is a Linux-only feature (--sandbox exits early on other
+// platforms), so its tests only run there. They also rely on POSIX path
+// semantics that don't hold on Windows (8.3 short names, `\\?\` prefixes).
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
