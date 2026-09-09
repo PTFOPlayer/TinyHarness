@@ -98,6 +98,7 @@ struct Args {
     /// sandbox is rejected as an error — even when auto-accept is enabled.
     /// In sandbox mode the `run` tool always requires explicit confirmation,
     /// since shell commands cannot be statically contained.
+    /// Linux only: on Windows and macOS this flag is rejected at startup.
     #[arg(long)]
     sandbox: bool,
 }
@@ -317,6 +318,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let args = Args::parse();
 
+    // ── --sandbox is Linux-only: reject early on Windows/macOS ────────────
+    #[cfg(not(target_os = "linux"))]
+    if args.sandbox {
+        let mut err_out = Output::stderr();
+        let _ = writeln!(
+            err_out,
+            "{BOLD}Error:{RESET} --sandbox is a Linux-only feature and is not available on this platform.",
+        );
+        std::process::exit(1);
+    }
+
     // -- Handle --config: interactive provider setup, then exit ───────────────
     if args.config {
         let mut out = Output::stdout();
@@ -453,6 +465,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tool_manager.register_custom_tools(custom_tool_manager.custom_tools());
 
     // ── Sandbox mode: confine path-based tools to the workspace root ──────
+    // Linux-only feature — on Windows and macOS the flag was already
+    // rejected right after arg parsing.
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_active = false;
+
+    #[cfg(target_os = "linux")]
     let sandbox_active = if args.sandbox {
         match tinyharness_lib::sandbox::Sandbox::new(std::env::current_dir().unwrap_or_default()) {
             Ok(sandbox) => {

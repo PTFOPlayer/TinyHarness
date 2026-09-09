@@ -159,7 +159,7 @@ Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when 
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `--config` | Run interactive provider setup, then exit |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
-| `--sandbox` | Restrict path-based tools to the current directory; `run` always requires confirmation |
+| `--sandbox` | Restrict path-based tools to the current directory; `run` always requires confirmation (Linux only) |
 
 ## Agent Modes
 
@@ -481,13 +481,15 @@ TinyHarness grants LLMs the ability to interact with your filesystem through too
 
 The `run` tool can never be auto-accepted — even in `all` mode — unlike `write` and `edit`. Safe commands (e.g., `ls`, `git status`) can be auto-accepted when `/autoaccept` is set to `safe` or `all`.
 
-### Sandbox mode (`--sandbox`)
+### Sandbox mode (`--sandbox`, Linux only)
 
 Start TinyHarness with `--sandbox` to confine the agent to the current working directory:
 
 ```bash
 tinyharness --sandbox
 ```
+
+On Windows and macOS the flag is rejected at startup with an error: `--sandbox is a Linux-only feature`.
 
 In this mode:
 - **Path tools are confined**: `ls`, `read`, `write`, `edit`, `grep`, and `glob` reject any path outside the workspace root with a sandbox violation error. This check happens at the `ToolManager` level before execution, so it applies **even when auto-accept is enabled** (`/autoaccept all` or the per-turn `a` key).
