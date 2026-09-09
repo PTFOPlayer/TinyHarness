@@ -159,6 +159,7 @@ Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when 
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `--config` | Run interactive provider setup, then exit |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
+| `--sandbox` | Restrict path-based tools to the current directory; `run` always requires confirmation |
 
 ## Agent Modes
 
@@ -479,6 +480,22 @@ TinyHarness grants LLMs the ability to interact with your filesystem through too
 - **Accountability**: You assume full responsibility for all operations performed by the AI. Ensure you have backups.
 
 The `run` tool can never be auto-accepted — even in `all` mode — unlike `write` and `edit`. Safe commands (e.g., `ls`, `git status`) can be auto-accepted when `/autoaccept` is set to `safe` or `all`.
+
+### Sandbox mode (`--sandbox`)
+
+Start TinyHarness with `--sandbox` to confine the agent to the current working directory:
+
+```bash
+tinyharness --sandbox
+```
+
+In this mode:
+- **Path tools are confined**: `ls`, `read`, `write`, `edit`, `grep`, and `glob` reject any path outside the workspace root with a sandbox violation error. This check happens at the `ToolManager` level before execution, so it applies **even when auto-accept is enabled** (`/autoaccept all` or the per-turn `a` key).
+- **Path resolution is robust**: `..` traversal, absolute paths, and symlink escapes are all detected (paths are canonicalized against the sandbox root).
+- **`run` always needs confirmation**: shell commands cannot be statically contained, so the `run` tool always prompts for explicit approval in sandbox mode, regardless of auto-accept settings. Its explicit `cwd` argument is also checked against the sandbox root.
+- **The model is informed**: the system prompt includes a sandbox notice so the model avoids wasting turns on out-of-bounds paths.
+
+Note: `run` commands that you approve can still touch anything the user account can reach — `--sandbox` constrains the tool layer, not the OS. For full isolation, combine it with a container/VM.
 
 ## Project Instructions (TINYHARNESS.md)
 

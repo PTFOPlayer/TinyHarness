@@ -92,6 +92,14 @@ struct Args {
     /// interactive loop for follow-up turns.
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
+
+    /// Restrict all file-access tools (ls, read, write, edit, grep, glob) to
+    /// the current working directory. Any attempt to touch paths outside the
+    /// sandbox is rejected as an error — even when auto-accept is enabled.
+    /// In sandbox mode the `run` tool always requires explicit confirmation,
+    /// since shell commands cannot be statically contained.
+    #[arg(long)]
+    sandbox: bool,
 }
 
 /// Determine the provider kind from CLI flags or saved settings.
@@ -444,6 +452,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let custom_tool_manager = CustomToolManager::load();
     tool_manager.register_custom_tools(custom_tool_manager.custom_tools());
 
+    // ── Sandbox mode: confine path-based tools to the workspace root ──────
+    let sandbox_active = if args.sandbox {
+        match tinyharness_lib::sandbox::Sandbox::new(std::env::current_dir().unwrap_or_default()) {
+            Ok(sandbox) => {
+                let mut err_out = Output::stderr();
+                let _ = writeln!(
+                    err_out,
+                    "{BOLD}{GREEN}Sandbox enabled:{RESET} file access is restricted to {CYAN}{}{RESET}",
+                    sandbox.root().display(),
+                );
+                let _ = writeln!(
+                    err_out,
+                    "{DIM}  The `run` tool will always require confirmation in sandbox mode.{RESET}",
+                );
+                tool_manager.set_sandbox(sandbox);
+                true
+            }
+            Err(e) => {
+                let mut err_out = Output::stderr();
+                let _ = writeln!(
+                    err_out,
+                    "{BOLD}Error:{RESET} --sandbox could not be enabled: {e}"
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        false
+    };
+
     let initial_mode = settings.preferred_mode;
 
     let provider_str = provider_kind.to_string();
@@ -513,6 +551,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ctx.current_mode = initial_mode;
     ctx.show_thinking = settings.show_thinking;
     ctx.session_id = Some(session.id().to_string());
+    ctx.sandbox_active = sandbox_active;
+
+    // Refresh the system prompt so sandbox mode is reflected in it (covers
+    // both freshly-created and resumed sessions).
+    if sandbox_active {
+        ctx.refresh_system_prompt(&mut messages);
+    }
 
     // ── CLI mode ──────────────────────────────────────────────────────────
     run_agent_loop(

@@ -30,6 +30,7 @@ Three crates in a Cargo workspace:
 - `skill.rs` — Skill discovery from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`
 - `mode.rs` — Agent modes with `.md` system prompts
 - `secret.rs` — `SecretString` wrapper for API key redaction (custom `Debug` impl, serde support)
+- `sandbox.rs` — `Sandbox`: canonicalized-root path containment (lexical `..` normalization + symlink resolution), used by `--sandbox`
 - `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType, AutoAcceptMode (off/safe/all)
 
 ### Binary crate structure
@@ -81,6 +82,7 @@ Three crates in a Cargo workspace:
 - **System prompts**: Assembled from `header.md` + `<mode>.md` for Agent/Planning/Research; Casual is self-contained. Prompts are refreshed on mode switch, file pinning changes, skill activation, and `/refresh`.
 - **Command safety** (`src/agent/safety.rs`): Prefix matching with word boundaries, deny list priority, strips redirections before matching; rejects `;`, `&`, `|`, `$()`, backticks, newlines. Redirections like `2>&1` are auto-accepted if base command is safe.
 - **Confirmation**: `run` tool cannot be auto-accepted even with 'a' (auto-accept mode); only `write` and `edit` can. Auto-accept has three modes: `off`, `safe` (read-only commands), `all` (all destructive tools except `run`).
+- **Sandbox mode** (`--sandbox`): Path-based tools (ls/read/write/edit/grep/glob) are confined to the workspace root by `ToolManager::execute_tool_call` (checked *before* execution, so it beats auto-accept). `run`'s explicit `cwd` is checked too, and in sandbox mode `run` + custom destructive tools always need confirmation (`decide_tool_confirmation` in `src/agent/confirm.rs`, `sandbox_active` param). Sandbox state lives on `CommandContext.sandbox_active`; the system prompt gets a "Sandbox Mode" notice via `build_system_prompt`.
 - **Compaction**: `/compact` uses single-pass for ≤200 intermediate messages, cascading (chunk+merge) for larger sessions.
 - **Context warnings**: Load warnings at 70%/90% thresholds based on last known token count (estimation).
 - **Session files**: JSONL (metadata line first, then message lines); malformed lines silently skipped on load; stored in `~/.local/share/tinyharness/sessions/`.
