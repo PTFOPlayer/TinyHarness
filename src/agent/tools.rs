@@ -132,6 +132,7 @@ pub async fn handle_tool_calls<W: Write>(
             &safe_commands,
             &denied_commands,
             needs_confirmation,
+            ctx.sandbox_active,
         );
 
         let (approved, auto_accepted) = match decision {

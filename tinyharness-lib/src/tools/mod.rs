@@ -15,6 +15,7 @@ pub mod write;
 
 use crate::mode::AgentMode;
 use crate::provider::ToolDefinition;
+use crate::sandbox::Sandbox;
 use crate::tools::tool::{Tool, ToolCategory};
 
 /// Events emitted by signal-category tools that the caller must interpret.
@@ -39,11 +40,33 @@ pub enum SignalEvent {
 #[derive(Default)]
 pub struct ToolManager {
     tools: Vec<Tool>,
+    /// When set, path-based tools are confined to this sandbox root.
+    sandbox: Option<Sandbox>,
 }
 
 impl ToolManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable sandboxing: all path-based tools (`ls`, `read`, `write`,
+    /// `edit`, `grep`, `glob`) are confined to the sandbox root, and the
+    /// `run` tool's explicit `cwd` is checked against it.
+    pub fn set_sandbox(&mut self, sandbox: Sandbox) {
+        self.sandbox = Some(sandbox);
+    }
+
+    /// The active sandbox, if any.
+    pub fn sandbox(&self) -> Option<&Sandbox> {
+        self.sandbox.as_ref()
+    }
+
+    /// If a sandbox is active and this tool call would access a path outside
+    /// it, return the violation error message. Returns `None` if the call is
+    /// allowed (or no sandbox is active).
+    pub fn sandbox_check(&self, tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
+        let sandbox = self.sandbox.as_ref()?;
+        check_tool_args_sandboxed(sandbox, tool_name, arguments)
     }
 
     /// Register all built-in tools.
@@ -232,10 +255,230 @@ impl ToolManager {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> String {
+        // Sandbox enforcement: reject any tool call that would touch a path
+        // outside the sandbox root. This happens before the tool handler runs,
+        // so it applies regardless of auto-accept mode.
+        if let Some(error) = self.sandbox_check(tool_name, arguments) {
+            return error;
+        }
+
         if let Some(tool) = self.tools.iter().find(|t| t.name == tool_name) {
             tool::execute_tool_call(tool, arguments).await
         } else {
             format!("Error: Tool '{}' not found", tool_name)
         }
+    }
+}
+
+/// Enforce sandbox containment for a tool call's arguments.
+///
+/// Path-bearing tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`) have
+/// their path/pattern arguments checked against the sandbox root. The `run`
+/// tool's explicit `cwd` (if any) is also checked; arbitrary command content
+/// cannot be statically sandboxed, but shell commands inherit the sandboxed
+/// process's CWD for relative paths, and the confirmation layer still applies.
+///
+/// Returns `Some(error)` to block the call, or `None` to allow it.
+fn check_tool_args_sandboxed(
+    sandbox: &Sandbox,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Option<String> {
+    let arg_str = |name: &str| -> Option<String> {
+        arguments
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    match tool_name {
+        // Tools with a required "path" argument
+        "ls" | "read" | "write" | "edit" => {
+            let path = arg_str("path").unwrap_or_default();
+            sandbox.resolve_contained(&path).err()
+        }
+        // grep: optional "path" directory argument (defaults to ".")
+        "grep" => {
+            let path = arg_str("path").unwrap_or_else(|| ".".to_string());
+            sandbox.resolve_contained(&path).err()
+        }
+        // glob: the static prefix of the pattern must be inside the sandbox
+        "glob" => {
+            let pattern = arg_str("pattern").unwrap_or_default();
+            sandbox.check_glob_pattern(&pattern).err()
+        }
+        // run: only the explicit "cwd" can be checked statically
+        "run" => match arg_str("cwd") {
+            Some(cwd) if !cwd.trim().is_empty() => sandbox.resolve_contained(&cwd).err(),
+            _ => None,
+        },
+        // All other tools (web_search, web_fetch, signal tools, custom tools
+        // without a known path arg) are not subject to path containment.
+        _ => None,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::sandbox::Sandbox;
+
+    fn sandboxed_manager(root: &std::path::Path) -> ToolManager {
+        let mut manager = ToolManager::new();
+        manager.register_defaults();
+        manager.set_sandbox(Sandbox::new(root).unwrap());
+        manager
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_read_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("read", &serde_json::json!({"path": "/etc/passwd"}))
+            .await;
+        assert!(
+            result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_write_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let target = tmp.path().join("../escape.txt");
+        let result = manager
+            .execute_tool_call(
+                "write",
+                &serde_json::json!({"path": target.to_str().unwrap(), "content": "x"}),
+            )
+            .await;
+        assert!(
+            result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+        // Verify the file was NOT created
+        assert!(!target.canonicalize().map(|p| p.exists()).unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn sandbox_allows_write_inside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let target = tmp.path().join("ok.txt");
+        let result = manager
+            .execute_tool_call(
+                "write",
+                &serde_json::json!({"path": target.to_str().unwrap(), "content": "hello"}),
+            )
+            .await;
+        assert!(result.starts_with("Wrote"), "result was: {result}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_ls_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("ls", &serde_json::json!({"path": "/"}))
+            .await;
+        assert!(
+            result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_grep_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("grep", &serde_json::json!({"pattern": "x", "path": "/tmp"}))
+            .await;
+        assert!(
+            result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_glob_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("glob", &serde_json::json!({"pattern": "/etc/**/*"}))
+            .await;
+        assert!(
+            result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_allows_relative_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}").unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("glob", &serde_json::json!({"pattern": "**/*.rs"}))
+            .await;
+        assert!(result.contains("a.rs"), "result was: {result}");
+    }
+
+    #[tokio::test]
+    async fn sandbox_blocks_run_with_outside_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("run", &serde_json::json!({"command": "pwd", "cwd": "/"}))
+            .await;
+        assert!(
+            result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sandbox_allows_run_without_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("run", &serde_json::json!({"command": "echo hi"}))
+            .await;
+        assert!(result.contains("hi"), "result was: {result}");
+    }
+
+    #[tokio::test]
+    async fn sandbox_does_not_affect_non_path_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = sandboxed_manager(tmp.path());
+        // screenshot tool has no path arg — should not be blocked
+        let result = manager
+            .execute_tool_call("screenshot", &serde_json::json!({"description": "test"}))
+            .await;
+        assert!(
+            !result.starts_with("Error: Sandbox violation"),
+            "result was: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_sandbox_allows_everything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut manager = ToolManager::new();
+        manager.register_defaults();
+        // Without sandbox, reading outside CWD works
+        let result = manager
+            .execute_tool_call(
+                "ls",
+                &serde_json::json!({"path": tmp.path().to_str().unwrap()}),
+            )
+            .await;
+        assert!(
+            !result.contains("Sandbox violation"),
+            "result was: {result}"
+        );
     }
 }

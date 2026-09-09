@@ -60,6 +60,8 @@ pub struct CommandContext {
     pub show_thinking: bool,
     /// Structured output writer — all terminal I/O goes through this.
     pub output: tinyharness_ui::output::Output,
+    /// Whether `--sandbox` is active: `run` always requires confirmation.
+    pub sandbox_active: bool,
 }
 
 impl CommandContext {
@@ -82,6 +84,7 @@ impl CommandContext {
             compaction_token_usage: None,
             show_thinking: false,
             output: tinyharness_ui::output::Output::stdout(),
+            sandbox_active: false,
         }
     }
 
@@ -144,6 +147,20 @@ impl CommandContext {
                 prompt.push_str("\n\n");
                 prompt.push_str(&self.skill_registry.format_skill_content(skill));
             }
+        }
+
+        // Inform the model about the sandbox restriction so it doesn't
+        // waste attempts on paths outside the workspace.
+        if self.sandbox_active {
+            prompt.push_str("\n\n");
+            prompt.push_str(&format!(
+                "# Sandbox Mode\n\n\
+                 File access is restricted to the workspace root: {}\n\
+                 Any attempt to read, write, or list paths outside this directory will fail \
+                 with a sandbox violation error. The `run` tool always requires user \
+                 confirmation in this mode.",
+                self.workspace_ctx.root.display()
+            ));
         }
 
         prompt
