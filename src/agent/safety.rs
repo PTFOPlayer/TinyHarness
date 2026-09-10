@@ -400,13 +400,13 @@ mod tests {
         });
     }
 
-    /// Property: commands containing a newline are always rejected
-    /// (unless the entire command is whitespace, which trims to empty and is
-    /// treated as a safe no-op).
+    /// Property: commands containing a newline between non-whitespace content
+    /// are always rejected. (A leading/trailing newline is removed by trim and
+    /// cannot hide a second command, so it is treated like ordinary whitespace.)
     #[test]
     fn proptest_newline_always_rejected() {
         let safe = tinyharness_lib::config::get_default_safe_commands();
-        proptest!(|(prefix in "[a-z]{1,10}", suffix in "[a-z]{0,10}")| {
+        proptest!(|(prefix in "[a-z]{1,10}", suffix in "[a-z]{1,10}")| {
             let cmd = format!("{prefix}\n{suffix}");
             prop_assert!(!is_safe_command(&cmd, &safe, &[]));
         });
