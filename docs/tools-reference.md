@@ -169,6 +169,8 @@ Asks the user a question with predefined answer options.
 
 The agent loop presents a numbered list. User selects by number or text. The answer becomes the tool result.
 
+> This tool is enabled by default. Set `questions_enabled: false` (globally, per-project, or via `/questions off`) to hide it from the model entirely — useful for unattended or CI runs where no user is present to answer.
+
 ### `auto_compact` — Compact Conversation
 
 Requests conversation compaction to free context space.

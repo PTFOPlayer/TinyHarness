@@ -105,6 +105,28 @@ Set the default agent mode when starting a session in this project.
 
 Valid values: `casual`, `planning`, `agent`, `research`.
 
+### `questions_enabled`
+
+Controls whether the model may stop the agent to ask the user a multiple-choice
+question. Defaults to `true`; set to `false` to hide the `question` tool
+entirely (useful for unattended runs, CI, or `--prompt` one-shot mode).
+
+```json
+{
+  "questions_enabled": false
+}
+```
+
+### `auto_compact_enabled`
+
+Controls whether the model may request conversation compaction. Defaults to `true`.
+
+```json
+{
+  "auto_compact_enabled": false
+}
+```
+
 ## Viewing Merged Settings
 
 ```
@@ -121,6 +143,8 @@ Shows all effective settings with source annotations:
 │ Safe Cmds:  48 configured (default)
 │ Denied:     3 denied (project)
 │ Extra MD:   RULES.md, DEPLOYMENT.md (project)
+│ Auto-Compact: on (default)
+│ Questions:  off (project)
 ╰─────────────────────────────────────────────────╯
 
 Legend: (project) = from .tinyharness/config.json

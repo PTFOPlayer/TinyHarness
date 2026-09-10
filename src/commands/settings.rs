@@ -115,6 +115,13 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
         "{BOLD}│{RESET} Auto-Compact: {ac_color}{ac_str}{RESET}",
     );
 
+    let (q_str, q_color) = if settings.questions_enabled {
+        ("on", GREEN)
+    } else {
+        ("off", ORANGE)
+    };
+    let _ = writeln!(out, "{BOLD}│{RESET} Questions:  {q_color}{q_str}{RESET}",);
+
     let safe_commands = settings.get_safe_commands();
     let denied_commands = settings.get_denied_commands();
     let _ = writeln!(

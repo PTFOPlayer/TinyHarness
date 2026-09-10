@@ -423,6 +423,7 @@ fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
     let command_auto_accept = json!({
         "auto_accept_mode": settings.auto_accept_mode.to_string(),
         "auto_compact_enabled": settings.auto_compact_enabled,
+        "questions_enabled": settings.questions_enabled,
         "safe_command_prefixes": safe,
         "denied_command_prefixes": denied,
     });
@@ -839,6 +840,7 @@ fn dump_command_lists(file: &mut std::fs::File) {
         settings.auto_compact_enabled
     )
     .unwrap();
+    writeln!(file, "Questions enabled: {}", settings.questions_enabled).unwrap();
     writeln!(file, "Safe command prefixes ({}):", safe.len()).unwrap();
     for cmd in &safe {
         writeln!(file, "  - {}", cmd).unwrap();

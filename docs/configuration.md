@@ -41,6 +41,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
   "context_limit": null,
   "auto_accept_mode": "safe",
   "auto_compact_enabled": true,
+  "questions_enabled": true,
   "safe_command_prefixes": null,
   "denied_command_prefixes": null,
   "project_md_files": null
@@ -140,6 +141,7 @@ Can be overridden per-project via `.tinyharness/config.json` → `preferred_mode
 |-------|------|---------|-------------|
 | `auto_accept_mode` | string | `"safe"` | Auto-accept mode: `"off"`, `"safe"` (read-only commands), or `"all"` (all destructive tools except `run`). Toggle with `/autoaccept`. Legacy `auto_accept_safe_commands` (bool) and `auto_accept_all` (bool) are auto-migrated to this field. |
 | `auto_compact_enabled` | bool | `true` | Whether the `auto_compact` tool is available to the model. Toggle with `/autocompact` |
+| `questions_enabled` | bool | `true` | Whether the `question` tool is available to the model. When `false`, the model cannot stop the agent to ask the user questions. Toggle with `/questions` |
 | `safe_command_prefixes` | vec\|null | `null` | Custom safe command prefixes. If `null`, uses the hardcoded default list (43 commands). Set via `/command add/rm/reset` |
 | `denied_command_prefixes` | vec\|null | `null` | Always-denied prefixes. Takes priority over safe list. Set via `/command deny/undeny/resetdeny` |
 

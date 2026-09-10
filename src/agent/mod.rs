@@ -325,7 +325,7 @@ pub async fn run_agent_loop(
         loop {
             // Filter tools based on current mode and settings
             let (_, _, merged) = load_merged_settings();
-            let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.auto_compact_enabled);
+            let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.tool_availability());
 
             // Call the provider — it returns a receiver for streaming chunks
             let mut recv = {

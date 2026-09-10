@@ -224,6 +224,45 @@ pub fn execute_autocompact(out: &mut Output, arg: Option<&str>) -> Result<Comman
     Ok(CommandResult::Ok)
 }
 
+// ── Questions (sync — no provider access needed) ─────────────────────────────
+
+/// Execute the /questions command to toggle the question tool.
+pub fn execute_questions(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+    let a = arg.unwrap_or("");
+
+    if a.is_empty() {
+        let settings = load_settings();
+        let (status, color) = if settings.questions_enabled {
+            ("on", GREEN)
+        } else {
+            ("off", ORANGE)
+        };
+        let _ = writeln!(out, "{BOLD}Questions: {color}{status}{RESET}",);
+        return Ok(CommandResult::Ok);
+    }
+
+    let new_value = match a.to_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => true,
+        "off" | "false" | "no" | "0" => false,
+        _ => {
+            return Err("Invalid value. Use 'on' or 'off', e.g. /questions off".to_string());
+        }
+    };
+
+    let mut settings = load_settings();
+    settings.questions_enabled = new_value;
+    save_settings(&settings);
+
+    let (status, color) = if new_value {
+        ("on", GREEN)
+    } else {
+        ("off", ORANGE)
+    };
+    let _ = writeln!(out, "{BOLD}Questions set to {color}{status}{RESET}",);
+
+    Ok(CommandResult::Ok)
+}
+
 // ── Think Type (async — needs provider.lock().await) ───────────────────────
 
 async_command!(
@@ -366,5 +405,21 @@ mod tests {
         let _ = execute_autocompact(&mut out, None);
         let plain = strip_ansi(&captured_string(&buf));
         assert!(plain.contains("Auto-compact:"));
+    }
+
+    #[test]
+    fn questions_invalid_value_returns_error() {
+        let (mut out, _buf) = captured_output();
+        let result = execute_questions(&mut out, Some("maybe"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid value"));
+    }
+
+    #[test]
+    fn questions_empty_shows_current() {
+        let (mut out, buf) = captured_output();
+        let _ = execute_questions(&mut out, None);
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(plain.contains("Questions:"));
     }
 }

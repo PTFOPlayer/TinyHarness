@@ -125,6 +125,9 @@ pub struct ProjectSettings {
     /// Override auto-compact enabled setting for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_enabled: Option<bool>,
+    /// Override whether the model may ask questions for this project
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub questions_enabled: Option<bool>,
 }
 
 /// Discover and load `.tinyharness/config.json` by walking up from CWD.
@@ -203,6 +206,8 @@ pub struct MergedSettings {
     pub preferred_mode_source: SettingSource,
     pub auto_compact_enabled: bool,
     pub auto_compact_enabled_source: SettingSource,
+    pub questions_enabled: bool,
+    pub questions_enabled_source: SettingSource,
 }
 
 /// Load and merge global + project settings.
@@ -250,6 +255,8 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
             preferred_mode_source: SettingSource::Default,
             auto_compact_enabled: global.auto_compact_enabled,
             auto_compact_enabled_source: SettingSource::Default,
+            questions_enabled: global.questions_enabled,
+            questions_enabled_source: SettingSource::Default,
         },
         Some(p) => {
             // Safe commands: project extends global
@@ -304,6 +311,11 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 .map(|v| (v, SettingSource::Project))
                 .unwrap_or((global.auto_compact_enabled, SettingSource::Default));
 
+            let (questions_enabled, q_source) = p
+                .questions_enabled
+                .map(|v| (v, SettingSource::Project))
+                .unwrap_or((global.questions_enabled, SettingSource::Default));
+
             MergedSettings {
                 safe_commands,
                 safe_commands_source: safe_source,
@@ -319,7 +331,19 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 preferred_mode_source: mode_source,
                 auto_compact_enabled,
                 auto_compact_enabled_source: ac_source,
+                questions_enabled,
+                questions_enabled_source: q_source,
             }
+        }
+    }
+}
+
+impl MergedSettings {
+    /// Which optional tools the model is allowed to use, per merged settings.
+    pub fn tool_availability(&self) -> crate::tools::ToolAvailability {
+        crate::tools::ToolAvailability {
+            auto_compact: self.auto_compact_enabled,
+            question: self.questions_enabled,
         }
     }
 }
@@ -336,6 +360,7 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
         project_md_files: None, // user must fill this in
         preferred_mode: Some(settings.preferred_mode),
         auto_compact_enabled: Some(settings.auto_compact_enabled),
+        questions_enabled: Some(settings.questions_enabled),
     }
 }
 
@@ -509,6 +534,12 @@ pub struct Settings {
     /// so the model cannot request conversation compaction.
     #[serde(default = "default_true")]
     pub auto_compact_enabled: bool,
+    /// Enable the question tool (default: true).
+    /// When false, the `question` tool is not advertised to the provider, so
+    /// the model cannot stop the agent to ask the user a multiple-choice
+    /// question. Toggle with `/questions`.
+    #[serde(default = "default_true")]
+    pub questions_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -538,6 +569,7 @@ impl Default for Settings {
             denied_command_prefixes: None,
             project_md_files: None,
             auto_compact_enabled: true,
+            questions_enabled: true,
         }
     }
 }
@@ -1040,6 +1072,104 @@ mod tests {
         assert_eq!(settings.last_provider, ProviderKind::Ollama);
         assert_eq!(settings.preferred_mode, AgentMode::Casual);
         assert!(!settings.skip_health_check);
+    }
+
+    #[test]
+    fn questions_enabled_defaults_to_true() {
+        let settings: Settings =
+            serde_json::from_str("{}").expect("empty object should use defaults");
+        assert!(settings.questions_enabled);
+        assert!(settings.auto_compact_enabled);
+        assert!(Settings::default().questions_enabled);
+    }
+
+    #[test]
+    fn questions_enabled_can_be_disabled_and_roundtrips() {
+        let store = SettingsStore::new(temp_settings_path());
+        let settings = Settings {
+            questions_enabled: false,
+            ..Settings::default()
+        };
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+        assert!(!loaded.questions_enabled);
+        // Other tool availability flag is independent
+        assert!(loaded.auto_compact_enabled);
+        let _ = std::fs::remove_dir_all(store.path().parent().unwrap());
+    }
+
+    #[test]
+    fn project_settings_override_questions_enabled() {
+        let global = Settings {
+            questions_enabled: true,
+            ..Settings::default()
+        };
+
+        // No project settings → global value, source = Default
+        let merged = merge_settings(&global, None);
+        assert!(merged.questions_enabled);
+        assert_eq!(merged.questions_enabled_source, SettingSource::Default);
+
+        // Project sets false → overrides global
+        let project = ProjectSettings {
+            questions_enabled: Some(false),
+            ..ProjectSettings::default()
+        };
+        let merged = merge_settings(&global, Some(&project));
+        assert!(!merged.questions_enabled);
+        assert_eq!(merged.questions_enabled_source, SettingSource::Project);
+    }
+
+    #[test]
+    fn project_settings_questions_absent_falls_back_to_global() {
+        let global = Settings {
+            questions_enabled: false,
+            ..Settings::default()
+        };
+        let project = ProjectSettings::default();
+        let merged = merge_settings(&global, Some(&project));
+        assert!(!merged.questions_enabled);
+        assert_eq!(merged.questions_enabled_source, SettingSource::Default);
+    }
+
+    #[test]
+    fn merged_settings_produce_tool_availability() {
+        let global = Settings {
+            questions_enabled: false,
+            auto_compact_enabled: true,
+            ..Settings::default()
+        };
+        let availability = merge_settings(&global, None).tool_availability();
+        assert!(!availability.question);
+        assert!(availability.auto_compact);
+
+        let global = Settings::default();
+        let availability = merge_settings(&global, None).tool_availability();
+        assert_eq!(availability, crate::tools::ToolAvailability::all());
+    }
+
+    #[test]
+    fn discover_project_settings_parses_questions_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".tinyharness");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"questions_enabled": false}"#).unwrap();
+
+        let found = discover_project_settings(tmp.path()).expect("config should be discovered");
+        let settings = found.expect("config should parse");
+        assert_eq!(settings.questions_enabled, Some(false));
+        assert_eq!(settings.auto_compact_enabled, None);
+    }
+
+    #[test]
+    fn generate_project_config_template_includes_questions() {
+        let settings = Settings {
+            questions_enabled: false,
+            ..Settings::default()
+        };
+        let template = generate_project_config_template(&settings);
+        assert_eq!(template.questions_enabled, Some(false));
+        assert_eq!(template.auto_compact_enabled, Some(true));
     }
 
     #[test]
