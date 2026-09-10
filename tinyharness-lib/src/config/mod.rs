@@ -552,6 +552,16 @@ fn default_true() -> bool {
     true
 }
 
+/// Per-provider default request timeout in seconds, used when no explicit
+/// (nonzero) timeout is configured: Ollama 5s, Sockudo 120s, others 30s.
+pub fn timeout_default_for(kind: ProviderKind) -> u64 {
+    match kind {
+        ProviderKind::Ollama => 5,
+        ProviderKind::Sockudo => 120,
+        _ => 30,
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -677,15 +687,13 @@ impl Settings {
         self.get_url_for(self.last_provider)
     }
 
-    /// Effective request timeout in seconds, resolving `None` to the
-    /// per-provider default (Ollama: 5s, Sockudo: 120s, others: 30s).
+    /// Effective request timeout in seconds, resolving `None` (or a stored
+    /// `0`) to the per-provider default (Ollama: 5s, Sockudo: 120s, others: 30s).
     pub fn effective_timeout_secs(&self) -> u64 {
-        self.request_timeout_secs
-            .unwrap_or(match self.last_provider {
-                ProviderKind::Ollama => 5,
-                ProviderKind::Sockudo => 120,
-                _ => 30,
-            })
+        match self.request_timeout_secs {
+            Some(secs) if secs > 0 => secs,
+            _ => timeout_default_for(self.last_provider),
+        }
     }
 
     /// Effective maximum number of request retries, resolving `None` to the
@@ -825,6 +833,13 @@ impl SettingsStore {
                 settings
                     .provider_urls
                     .insert(settings.last_provider, url_str.to_string());
+            }
+
+            // A stored timeout of 0 is meaningless (a zero-second request
+            // would always fail); normalize it to `None` so the per-provider
+            // default applies.
+            if settings.request_timeout_secs == Some(0) {
+                settings.request_timeout_secs = None;
             }
 
             // Migrate legacy Ollama-specific timeout/retry keys into the
@@ -1536,6 +1551,16 @@ mod tests {
         settings.last_provider = ProviderKind::Sockudo;
         assert_eq!(settings.effective_timeout_secs(), 120);
         assert_eq!(settings.effective_max_retries(), 0);
+
+        // A stored timeout of 0 is treated as unset and falls back to the
+        // per-provider default instead of producing a zero-second timeout.
+        settings.request_timeout_secs = Some(0);
+        settings.last_provider = ProviderKind::OpenAiCompat;
+        assert_eq!(settings.effective_timeout_secs(), 30);
+        settings.last_provider = ProviderKind::Ollama;
+        assert_eq!(settings.effective_timeout_secs(), 5);
+        settings.request_timeout_secs = Some(60);
+        assert_eq!(settings.effective_timeout_secs(), 60);
 
         // Explicit values override per-provider defaults.
         settings.request_timeout_secs = Some(60);

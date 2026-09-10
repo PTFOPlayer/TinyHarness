@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use tinyharness_lib::config::{AutoAcceptMode, load_settings, save_settings};
+use tinyharness_lib::config::{AutoAcceptMode, load_settings, save_settings, timeout_default_for};
 use tinyharness_lib::provider::Provider;
 use tinyharness_ui::output::Output;
 
@@ -13,7 +13,7 @@ use tinyharness_ui::style::*;
 async_command!(
     TimeoutCommand,
     "/timeout",
-    "Show or set the request timeout in seconds (applies to the active provider)",
+    "Show or set the request timeout in seconds (0 resets to the per-provider default)",
     "/timeout [secs]",
     |raw_arg, ctx, _messages| {
         let arg = raw_arg.unwrap_or("").to_string();
@@ -31,7 +31,21 @@ async_command!(
             }
 
             match arg.parse::<u64>() {
-                Ok(secs) if secs > 0 => {
+                Ok(0) => {
+                    let mut settings = load_settings();
+                    settings.request_timeout_secs = None;
+                    save_settings(&settings);
+                    let default_secs = timeout_default_for(settings.last_provider);
+                    let mut p = provider.lock().await;
+                    p.set_timeout(default_secs);
+                    let _ = writeln!(
+                        ctx.output,
+                        "{BOLD}Timeout reset to the default {BLUE}{default_secs}s{RESET} {GRAY}({}){RESET}.",
+                        settings.last_provider,
+                    );
+                    Ok(CommandResult::Ok)
+                }
+                Ok(secs) => {
                     let mut settings = load_settings();
                     settings.request_timeout_secs = Some(secs);
                     save_settings(&settings);
@@ -40,9 +54,8 @@ async_command!(
                     let _ = writeln!(ctx.output, "{BOLD}Timeout set to {BLUE}{secs}s.{RESET}",);
                     Ok(CommandResult::Ok)
                 }
-                Ok(_) => Err("Timeout must be a positive number of seconds.".to_string()),
                 Err(_) => Err(format!(
-                    "Invalid timeout value: '{}'. Use a number of seconds, e.g. /timeout 30",
+                    "Invalid timeout value: '{}'. Use a number of seconds, e.g. /timeout 30 (0 resets to the default)",
                     arg
                 )),
             }

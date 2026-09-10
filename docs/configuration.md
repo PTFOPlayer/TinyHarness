@@ -127,7 +127,7 @@ These apply to every provider that supports timeouts/retries (Ollama, llama.cpp,
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `request_timeout_secs` | u64\|null | `null` | HTTP request timeout in seconds (per-request attempt). Per-provider defaults when `null`: Ollama 5s, Sockudo 120s, OpenAI-compatible 30s. Set via `/timeout <seconds>` |
+| `request_timeout_secs` | u64\|null | `null` | HTTP request timeout in seconds (per-request attempt). Per-provider defaults when `null`: Ollama 5s, Sockudo 120s, OpenAI-compatible 30s. Set via `/timeout <seconds>`; `/timeout 0` resets to the per-provider default |
 | `request_max_retries` | u32\|null | `null` | Maximum attempts for transient failures (connection errors, timeouts, 5xx/429 responses). Per-provider defaults when `null`: Ollama 3, OpenAI-compatible 0 (no retries). Set via `/retries <count>`. Backoff between attempts: 1s, 2s, 4s, … |
 
 **Legacy migration:** old configs with `ollama_timeout_secs` / `ollama_max_retries` are automatically migrated into `request_timeout_secs` / `request_max_retries` on load. Explicit new values always win over migrated ones.
