@@ -8,7 +8,7 @@ use tinyharness_lib::{
     context::WorkspaceContext,
     image::ImageAttachment,
     mode::AgentMode,
-    provider::{Message, Provider, Role, TokenUsage},
+    provider::{AnyProvider, Message, Role, TokenUsage},
     skill::SkillRegistry,
 };
 
@@ -39,7 +39,7 @@ pub enum CommandResult {
 /// Context passed to every command handler.
 /// Holds the shared state that commands may need to read or mutate.
 pub struct CommandContext {
-    pub provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+    pub provider: Arc<Mutex<AnyProvider>>,
     pub exit_requested: bool,
     pub current_mode: AgentMode,
     pub workspace_ctx: WorkspaceContext,
@@ -66,7 +66,7 @@ pub struct CommandContext {
 
 impl CommandContext {
     pub fn new(
-        provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+        provider: Arc<Mutex<AnyProvider>>,
         workspace_ctx: WorkspaceContext,
         prompts_dir: PathBuf,
     ) -> Self {

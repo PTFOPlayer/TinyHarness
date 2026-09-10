@@ -24,7 +24,7 @@ use tinyharness_lib::{
     config::load_merged_settings,
     config::load_settings,
     mode::AgentMode,
-    provider::{Message, Provider, Role},
+    provider::{AnyProvider, Message, Provider, Role},
     session::Session,
     token::ContextWindowSize,
     tools::ToolManager,
@@ -44,7 +44,7 @@ pub use safety::{is_safe_command, strip_safe_descriptor_redirections};
 pub use tools::handle_tool_calls;
 
 pub async fn run_agent_loop(
-    provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+    provider: Arc<Mutex<AnyProvider>>,
     tool_manager: ToolManager,
     messages: &mut Vec<Message>,
     ctx: &mut CommandContext,

@@ -1,6 +1,3 @@
-use std::future::Future;
-use std::pin::Pin;
-
 use crate::{
     SecretString,
     provider::{ChatMessageResponse, Message, Provider, ToolDefinition},
@@ -75,16 +72,15 @@ impl OpenAiCompatProvider {
 }
 
 impl Provider for OpenAiCompatProvider {
-    fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
-        self.inner.health_check()
+    async fn health_check(&self) -> Result<(), String> {
+        self.inner.health_check().await
     }
 
-    fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
+    async fn list_models(&self) -> Vec<String> {
         if let Some(models) = &self.static_models {
-            let models = models.clone();
-            return Box::pin(async move { models });
+            return models.clone();
         }
-        self.inner.fetch_model_list()
+        self.inner.fetch_model_list().await
     }
 
     fn select_model(&mut self, name: String) {
@@ -103,16 +99,11 @@ impl Provider for OpenAiCompatProvider {
         self.inner.set_retries(max_retries);
     }
 
-    fn chat(
+    async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String>>
-                + Send,
-        >,
-    > {
-        self.inner.chat(messages, tools)
+    ) -> Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String> {
+        self.inner.chat(messages, tools).await
     }
 }

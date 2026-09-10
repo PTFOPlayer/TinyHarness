@@ -1,5 +1,3 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use ollama_rs::{
@@ -126,24 +124,18 @@ impl OllamaProvider {
 }
 
 impl Provider for OllamaProvider {
-    fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
-        let client = self.client.clone();
-        Box::pin(async move {
-            match client.list_local_models().await {
-                Ok(_) => Ok(()),
-                Err(e) => Err(format!("Cannot reach Ollama: {}", e)),
-            }
-        })
+    async fn health_check(&self) -> Result<(), String> {
+        match self.client.list_local_models().await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Cannot reach Ollama: {}", e)),
+        }
     }
 
-    fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
-        let client = self.client.clone();
-        Box::pin(async move {
-            match client.list_local_models().await {
-                Ok(models) => models.into_iter().map(|m| m.name).collect(),
-                Err(_) => vec![],
-            }
-        })
+    async fn list_models(&self) -> Vec<String> {
+        match self.client.list_local_models().await {
+            Ok(models) => models.into_iter().map(|m| m.name).collect(),
+            Err(_) => vec![],
+        }
     }
 
     fn select_model(&mut self, name: String) {
@@ -166,22 +158,15 @@ impl Provider for OllamaProvider {
         self.think_type = think_type;
     }
 
-    fn chat(
+    async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String>>
-                + Send,
-        >,
-    > {
+    ) -> Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String> {
         let model = match self.model.clone() {
             Some(m) => m,
             None => {
-                return Box::pin(async move {
-                    Err("No model selected. Use /model <name> to select one.".to_string())
-                });
+                return Err("No model selected. Use /model <name> to select one.".to_string());
             }
         };
         let (send, recv) =
@@ -283,7 +268,7 @@ impl Provider for OllamaProvider {
             }
         });
 
-        Box::pin(async move { Ok(recv) })
+        Ok(recv)
     }
 }
 

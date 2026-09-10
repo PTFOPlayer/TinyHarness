@@ -203,7 +203,7 @@ metadata:
 
 ## Architecture
 - Keep `tinyharness-lib` free of terminal I/O
-- Prefer `Pin<Box<dyn Future>>` over `async-trait`
+- Prefer RPITIT (`impl Future`) over `async-trait`; use `AnyProvider` for dyn dispatch
 - Use `Result<T, String>` for user-facing errors
 ```
 

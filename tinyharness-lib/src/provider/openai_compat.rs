@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -103,31 +101,27 @@ impl OpenAiCompatInner {
     }
 
     /// Perform a health check against the server's `/health` endpoint.
-    pub fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+    pub async fn health_check(&self) -> Result<(), String> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
-        let client = self.client.clone();
-        let api_key = self.api_key.clone();
-        Box::pin(async move {
-            let mut req = client.get(&url);
-            if let Some(key) = &api_key {
-                req = req.bearer_auth(key.expose_secret());
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key.expose_secret());
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => Ok(()),
+            // A 404 usually means the server simply has no /health
+            // endpoint. Don't dump its response body (often a large HTML
+            // or JSON error page) into the warning.
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
+                Err("Server returned 404 (no /health endpoint)".to_string())
             }
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => Ok(()),
-                // A 404 usually means the server simply has no /health
-                // endpoint. Don't dump its response body (often a large HTML
-                // or JSON error page) into the warning.
-                Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
-                    Err("Server returned 404 (no /health endpoint)".to_string())
-                }
-                Ok(resp) => Err(format!(
-                    "Server returned {}: {}",
-                    resp.status().as_u16(),
-                    resp.text().await.unwrap_or_default()
-                )),
-                Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
-            }
-        })
+            Ok(resp) => Err(format!(
+                "Server returned {}: {}",
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default()
+            )),
+            Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
+        }
     }
 
     pub fn select_model(&mut self, name: String) {
@@ -148,44 +142,34 @@ impl OpenAiCompatInner {
 
     /// Fetch the model list from the server's `/v1/models` endpoint.
     /// Returns the list of model IDs, or an empty vec on failure.
-    pub fn fetch_model_list(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
+    pub async fn fetch_model_list(&self) -> Vec<String> {
         let url = format!(
             "{}/v1/models",
             self.base_url.trim_end_matches('/').trim_end_matches("/v1")
         );
-        let client = self.client.clone();
-        let current_model = self.model.clone();
-        let api_key = self.api_key.clone();
-        Box::pin(async move {
-            let mut req = client.get(&url);
-            if let Some(key) = &api_key {
-                req = req.bearer_auth(key.expose_secret());
-            }
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.json::<ModelListResponse>().await {
-                        Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
-                        Err(_) => current_model.into_iter().collect(),
-                    }
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key.expose_secret());
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<ModelListResponse>().await {
+                    Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
+                    Err(_) => self.model.clone().into_iter().collect(),
                 }
-                _ => current_model.into_iter().collect(),
             }
-        })
+            _ => self.model.clone().into_iter().collect(),
+        }
     }
 
     /// Stream chat completions using the OpenAI-compatible API.
     /// Returns a receiver for streaming response chunks, or an error string
     /// if the request cannot be started.
-    pub fn chat(
+    pub async fn chat(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String>>
-                + Send,
-        >,
-    > {
+    ) -> Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String> {
         let (send, recv) =
             tokio::sync::mpsc::channel::<ChatMessageResponse>(super::STREAM_CHANNEL_CAPACITY);
 
@@ -222,7 +206,7 @@ impl OpenAiCompatInner {
             .await;
         });
 
-        Box::pin(async move { Ok(recv) })
+        Ok(recv)
     }
 }
 

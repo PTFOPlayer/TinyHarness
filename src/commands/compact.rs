@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use tinyharness_lib::provider::{Message, Provider, Role, TokenUsage};
+use tinyharness_lib::provider::{AnyProvider, Message, Provider, Role, TokenUsage};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
@@ -19,7 +19,7 @@ async_command!(
         let provider = ctx.provider.clone();
         async move {
             let mut p = provider.lock().await;
-            match execute_compact(&mut ctx.output, &mut *p, messages, &focus).await {
+            match execute_compact(&mut ctx.output, &mut p, messages, &focus).await {
                 Ok(tokens) => {
                     ctx.compaction_token_usage = tokens;
                     Ok(CommandResult::Ok)
@@ -83,7 +83,7 @@ fn focus_instruction(focus: &str) -> String {
 ///
 /// Uses a dedicated system prompt for summarization and streams the response.
 async fn call_llm_summarize(
-    provider: &mut dyn Provider,
+    provider: &mut AnyProvider,
     text_to_summarize: &str,
     focus: &str,
     is_merge: bool,
@@ -188,7 +188,7 @@ struct CompactContext {
 /// while replacing all intermediate messages with a single summary message.
 pub async fn execute_compact(
     out: &mut Output,
-    provider: &mut dyn Provider,
+    provider: &mut AnyProvider,
     messages: &mut Vec<Message>,
     focus: &str,
 ) -> Result<Option<TokenUsage>, String> {
@@ -243,7 +243,7 @@ pub async fn execute_compact(
 /// Single-pass compaction: summarize all intermediate messages in one LLM call.
 async fn compact_single_pass(
     out: &mut Output,
-    provider: &mut dyn Provider,
+    provider: &mut AnyProvider,
     to_summarize: &[Message],
     messages: &mut Vec<Message>,
     ctx: &CompactContext,
@@ -268,7 +268,7 @@ async fn compact_single_pass(
 /// summarize each chunk, then merge the summaries.
 async fn compact_cascade(
     out: &mut Output,
-    provider: &mut dyn Provider,
+    provider: &mut AnyProvider,
     to_summarize: &[Message],
     messages: &mut Vec<Message>,
     ctx: &CompactContext,

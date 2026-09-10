@@ -22,7 +22,7 @@ pub mod skill;
 use std::io::Write;
 use std::sync::Arc;
 
-use tinyharness_lib::{config::load_settings, context::WorkspaceContext, provider::Provider};
+use tinyharness_lib::{config::load_settings, context::WorkspaceContext, provider::AnyProvider};
 
 use tokio::sync::Mutex;
 
@@ -473,7 +473,7 @@ pub fn build_registry() -> CommandRegistry {
 /// Create a new CommandContext with the given provider and workspace context.
 /// Loads the `show_thinking` toggle from saved settings.
 pub fn create_context(
-    provider: Arc<Mutex<dyn Provider + Send + Sync>>,
+    provider: Arc<Mutex<AnyProvider>>,
     workspace_ctx: WorkspaceContext,
     prompts_dir: std::path::PathBuf,
 ) -> CommandContext {

@@ -16,10 +16,7 @@ use tinyharness_lib::{
     context::WorkspaceContext,
     custom_tools::CustomToolManager,
     mode::AgentMode,
-    provider::{
-        Message, Provider, Role, ollama::OllamaProvider,
-        openai_compat_provider::OpenAiCompatProvider, sockudo::SockudoProvider,
-    },
+    provider::{AnyProvider, Message, Provider, Role, SockudoCredentials},
     session::{Session, SessionStore},
     tools::ToolManager,
 };
@@ -131,59 +128,30 @@ async fn create_provider(
     skip_health_check: bool,
     skip_health_check_source: &str,
     settings: &Settings,
-) -> Arc<Mutex<dyn Provider + Send + Sync>> {
-    let provider: Arc<Mutex<dyn Provider + Send + Sync>> = match kind {
-        ProviderKind::LlamaCpp => Arc::new(Mutex::new(
-            OpenAiCompatProvider::with_options(url, None, timeout_secs, max_retries)
-                .with_static_models(vec!["llama-cpp".to_string()]),
-        )),
-        ProviderKind::Vllm => Arc::new(Mutex::new(OpenAiCompatProvider::with_options(
-            url,
-            None,
-            timeout_secs,
-            max_retries,
-        ))),
-        ProviderKind::OpenAiCompat => match api_key {
-            Some(key) if !key.is_empty() => Arc::new(Mutex::new(
-                OpenAiCompatProvider::with_options(url, Some(key), timeout_secs, max_retries),
-            )),
-            // Explicit empty `--api-key ""` opts out of auth entirely.
-            Some(_) => Arc::new(Mutex::new(OpenAiCompatProvider::with_options(
-                url,
-                None,
-                timeout_secs,
-                max_retries,
-            ))),
-            None => {
-                let mut err_out = Output::stderr();
-                let _ = writeln!(
-                    err_out,
-                    "{BOLD}Error:{RESET} --openai-compat requires an API key. \
-                     Pass {CYAN}--api-key <KEY>{RESET}, set the {CYAN}OPENAI_API_KEY{RESET} \
-                     env var, or configure it via {CYAN}--config{RESET}. \
-                     To use the gateway without auth, pass {CYAN}--api-key \"\"{RESET}.",
-                );
-                std::process::exit(1);
-            }
-        },
-        ProviderKind::Ollama => {
-            let provider =
-                OllamaProvider::new(url, timeout_secs, max_retries, settings.ollama_think_type)
-                    .unwrap_or_else(|e| {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    });
-            Arc::new(Mutex::new(provider))
-        }
-        ProviderKind::Sockudo => {
-            let app_id = settings.sockudo_app_id.clone().unwrap_or_default();
-            let app_key = settings.sockudo_app_key.clone().unwrap_or_default();
-            let app_secret = settings.sockudo_app_secret.clone().unwrap_or_default();
-            Arc::new(Mutex::new(SockudoProvider::new(
-                url, app_id, app_key, app_secret,
-            )))
-        }
-    };
+) -> Result<Arc<Mutex<AnyProvider>>, String> {
+    // The hosted-gateway provider requires a key unless explicitly opted out
+    // with `--api-key ""` (which resolves to `Some(empty)` upstream).
+    if kind == ProviderKind::OpenAiCompat && api_key.is_none() {
+        let mut err_out = Output::stderr();
+        let _ = writeln!(
+            err_out,
+            "{BOLD}Error:{RESET} --openai-compat requires an API key. \
+             Pass {CYAN}--api-key <KEY>{RESET}, set the {CYAN}OPENAI_API_KEY{RESET} \
+             env var, or configure it via {CYAN}--config{RESET}. \
+             To use the gateway without auth, pass {CYAN}--api-key \"\"{RESET}.",
+        );
+        std::process::exit(1);
+    }
+
+    let provider: Arc<Mutex<AnyProvider>> = Arc::new(Mutex::new(AnyProvider::build(
+        kind,
+        url.clone(),
+        api_key,
+        timeout_secs,
+        max_retries,
+        settings.ollama_think_type,
+        SockudoCredentials::from(settings),
+    )?));
 
     // Run health check for all providers (Ollama included)
     // Skipped when the CLI flag or settings flag is set.
@@ -211,12 +179,12 @@ async fn create_provider(
         );
     }
 
-    provider
+    Ok(provider)
 }
 
 /// Auto-select a model on the provider if none is currently set.
 /// Tries the saved model first, then falls back to the first available model.
-async fn auto_select_model(provider: &mut dyn Provider, saved_model: Option<&String>) {
+async fn auto_select_model(provider: &mut AnyProvider, saved_model: Option<&String>) {
     if provider.current_model().is_some() {
         return;
     }
@@ -410,7 +378,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         skip_hc_source,
         &settings,
     )
-    .await;
+    .await
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
     // Auto-select model if none is currently set.
     // Sockudo doesn't use a saved model — the worker selects the backend
@@ -433,7 +405,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         } else {
             auto_select_model(
-                &mut *p,
+                &mut p,
                 settings
                     .get_model_for(provider_kind)
                     .map(|s| s.to_string())

@@ -9,7 +9,7 @@
 
 use tinyharness_lib::{
     mode::AgentMode,
-    provider::{Message, Role},
+    provider::{AnyProvider, Message, Role},
     session::Session,
     tools::SignalEvent,
 };
@@ -73,7 +73,7 @@ pub async fn handle_signal_event(
     messages: &mut Vec<Message>,
     session: &mut Session,
     ctx: &mut CommandContext,
-    provider: &std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
+    provider: &std::sync::Arc<Mutex<AnyProvider>>,
     tool_call_id: &str,
 ) -> SignalResult {
     match event {
@@ -138,7 +138,7 @@ pub async fn handle_signal_event(
 
         SignalEvent::AutoCompact { focus } => {
             let mut provider_guard = provider.lock().await;
-            match execute_compact(&mut ctx.output, &mut *provider_guard, messages, focus).await {
+            match execute_compact(&mut ctx.output, &mut provider_guard, messages, focus).await {
                 Ok(token_usage) => {
                     if let Some(usage) = token_usage.clone() {
                         ctx.compaction_token_usage = Some(usage.clone());

@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use tinyharness_lib::config::{load_settings, save_settings};
-use tinyharness_lib::provider::Provider;
+use tinyharness_lib::provider::{AnyProvider, Provider};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
@@ -19,7 +19,7 @@ async_command!(
         async move {
             if name.is_empty() {
                 let p = provider.lock().await;
-                execute_list(&mut ctx.output, &*p).await?;
+                execute_list(&mut ctx.output, &p).await?;
 
                 if let Some(model) = p.current_model() {
                     let _ = writeln!(ctx.output, "{BOLD}Current model: {GREEN}{model}{RESET}",);
@@ -30,7 +30,7 @@ async_command!(
             }
 
             let mut p = provider.lock().await;
-            execute_select(&mut ctx.output, &mut *p, &name).await?;
+            execute_select(&mut ctx.output, &mut p, &name).await?;
 
             let mut settings = load_settings();
             if let Some(model) = p.current_model() {
@@ -43,7 +43,7 @@ async_command!(
     }
 );
 
-pub async fn execute_list(out: &mut Output, provider: &dyn Provider) -> Result<(), String> {
+pub async fn execute_list(out: &mut Output, provider: &AnyProvider) -> Result<(), String> {
     let models = provider.list_models().await;
     if models.is_empty() {
         let _ = writeln!(out, "{ORANGE}No models available.{RESET}");
@@ -59,7 +59,7 @@ pub async fn execute_list(out: &mut Output, provider: &dyn Provider) -> Result<(
 
 pub async fn execute_select(
     out: &mut Output,
-    provider: &mut dyn Provider,
+    provider: &mut AnyProvider,
     name: &str,
 ) -> Result<(), String> {
     let models = provider.list_models().await;

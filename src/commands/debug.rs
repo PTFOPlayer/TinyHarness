@@ -910,11 +910,14 @@ mod tests {
         // Create a minimal CommandContext for testing.
         CommandContext::new(
             Arc::new(Mutex::new(
-                tinyharness_lib::provider::ollama::OllamaProvider::new(
+                tinyharness_lib::provider::AnyProvider::build(
+                    tinyharness_lib::config::ProviderKind::Ollama,
                     "http://localhost:11434".to_string(),
+                    None,
                     120,
                     0,
                     tinyharness_lib::config::OllamaThinkType::Off,
+                    tinyharness_lib::provider::SockudoCredentials::default(),
                 )
                 .expect("valid test Ollama URL"),
             )),

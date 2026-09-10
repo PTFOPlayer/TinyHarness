@@ -12,8 +12,6 @@
 //!
 //! See: <https://github.com/sockudo/sockudo> for server documentation.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -536,35 +534,34 @@ async fn send_error(send: &mpsc::Sender<ChatMessageResponse>, message: &str) -> 
 }
 
 impl Provider for SockudoProvider {
-    fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+    async fn health_check(&self) -> Result<(), String> {
         let url = self.health_url();
-        let client = self.http_client.clone();
-        Box::pin(async move {
-            match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => Ok(()),
-                // 404 = no such endpoint; skip the response body (often a
-                // large HTML/JSON error page).
-                Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err(format!(
-                    "Sockudo health check failed: HTTP 404 (no endpoint at {url})"
-                )),
-                Ok(resp) => Err(format!(
-                    "Sockudo health check failed: HTTP {}: {}",
-                    resp.status().as_u16(),
-                    resp.text().await.unwrap_or_default()
-                )),
-                Err(e) => Err(format!("Cannot reach Sockudo at {}: {}", url, e)),
-            }
-        })
+        match self.http_client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => Ok(()),
+            // 404 = no such endpoint; skip the response body (often a
+            // large HTML/JSON error page).
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err(format!(
+                "Sockudo health check failed: HTTP 404 (no endpoint at {url})"
+            )),
+            Ok(resp) => Err(format!(
+                "Sockudo health check failed: HTTP {}: {}",
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default()
+            )),
+            Err(e) => Err(format!("Cannot reach Sockudo at {}: {}", url, e)),
+        }
     }
 
-    fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
-        let model = self.model.lock().ok().and_then(|m| m.clone());
-        Box::pin(async move {
-            // Sockudo AI Transport doesn't expose a model list endpoint.
-            // Return the currently selected model if set, or an empty vec
-            // so that auto-selection can prompt the user on first launch.
-            model.into_iter().collect()
-        })
+    async fn list_models(&self) -> Vec<String> {
+        // Sockudo AI Transport doesn't expose a model list endpoint.
+        // Return the currently selected model if set, or an empty vec
+        // so that auto-selection can prompt the user on first launch.
+        self.model
+            .lock()
+            .ok()
+            .and_then(|m| m.clone())
+            .into_iter()
+            .collect()
     }
 
     fn select_model(&mut self, name: String) {
@@ -581,12 +578,11 @@ impl Provider for SockudoProvider {
         self.timeout_secs = timeout_secs;
     }
 
-    fn chat(
+    async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> Pin<Box<dyn Future<Output = Result<mpsc::Receiver<ChatMessageResponse>, String>> + Send>>
-    {
+    ) -> Result<mpsc::Receiver<ChatMessageResponse>, String> {
         // Sockudo doesn't require a locally-selected model — the worker
         // picks the backend model (or uses its default). We send the model
         // name if we have one, otherwise omit it and let the worker decide.
@@ -617,7 +613,7 @@ impl Provider for SockudoProvider {
             }
         });
 
-        Box::pin(async move { Ok(recv) })
+        Ok(recv)
     }
 }
 

@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use tinyharness_lib::config::{AutoAcceptMode, load_settings, save_settings};
+use tinyharness_lib::provider::Provider;
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
