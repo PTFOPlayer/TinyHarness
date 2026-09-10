@@ -145,6 +145,15 @@ pub fn build_registry() -> CommandRegistry {
         },
     );
 
+    reg.register_sync_with_usage(
+        "/questions",
+        "Show or toggle the question tool (on/off). When off, the model cannot ask the user questions.",
+        "/questions [on|off]",
+        |arg, ctx, _msg| {
+            crate::commands::config_settings::execute_questions(&mut ctx.output, arg)
+        },
+    );
+
     // ── Per-project settings ──────────────────────────────────────────────
 
     reg.register_sync_with_usage(
@@ -444,6 +453,7 @@ pub fn build_registry() -> CommandRegistry {
     reg.register_subcommands("/settings", vec!["all"]);
     reg.register_subcommands("/autoaccept", vec!["off", "safe", "all"]);
     reg.register_subcommands("/autocompact", vec!["off", "on"]);
+    reg.register_subcommands("/questions", vec!["off", "on"]);
     reg.register_subcommands("/apikey", vec!["clear"]);
     reg.register_subcommands("/showthink", vec!["off", "on"]);
     reg.register_subcommands("/think", vec!["high", "low", "medium", "off"]);
@@ -471,4 +481,38 @@ pub fn create_context(
     let mut ctx = CommandContext::new(provider, workspace_ctx, prompts_dir);
     ctx.show_thinking = settings.show_thinking;
     ctx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_contains_questions_command() {
+        let reg = build_registry();
+        assert!(reg.contains("/questions"));
+        assert!(reg.command_names().contains(&"/questions"));
+    }
+
+    #[test]
+    fn questions_command_has_on_off_subcommands() {
+        let reg = build_registry();
+        let binding = reg.subcommands();
+        let subs = binding.get("/questions").expect("subcommands");
+        assert!(subs.contains(&"on".to_string()));
+        assert!(subs.contains(&"off".to_string()));
+    }
+
+    #[tokio::test]
+    async fn questions_command_dispatches_without_error() {
+        let reg = build_registry();
+        let (mut ctx, _mock) = crate::test_helpers::make_context();
+        let mut messages = crate::test_helpers::make_messages("test");
+        // Empty arg only reads settings — no write to disk.
+        let result = reg
+            .dispatch("/questions", &mut ctx, &mut messages)
+            .await
+            .expect("dispatch should succeed");
+        assert!(matches!(result, CommandResult::Ok));
+    }
 }

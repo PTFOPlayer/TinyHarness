@@ -23,7 +23,7 @@ Three crates in a Cargo workspace:
 ### Key `tinyharness-lib` modules
 
 - `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `OpenAiCompatProvider` (unified llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
-- `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering, `register_custom_tools()` for custom tools
+- `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering, `ToolAvailability` (opt-out flags for `auto_compact`/`question`, both default on), `register_custom_tools()` for custom tools
 - `custom_tools/` — Custom-tool system: `CustomToolManager` (load/merge global + project `custom_tools.json`), `CustomToolDefinition`/`CustomToolCategory`, `ShellCommand` (template substitution, shell escaping, timeout, `TH_*` env vars)
 - `session.rs` — JSONL persistence, auto-save every 5 messages
 - `context.rs` — Workspace metadata + instruction file discovery (TINYHARNESS.md → .tinyharness.md → AGENTS.md → CLAUDE.md)
@@ -31,7 +31,7 @@ Three crates in a Cargo workspace:
 - `mode.rs` — Agent modes with `.md` system prompts
 - `secret.rs` — `SecretString` wrapper for API key redaction (custom `Debug` impl, serde support)
 - `sandbox.rs` — `Sandbox`: canonicalized-root path containment (lexical `..` normalization + symlink resolution), used by `--sandbox`
-- `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType, AutoAcceptMode (off/safe/all)
+- `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType, AutoAcceptMode (off/safe/all), `MergedSettings::tool_availability()`
 
 ### Binary crate structure
 
@@ -84,6 +84,7 @@ Three crates in a Cargo workspace:
 - **Confirmation**: `run` tool cannot be auto-accepted even with 'a' (auto-accept mode); only `write` and `edit` can. Auto-accept has three modes: `off`, `safe` (read-only commands), `all` (all destructive tools except `run`).
 - **Sandbox mode** (`--sandbox`, Linux only): Path-based tools (ls/read/write/edit/grep/glob) are confined to the workspace root by `ToolManager::execute_tool_call` (checked *before* execution, so it beats auto-accept). `run`'s explicit `cwd` is checked too, and in sandbox mode `run` + custom tools always need confirmation (`decide_tool_confirmation` in `src/agent/confirm.rs`, `sandbox_active` param). Sandbox state lives on `CommandContext.sandbox_active`; the system prompt gets a "Sandbox Mode" notice via `build_system_prompt`. On Windows/macOS the flag exits early with "Linux-only feature" (`cfg(target_os)` gate in `src/main.rs`).
 - **Compaction**: `/compact` uses single-pass for ≤200 intermediate messages, cascading (chunk+merge) for larger sessions.
+- **Optional tools**: `auto_compact` and `question` can each be hidden from the model via `ToolAvailability` (settings `auto_compact_enabled` / `questions_enabled`, both default `true`; global via `/autocompact` & `/questions`, or per-project via `.tinyharness/config.json`). Filtering happens in `ToolManager::tools_for_mode`, so disabled tools never reach the provider — the agent loop does not re-check at execution time.
 - **Context warnings**: Load warnings at 70%/90% thresholds based on last known token count (estimation).
 - **Session files**: JSONL (metadata line first, then message lines); malformed lines silently skipped on load; stored in `~/.local/share/tinyharness/sessions/`.
 - **Web tools**: `web_search` and `web_fetch` use `https://ollama.com/api/web_search` and require an Ollama API key set via `/apikey`.

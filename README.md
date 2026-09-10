@@ -243,6 +243,7 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 | `/contextlimit [tokens]` | Show or set the context warning threshold |
 | `/autoaccept [all\|safe\|off]` | Show or set auto-accept mode (`off`, `safe` = read-only, `all` = all tools except `run`) |
 | `/autocompact [on\|off]` | Toggle the auto_compact tool (when off, the model cannot request compaction) |
+| `/questions [on\|off]` | Toggle the question tool (when off, the model cannot ask the user questions) |
 | `/showthink [on\|off]` | Toggle display of the model's thinking/reasoning chain |
 | `/timeout <seconds>` | Set Ollama request timeout (default: 5s) |
 | `/retries <count>` | Set Ollama max retries (default: 3) |

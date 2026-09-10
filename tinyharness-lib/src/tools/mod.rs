@@ -37,6 +37,45 @@ pub enum SignalEvent {
     InvokeSkill { skill_name: String },
 }
 
+/// Controls which optional tools are advertised to the model.
+///
+/// Tools disabled here are filtered out of [`ToolManager::tools_for_mode`],
+/// so the model never sees them and cannot call them. All flags default to
+/// `true` — opt out explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolAvailability {
+    /// Whether the model may request conversation compaction (`auto_compact`).
+    pub auto_compact: bool,
+    /// Whether the model may ask the user multiple-choice questions (`question`).
+    pub question: bool,
+}
+
+impl Default for ToolAvailability {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+impl ToolAvailability {
+    /// Every optional tool available (the default).
+    pub fn all() -> Self {
+        ToolAvailability {
+            auto_compact: true,
+            question: true,
+        }
+    }
+
+    /// Whether the named tool is available under this configuration.
+    /// Tools not listed here are always available.
+    pub fn allows(&self, tool_name: &str) -> bool {
+        match tool_name {
+            "auto_compact" => self.auto_compact,
+            "question" => self.question,
+            _ => true,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ToolManager {
     tools: Vec<Tool>,
@@ -117,37 +156,33 @@ impl ToolManager {
     }
 
     /// Returns the tool definitions appropriate for the given agent mode.
-    /// When `auto_compact_enabled` is false, the `auto_compact` tool is excluded.
+    ///
+    /// Tools disabled in `availability` (e.g. `auto_compact`, `question`) are
+    /// excluded, so the model never sees them.
     pub fn tools_for_mode(
         &self,
         mode: AgentMode,
-        auto_compact_enabled: bool,
+        availability: ToolAvailability,
     ) -> Vec<ToolDefinition> {
-        let filter_compact = |t: &&Tool| {
-            if t.name == "auto_compact" {
-                auto_compact_enabled
-            } else {
-                true
-            }
-        };
+        let is_available = |t: &&Tool| availability.allows(&t.name);
         match mode {
             AgentMode::Agent => self
                 .tools
                 .iter()
-                .filter(filter_compact)
+                .filter(is_available)
                 .map(|t| t.to_definition())
                 .collect(),
             AgentMode::Casual => self
                 .tools
                 .iter()
-                .filter(|t| filter_compact(t) && (t.name == "web_search" || t.name == "web_fetch"))
+                .filter(|t| is_available(t) && (t.name == "web_search" || t.name == "web_fetch"))
                 .map(|t| t.to_definition())
                 .collect(),
             AgentMode::Planning => self
                 .tools
                 .iter()
                 .filter(|t| {
-                    filter_compact(t)
+                    is_available(t)
                         && (t.category == ToolCategory::ReadOnly
                             || t.category == ToolCategory::Signal)
                 })
@@ -157,7 +192,7 @@ impl ToolManager {
                 .tools
                 .iter()
                 .filter(|t| {
-                    filter_compact(t)
+                    is_available(t)
                         && (t.category == ToolCategory::ReadOnly
                             || t.category == ToolCategory::Signal)
                 })

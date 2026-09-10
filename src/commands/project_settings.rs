@@ -111,6 +111,15 @@ fn execute_show(out: &mut Output) {
     let (ac_str, ac_src) = format_setting(ac_val, merged.auto_compact_enabled_source, None);
     let _ = writeln!(out, "{BOLD}│{RESET} Auto-Compact: {ac_str} {ac_src}");
 
+    // ── Questions ──
+    let q_val = if merged.questions_enabled {
+        "on"
+    } else {
+        "off"
+    };
+    let (q_str, q_src) = format_setting(q_val, merged.questions_enabled_source, None);
+    let _ = writeln!(out, "{BOLD}│{RESET} Questions:  {q_str} {q_src}");
+
     let _ = writeln!(
         out,
         "{BOLD}╰─────────────────────────────────────────────────╯{RESET}",
@@ -206,7 +215,11 @@ fn execute_init(out: &mut Output) {
 
   // Enable or disable the auto_compact tool for this project.
   // When false, the model will not see auto_compact as an available tool.
-  // "auto_compact_enabled": true
+  // "auto_compact_enabled": true,
+
+  // Enable or disable the question tool for this project.
+  // When false, the model will not see question as an available tool.
+  // "questions_enabled": true
 }
 "#;
 
