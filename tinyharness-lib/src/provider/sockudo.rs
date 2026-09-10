@@ -363,8 +363,12 @@ impl SockudoProvider {
 
                                     // Send incremental content chunk
                                     let chunk_content = vm.content.unwrap_or_default();
-                                    if !chunk_content.is_empty() {
-                                        send_chunk(&send, &chunk_content).await;
+                                    if !chunk_content.is_empty()
+                                        && !send_chunk(&send, &chunk_content).await
+                                    {
+                                        // Receiver gone (interrupt/shutdown) —
+                                        // stop consuming the WebSocket stream.
+                                        return Ok(());
                                     }
 
                                     // Capture tool calls (can appear in any chunk)
@@ -375,8 +379,10 @@ impl SockudoProvider {
                                     }
                                 } else {
                                     // Plain-text payload (not JSON). Treat as content chunk.
-                                    if !event.data.is_empty() {
-                                        send_chunk(&send, &event.data).await;
+                                    if !event.data.is_empty()
+                                        && !send_chunk(&send, &event.data).await
+                                    {
+                                        return Ok(());
                                     }
                                 }
                                 continue;
@@ -461,19 +467,22 @@ impl SockudoProvider {
 // ── Streaming helper functions ──────────────────────────────────────────────
 
 /// Send an incremental content chunk (done: false).
-async fn send_chunk(send: &mpsc::Sender<ChatMessageResponse>, content: &str) {
-    let _ = send
-        .send(ChatMessageResponse {
-            message: ChatMessage {
-                content: content.to_string(),
-                tool_calls: vec![],
-                thinking: None,
-            },
-            done: false,
-            is_error: false,
-            usage: None,
-        })
-        .await;
+///
+/// Returns `false` when the receiver has been dropped (user interrupt,
+/// shutdown) so the caller can stop producing further chunks.
+async fn send_chunk(send: &mpsc::Sender<ChatMessageResponse>, content: &str) -> bool {
+    send.send(ChatMessageResponse {
+        message: ChatMessage {
+            content: content.to_string(),
+            tool_calls: vec![],
+            thinking: None,
+        },
+        done: false,
+        is_error: false,
+        usage: None,
+    })
+    .await
+    .is_ok()
 }
 
 /// Update the shared model field only if it's currently `None` and the
@@ -495,35 +504,35 @@ async fn send_done(
     send: &mpsc::Sender<ChatMessageResponse>,
     tool_calls: &[ToolCall],
     usage: Option<TokenUsage>,
-) {
-    let _ = send
-        .send(ChatMessageResponse {
-            message: ChatMessage {
-                content: String::new(),
-                tool_calls: tool_calls.to_vec(),
-                thinking: None,
-            },
-            done: true,
-            is_error: false,
-            usage,
-        })
-        .await;
+) -> bool {
+    send.send(ChatMessageResponse {
+        message: ChatMessage {
+            content: String::new(),
+            tool_calls: tool_calls.to_vec(),
+            thinking: None,
+        },
+        done: true,
+        is_error: false,
+        usage,
+    })
+    .await
+    .is_ok()
 }
 
 /// Send an error response with done: true.
-async fn send_error(send: &mpsc::Sender<ChatMessageResponse>, message: &str) {
-    let _ = send
-        .send(ChatMessageResponse {
-            message: ChatMessage {
-                content: message.to_string(),
-                tool_calls: vec![],
-                thinking: None,
-            },
-            done: true,
-            is_error: true,
-            usage: None,
-        })
-        .await;
+async fn send_error(send: &mpsc::Sender<ChatMessageResponse>, message: &str) -> bool {
+    send.send(ChatMessageResponse {
+        message: ChatMessage {
+            content: message.to_string(),
+            tool_calls: vec![],
+            thinking: None,
+        },
+        done: true,
+        is_error: true,
+        usage: None,
+    })
+    .await
+    .is_ok()
 }
 
 impl Provider for SockudoProvider {
@@ -586,7 +595,7 @@ impl Provider for SockudoProvider {
         let model = self.model.lock().ok().and_then(|m| m.clone());
         let model_for_input = model.as_deref().filter(|s| !s.is_empty());
 
-        let (send, recv) = mpsc::channel::<ChatMessageResponse>(1024);
+        let (send, recv) = mpsc::channel::<ChatMessageResponse>(super::STREAM_CHANNEL_CAPACITY);
 
         let mut ai_input = build_ai_input_opt(model_for_input, &messages, &tools);
         let worker_channel = "ai-output".to_string();

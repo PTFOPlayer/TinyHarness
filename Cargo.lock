@@ -18,6 +18,7 @@ dependencies = [
  "tinyharness-lib",
  "tinyharness-ui",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

@@ -12,7 +12,7 @@ use tinyharness_ui::style::*;
 async_command!(
     TimeoutCommand,
     "/timeout",
-    "Show or set the Ollama request timeout in seconds (default: 5)",
+    "Show or set the request timeout in seconds (applies to the active provider)",
     "/timeout [secs]",
     |raw_arg, ctx, _messages| {
         let arg = raw_arg.unwrap_or("").to_string();
@@ -22,8 +22,9 @@ async_command!(
                 let settings = load_settings();
                 let _ = writeln!(
                     ctx.output,
-                    "{BOLD}Current timeout: {BLUE}{}s{RESET}",
-                    settings.ollama_timeout_secs,
+                    "{BOLD}Current timeout: {BLUE}{}s{RESET} {GRAY}({}){RESET}",
+                    settings.effective_timeout_secs(),
+                    settings.last_provider,
                 );
                 return Ok(CommandResult::Ok);
             }
@@ -31,7 +32,7 @@ async_command!(
             match arg.parse::<u64>() {
                 Ok(secs) if secs > 0 => {
                     let mut settings = load_settings();
-                    settings.ollama_timeout_secs = secs;
+                    settings.request_timeout_secs = Some(secs);
                     save_settings(&settings);
                     let mut p = provider.lock().await;
                     p.set_timeout(secs);
@@ -53,7 +54,7 @@ async_command!(
 async_command!(
     RetriesCommand,
     "/retries",
-    "Show or set the maximum number of Ollama request retries (default: 3)",
+    "Show or set the maximum number of request retries (applies to the active provider)",
     "/retries [count]",
     |raw_arg, ctx, _messages| {
         let arg = raw_arg.unwrap_or("").to_string();
@@ -63,8 +64,9 @@ async_command!(
                 let settings = load_settings();
                 let _ = writeln!(
                     ctx.output,
-                    "{BOLD}Current max retries: {BLUE}{}{RESET}",
-                    settings.ollama_max_retries,
+                    "{BOLD}Current max retries: {BLUE}{}{RESET} {GRAY}({}){RESET}",
+                    settings.effective_max_retries(),
+                    settings.last_provider,
                 );
                 return Ok(CommandResult::Ok);
             }
@@ -72,7 +74,7 @@ async_command!(
             match arg.parse::<u32>() {
                 Ok(count) => {
                     let mut settings = load_settings();
-                    settings.ollama_max_retries = count;
+                    settings.request_max_retries = Some(count);
                     save_settings(&settings);
                     let mut p = provider.lock().await;
                     p.set_retries(count);

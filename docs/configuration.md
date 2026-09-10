@@ -34,8 +34,8 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
   "sockudo_app_key": null,
   "sockudo_app_secret": null,
   "skip_health_check": false,
-  "ollama_timeout_secs": 5,
-  "ollama_max_retries": 3,
+  "request_timeout_secs": null,
+  "request_max_retries": null,
   "ollama_think_type": "medium",
   "show_thinking": false,
   "context_limit": null,
@@ -119,9 +119,18 @@ Can be overridden per-project via `.tinyharness/config.json` → `preferred_mode
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ollama_api_key` | string\|null | `null` | API key for Ollama cloud features (`web_search`, `web_fetch`). Set via `/apikey <key>`. Leave `null` for local-only use |
-| `ollama_timeout_secs` | u64 | `5` | HTTP request timeout in seconds. Increase for slow models or large payloads. Set via `/timeout <seconds>` |
-| `ollama_max_retries` | u32 | `3` | Maximum retries on transient errors (network failures, 5xx responses). Set via `/retries <count>` |
 | `ollama_think_type` | string | `"medium"` | Reasoning level for models that support it (qwen2.5 variants): `"off"`, `"low"`, `"medium"`, `"high"`. Set via `/think <level>` |
+
+### Request Timeout & Retry Settings (provider-agnostic)
+
+These apply to every provider that supports timeouts/retries (Ollama, llama.cpp, vLLM, OpenAI-compat, Sockudo). When `null`, per-provider defaults apply.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `request_timeout_secs` | u64\|null | `null` | HTTP request timeout in seconds (per-request attempt). Per-provider defaults when `null`: Ollama 5s, Sockudo 120s, OpenAI-compatible 30s. Set via `/timeout <seconds>` |
+| `request_max_retries` | u32\|null | `null` | Maximum attempts for transient failures (connection errors, timeouts, 5xx/429 responses). Per-provider defaults when `null`: Ollama 3, OpenAI-compatible 0 (no retries). Set via `/retries <count>`. Backoff between attempts: 1s, 2s, 4s, … |
+
+**Legacy migration:** old configs with `ollama_timeout_secs` / `ollama_max_retries` are automatically migrated into `request_timeout_secs` / `request_max_retries` on load. Explicit new values always win over migrated ones.
 
 ### Display Settings
 
@@ -206,7 +215,7 @@ safe_command_prefixes    (project):
 auto_accept_mode         (project): off
 context_limit             (project): 32768
 last_provider             (global):  ollama
-ollama_timeout_secs       (default): 5
+request_timeout_secs       (default): null (→ 5s for ollama)
 ```
 
 ### Creating a Project Config

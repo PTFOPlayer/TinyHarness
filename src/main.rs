@@ -126,21 +126,34 @@ async fn create_provider(
     kind: ProviderKind,
     url: String,
     api_key: Option<SecretString>,
+    timeout_secs: u64,
+    max_retries: u32,
     skip_health_check: bool,
     skip_health_check_source: &str,
     settings: &Settings,
 ) -> Arc<Mutex<dyn Provider + Send + Sync>> {
     let provider: Arc<Mutex<dyn Provider + Send + Sync>> = match kind {
         ProviderKind::LlamaCpp => Arc::new(Mutex::new(
-            OpenAiCompatProvider::new(url).with_static_models(vec!["llama-cpp".to_string()]),
+            OpenAiCompatProvider::with_options(url, None, timeout_secs, max_retries)
+                .with_static_models(vec!["llama-cpp".to_string()]),
         )),
-        ProviderKind::Vllm => Arc::new(Mutex::new(OpenAiCompatProvider::new(url))),
+        ProviderKind::Vllm => Arc::new(Mutex::new(OpenAiCompatProvider::with_options(
+            url,
+            None,
+            timeout_secs,
+            max_retries,
+        ))),
         ProviderKind::OpenAiCompat => match api_key {
-            Some(key) if !key.is_empty() => {
-                Arc::new(Mutex::new(OpenAiCompatProvider::with_api_key(url, key)))
-            }
+            Some(key) if !key.is_empty() => Arc::new(Mutex::new(
+                OpenAiCompatProvider::with_options(url, Some(key), timeout_secs, max_retries),
+            )),
             // Explicit empty `--api-key ""` opts out of auth entirely.
-            Some(_) => Arc::new(Mutex::new(OpenAiCompatProvider::new(url))),
+            Some(_) => Arc::new(Mutex::new(OpenAiCompatProvider::with_options(
+                url,
+                None,
+                timeout_secs,
+                max_retries,
+            ))),
             None => {
                 let mut err_out = Output::stderr();
                 let _ = writeln!(
@@ -154,16 +167,12 @@ async fn create_provider(
             }
         },
         ProviderKind::Ollama => {
-            let provider = OllamaProvider::new(
-                url,
-                settings.ollama_timeout_secs,
-                settings.ollama_max_retries,
-                settings.ollama_think_type,
-            )
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+            let provider =
+                OllamaProvider::new(url, timeout_secs, max_retries, settings.ollama_think_type)
+                    .unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    });
             Arc::new(Mutex::new(provider))
         }
         ProviderKind::Sockudo => {
@@ -387,10 +396,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         "settings.skip_health_check"
     };
+    // Provider-agnostic timeout/retry settings. Values resolved against the
+    // active provider kind (per-provider defaults when unset).
+    let timeout_secs = settings.effective_timeout_secs();
+    let max_retries = settings.effective_max_retries();
     let provider = create_provider(
         provider_kind,
         url.clone(),
         api_key,
+        timeout_secs,
+        max_retries,
         skip_hc,
         skip_hc_source,
         &settings,

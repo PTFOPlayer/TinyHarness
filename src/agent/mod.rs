@@ -362,6 +362,10 @@ pub async fn run_agent_loop(
             let mut waiting_for_first_chunk = true;
             let mut has_shown_spinner = false;
 
+            // Backpressure logging: counter for the 100ms select tick, so the
+            // debug metric fires about once per second instead of per chunk.
+            let mut backpressure_log_ticks: u32 = 0;
+
             stdout.write_all(ORANGE.as_bytes())?;
 
             loop {
@@ -455,6 +459,24 @@ pub async fn run_agent_loop(
                             break;
                         }
 
+                        // Backpressure metric: the producer (provider HTTP
+                        // task) suspends when the channel buffer is full, so
+                        // a persistently large pending count means the UI is
+                        // consuming slower than the model generates. Logged
+                        // at most once per second to stay useful but quiet.
+                        backpressure_log_ticks += 1;
+                        if backpressure_log_ticks >= 10 {
+                            backpressure_log_ticks = 0;
+                            let pending = recv.len();
+                            if pending > 0 {
+                                tracing::debug!(
+                                    "stream backpressure: {} chunk(s) pending in channel (capacity {})",
+                                    pending,
+                                    tinyharness_lib::provider::STREAM_CHANNEL_CAPACITY
+                                );
+                            }
+                        }
+
                         // Show spinner animation while waiting for first chunk.
                         // When show_thinking is enabled, skip the spinner — the
                         // model's actual thinking content will stream in instead.
@@ -487,6 +509,11 @@ pub async fn run_agent_loop(
 
             // Handle user interrupt (Ctrl+C during generation)
             if was_interrupted {
+                // Close the channel so the provider's background task stops
+                // producing (and stops reading the HTTP response) as soon as
+                // it next tries to send, instead of draining the remainder of
+                // the generation into a dropped buffer.
+                recv.close();
                 interrupted.store(false, Ordering::SeqCst);
                 stdout.write_all(RESET.as_bytes())?;
                 writeln!(

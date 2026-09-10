@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 use crate::config::OllamaThinkType;
 use crate::image::ImageAttachment;
 
+/// Channel capacity for streaming chat responses from providers to the
+/// agent loop.
+///
+/// A small buffer applies backpressure to the provider's HTTP read loop
+/// when the UI consumes chunks slowly: once the buffer is full,
+/// `send().await` suspends the provider task instead of letting chunks
+/// accumulate without bound. 64 chunks is far more than a terminal renders
+/// per frame, so streaming throughput is unaffected in practice.
+pub const STREAM_CHANNEL_CAPACITY: usize = 64;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,

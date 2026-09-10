@@ -184,7 +184,8 @@ impl Provider for OllamaProvider {
                 });
             }
         };
-        let (send, recv) = tokio::sync::mpsc::channel::<ChatMessageResponse>(1024);
+        let (send, recv) =
+            tokio::sync::mpsc::channel::<ChatMessageResponse>(super::STREAM_CHANNEL_CAPACITY);
         let timeout_secs = self.timeout_secs;
         let max_retries = self.max_retries;
         let http_client = self.http_client.clone();

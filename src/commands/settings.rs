@@ -62,12 +62,12 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
     let _ = writeln!(
         out,
         "{BOLD}│{RESET} Timeout:   {BLUE}{}s{RESET}",
-        settings.ollama_timeout_secs,
+        settings.effective_timeout_secs(),
     );
     let _ = writeln!(
         out,
         "{BOLD}│{RESET} Retries:   {BLUE}{}{RESET}",
-        settings.ollama_max_retries,
+        settings.effective_max_retries(),
     );
 
     let _ = writeln!(

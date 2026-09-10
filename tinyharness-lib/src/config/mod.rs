@@ -488,12 +488,18 @@ pub struct Settings {
     pub sockudo_app_key: Option<String>,
     /// Sockudo app secret (used to sign API requests via HMAC-SHA256).
     pub sockudo_app_secret: Option<SecretString>,
-    /// Timeout in seconds for Ollama requests (default: 5)
-    #[serde(default)]
-    pub ollama_timeout_secs: u64,
-    /// Maximum number of retries for Ollama requests (default: 3)
-    #[serde(default)]
-    pub ollama_max_retries: u32,
+    /// Request timeout in seconds, applied to every provider that supports
+    /// timeouts (Ollama, OpenAI-compatible, Sockudo). `None` → per-provider
+    /// default (Ollama: 5s, Sockudo: 120s, OpenAI-compatible: 30s).
+    /// Set via `/timeout <secs>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout_secs: Option<u64>,
+    /// Maximum number of retries for transient network failures, applied to
+    /// every provider that supports retries (Ollama, OpenAI-compatible).
+    /// `None` → per-provider default (Ollama: 3, OpenAI-compatible: 0).
+    /// Set via `/retries <count>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_max_retries: Option<u32>,
     /// Controls the think/reasoning level for Ollama (default: Medium)
     #[serde(default)]
     pub ollama_think_type: OllamaThinkType,
@@ -558,9 +564,9 @@ impl Default for Settings {
             sockudo_app_id: None,
             sockudo_app_key: None,
             sockudo_app_secret: None,
-            ollama_timeout_secs: 5,
-            ollama_max_retries: 3,
             ollama_think_type: OllamaThinkType::Medium,
+            request_timeout_secs: None,
+            request_max_retries: None,
             show_thinking: true,
             context_limit: None,
             auto_accept_mode: AutoAcceptMode::Safe,
@@ -669,6 +675,27 @@ impl Settings {
     /// Get the saved URL for the current (`last_provider`) kind, if any.
     pub fn get_current_url(&self) -> Option<&str> {
         self.get_url_for(self.last_provider)
+    }
+
+    /// Effective request timeout in seconds, resolving `None` to the
+    /// per-provider default (Ollama: 5s, Sockudo: 120s, others: 30s).
+    pub fn effective_timeout_secs(&self) -> u64 {
+        self.request_timeout_secs
+            .unwrap_or(match self.last_provider {
+                ProviderKind::Ollama => 5,
+                ProviderKind::Sockudo => 120,
+                _ => 30,
+            })
+    }
+
+    /// Effective maximum number of request retries, resolving `None` to the
+    /// per-provider default (Ollama: 3, others: 0).
+    pub fn effective_max_retries(&self) -> u32 {
+        self.request_max_retries
+            .unwrap_or(match self.last_provider {
+                ProviderKind::Ollama => 3,
+                _ => 0,
+            })
     }
 }
 
@@ -798,6 +825,20 @@ impl SettingsStore {
                 settings
                     .provider_urls
                     .insert(settings.last_provider, url_str.to_string());
+            }
+
+            // Migrate legacy Ollama-specific timeout/retry keys into the
+            // provider-agnostic fields. Only applies when the new keys are
+            // absent (explicit new values win over migrated ones).
+            if settings.request_timeout_secs.is_none()
+                && let Some(timeout) = obj.get("ollama_timeout_secs").and_then(|v| v.as_u64())
+            {
+                settings.request_timeout_secs = Some(timeout);
+            }
+            if settings.request_max_retries.is_none()
+                && let Some(retries) = obj.get("ollama_max_retries").and_then(|v| v.as_u64())
+            {
+                settings.request_max_retries = Some(retries as u32);
             }
         }
 
@@ -1046,8 +1087,8 @@ mod tests {
             "preferred_mode": "Agent",
             "ollama_api_key": null,
             "openai_compat_api_key": "sk-test",
-            "ollama_timeout_secs": 5,
-            "ollama_max_retries": 3,
+            "request_timeout_secs": 5,
+            "request_max_retries": 3,
             "ollama_think_type": "High",
             "show_thinking": true,
             "context_limit": 256000,
@@ -1436,16 +1477,70 @@ mod tests {
 
         for i in 0..10 {
             let settings = Settings {
-                ollama_timeout_secs: i,
+                request_timeout_secs: Some(i),
                 ..Settings::default()
             };
             store.save(&settings).unwrap();
         }
 
         let loaded = store.load().unwrap();
-        assert_eq!(loaded.ollama_timeout_secs, 9);
+        assert_eq!(loaded.request_timeout_secs, Some(9));
 
         let dir = store.path().parent().unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── Legacy timeout/retry migration tests ─────────────────────────────
+
+    /// Old configs with `ollama_timeout_secs`/`ollama_max_retries` must be
+    /// migrated into the provider-agnostic fields.
+    #[test]
+    fn migrate_legacy_ollama_timeout_and_retries() {
+        let store = SettingsStore::new(temp_settings_path());
+        let json =
+            r#"{"last_provider": "Ollama", "ollama_timeout_secs": 42, "ollama_max_retries": 7}"#;
+        std::fs::write(store.path(), json).unwrap();
+        let settings = store.load().unwrap();
+        assert_eq!(settings.request_timeout_secs, Some(42));
+        assert_eq!(settings.request_max_retries, Some(7));
+        let _ = std::fs::remove_file(store.path());
+    }
+
+    /// Legacy migration must not override explicitly-set new values.
+    #[test]
+    fn migrate_legacy_timeout_does_not_override_new_fields() {
+        let store = SettingsStore::new(temp_settings_path());
+        let json = r#"{"last_provider": "Ollama", "ollama_timeout_secs": 42, "ollama_max_retries": 7, "request_timeout_secs": 99}"#;
+        std::fs::write(store.path(), json).unwrap();
+        let settings = store.load().unwrap();
+        assert_eq!(settings.request_timeout_secs, Some(99));
+        assert_eq!(settings.request_max_retries, Some(7));
+        let _ = std::fs::remove_file(store.path());
+    }
+
+    /// The default for a fresh config is `None` → per-provider defaults via
+    /// the effective accessors (Ollama: 5s/3 retries, others: 30s/0 retries).
+    #[test]
+    fn effective_timeout_retries_defaults_per_provider() {
+        let mut settings = Settings {
+            last_provider: ProviderKind::Ollama,
+            ..Settings::default()
+        };
+        assert_eq!(settings.effective_timeout_secs(), 5);
+        assert_eq!(settings.effective_max_retries(), 3);
+
+        settings.last_provider = ProviderKind::OpenAiCompat;
+        assert_eq!(settings.effective_timeout_secs(), 30);
+        assert_eq!(settings.effective_max_retries(), 0);
+
+        settings.last_provider = ProviderKind::Sockudo;
+        assert_eq!(settings.effective_timeout_secs(), 120);
+        assert_eq!(settings.effective_max_retries(), 0);
+
+        // Explicit values override per-provider defaults.
+        settings.request_timeout_secs = Some(60);
+        settings.request_max_retries = Some(2);
+        assert_eq!(settings.effective_timeout_secs(), 60);
+        assert_eq!(settings.effective_max_retries(), 2);
     }
 }

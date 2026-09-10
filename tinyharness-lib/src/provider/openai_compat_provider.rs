@@ -49,6 +49,22 @@ impl OpenAiCompatProvider {
         }
     }
 
+    /// Create a new provider with explicit timeout/retry configuration.
+    ///
+    /// `timeout_secs` bounds each request attempt; `max_retries` is the
+    /// number of attempts for transient failures (1 = no retries).
+    pub fn with_options(
+        base_url: String,
+        api_key: Option<SecretString>,
+        timeout_secs: u64,
+        max_retries: u32,
+    ) -> Self {
+        OpenAiCompatProvider {
+            inner: OpenAiCompatInner::with_options(base_url, api_key, timeout_secs, max_retries),
+            static_models: None,
+        }
+    }
+
     /// Override `list_models` to return a fixed list instead of querying
     /// the server. Useful for back-ends like llama.cpp that serve a single
     /// model and don't expose a meaningful model-listing endpoint.
@@ -77,6 +93,14 @@ impl Provider for OpenAiCompatProvider {
 
     fn current_model(&self) -> Option<String> {
         self.inner.current_model()
+    }
+
+    fn set_timeout(&mut self, timeout_secs: u64) {
+        self.inner.set_timeout(timeout_secs);
+    }
+
+    fn set_retries(&mut self, max_retries: u32) {
+        self.inner.set_retries(max_retries);
     }
 
     fn chat(
