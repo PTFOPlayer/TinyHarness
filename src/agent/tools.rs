@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use tinyharness_lib::{
     config::load_settings,
     image::ImageAttachment,
-    provider::{Message, Role, ToolCall},
+    provider::{AnyProvider, Message, Role, ToolCall},
     session::Session,
     tools::SignalEvent,
     tools::ToolManager,
@@ -37,7 +37,7 @@ pub async fn handle_tool_calls<W: Write>(
     stdout: &mut W,
     auto_accept: &mut bool,
     session: &mut Session,
-    provider: std::sync::Arc<Mutex<dyn tinyharness_lib::provider::Provider + Send + Sync>>,
+    provider: std::sync::Arc<Mutex<AnyProvider>>,
     interrupted: &std::sync::atomic::AtomicBool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if tool_calls.is_empty() {

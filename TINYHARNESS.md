@@ -43,7 +43,7 @@ Three crates in a Cargo workspace:
 - Rust edition 2024
 - Core logic (`tinyharness-lib`) must not use terminal I/O, ANSI codes, or rustyline
 - Use `serde` + `schemars` for serialization and tool schema generation
-- Prefer `Pin<Box<dyn Future>>` over `async-trait` to keep dependency tree small
+- Provider async methods use RPITIT (`-> impl Future<...> + Send`) in the `Provider` trait — no `async-trait`, no `Pin<Box<dyn Future>>`. The trait is not dyn-compatible; use the `AnyProvider` enum (concrete wrapper over Ollama / OpenAI-compat / Sockudo) for shared `Arc<Mutex<AnyProvider>>` state. The test mock (`MockProvider`, feature `test-util`) is an `AnyProvider::Mock` variant.
 - Error handling: `Result<T, String>` for user-facing, `Result<T, Box<dyn Error>>` for internal
 - Minimize dependencies; avoid adding new crates when existing ones suffice
 - `#[macro_export]` macros (`extract_args!`) live at `tinyharness_lib` root, not inside `tools`

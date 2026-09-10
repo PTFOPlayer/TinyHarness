@@ -25,6 +25,12 @@ futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+tinyharness-lib = { path = ".", features = ["test-util"] }
+
+[features]
+default = []
+# Exposes provider::mock (MockProvider / MockProviderHandle) for tests.
+test-util = []
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

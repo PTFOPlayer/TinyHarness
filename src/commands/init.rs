@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use tinyharness_lib::context::{PROJECT_MD_FILE_NAMES, WorkspaceContext};
-use tinyharness_lib::provider::{Message, Provider, Role};
+use tinyharness_lib::provider::{AnyProvider, Message, Provider, Role};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
@@ -29,7 +29,7 @@ async_command!(
         let workspace_ctx = ctx.workspace_ctx.clone();
         async move {
             let mut p = provider.lock().await;
-            let result = execute_init(&mut ctx.output, &mut *p, &workspace_ctx, messages).await?;
+            let result = execute_init(&mut ctx.output, &mut p, &workspace_ctx, messages).await?;
             Ok(CommandResult::Init(result))
         }
     }
@@ -45,7 +45,7 @@ async_command!(
 /// instructions, project conventions, and architecture notes.
 pub async fn execute_init(
     out: &mut Output,
-    provider: &mut dyn Provider,
+    provider: &mut AnyProvider,
     workspace_ctx: &WorkspaceContext,
     _messages: &mut Vec<Message>,
 ) -> Result<InitResult, String> {

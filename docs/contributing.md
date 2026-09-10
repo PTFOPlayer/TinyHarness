@@ -152,10 +152,27 @@ All crates use Rust **edition 2024**. Check `Cargo.toml` files if you're unsure.
 
 ### Async Patterns
 
-Prefer `Pin<Box<dyn Future>>` over `async-trait`:
+Prefer RPITIT (`impl Future`) in traits over `async-trait`:
 
 ```rust
-// ✅ Do this
+// tinyharness-lib/src/provider/mod.rs
+pub trait Provider: Send + Sync {
+    fn health_check(&self) -> impl Future<Output = Result<(), String>> + Send;
+    // ...
+}
+```
+
+RPITIT keeps the dependency tree small and avoids boxing, but makes the trait
+not dyn-compatible. For runtime provider selection use the `AnyProvider` enum
+(concrete dispatch) instead of `Arc<Mutex<dyn Provider>>`.
+
+```rust
+// ✅ Do this (RPITIT in traits)
+pub trait Provider: Send + Sync {
+    fn health_check(&self) -> impl Future<Output = Result<(), String>> + Send;
+}
+
+// ✅ Do this (boxed futures for dyn handlers, e.g. command registry callbacks)
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 handler: Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync>,
 
@@ -167,6 +184,8 @@ pub trait AsyncHandler {
 ```
 
 This avoids pulling in the `async-trait` crate and keeps the dependency tree small.
+Note the trade-off: RPITIT traits are not dyn-compatible — that's why
+`AnyProvider` exists (see the Provider trait in `tinyharness-lib/src/provider/mod.rs`).
 
 ### Serialization
 

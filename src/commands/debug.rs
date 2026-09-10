@@ -380,8 +380,8 @@ fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
         "provider_kind": settings.last_provider.to_string(),
         "provider_url": settings.get_current_url(),
         "current_model": settings.get_current_model(),
-        "timeout_secs": settings.ollama_timeout_secs,
-        "max_retries": settings.ollama_max_retries,
+        "timeout_secs": settings.effective_timeout_secs(),
+        "max_retries": settings.effective_max_retries(),
         "think_type": settings.ollama_think_type.to_string(),
         "api_key_configured": settings.ollama_api_key.is_some(),
     });
@@ -682,8 +682,8 @@ fn dump_provider_diagnostics(file: &mut std::fs::File, _ctx: &CommandContext) {
     )
     .unwrap();
 
-    writeln!(file, "Timeout: {}s", settings.ollama_timeout_secs).unwrap();
-    writeln!(file, "Max retries: {}", settings.ollama_max_retries).unwrap();
+    writeln!(file, "Timeout: {}s", settings.effective_timeout_secs()).unwrap();
+    writeln!(file, "Max retries: {}", settings.effective_max_retries()).unwrap();
     writeln!(file, "Think type: {}", settings.ollama_think_type).unwrap();
     writeln!(
         file,
@@ -910,11 +910,14 @@ mod tests {
         // Create a minimal CommandContext for testing.
         CommandContext::new(
             Arc::new(Mutex::new(
-                tinyharness_lib::provider::ollama::OllamaProvider::new(
+                tinyharness_lib::provider::AnyProvider::build(
+                    tinyharness_lib::config::ProviderKind::Ollama,
                     "http://localhost:11434".to_string(),
+                    None,
                     120,
                     0,
                     tinyharness_lib::config::OllamaThinkType::Off,
+                    tinyharness_lib::provider::SockudoCredentials::default(),
                 )
                 .expect("valid test Ollama URL"),
             )),

@@ -12,8 +12,6 @@
 //!
 //! See: <https://github.com/sockudo/sockudo> for server documentation.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -363,8 +361,12 @@ impl SockudoProvider {
 
                                     // Send incremental content chunk
                                     let chunk_content = vm.content.unwrap_or_default();
-                                    if !chunk_content.is_empty() {
-                                        send_chunk(&send, &chunk_content).await;
+                                    if !chunk_content.is_empty()
+                                        && !send_chunk(&send, &chunk_content).await
+                                    {
+                                        // Receiver gone (interrupt/shutdown) —
+                                        // stop consuming the WebSocket stream.
+                                        return Ok(());
                                     }
 
                                     // Capture tool calls (can appear in any chunk)
@@ -375,8 +377,10 @@ impl SockudoProvider {
                                     }
                                 } else {
                                     // Plain-text payload (not JSON). Treat as content chunk.
-                                    if !event.data.is_empty() {
-                                        send_chunk(&send, &event.data).await;
+                                    if !event.data.is_empty()
+                                        && !send_chunk(&send, &event.data).await
+                                    {
+                                        return Ok(());
                                     }
                                 }
                                 continue;
@@ -461,19 +465,22 @@ impl SockudoProvider {
 // ── Streaming helper functions ──────────────────────────────────────────────
 
 /// Send an incremental content chunk (done: false).
-async fn send_chunk(send: &mpsc::Sender<ChatMessageResponse>, content: &str) {
-    let _ = send
-        .send(ChatMessageResponse {
-            message: ChatMessage {
-                content: content.to_string(),
-                tool_calls: vec![],
-                thinking: None,
-            },
-            done: false,
-            is_error: false,
-            usage: None,
-        })
-        .await;
+///
+/// Returns `false` when the receiver has been dropped (user interrupt,
+/// shutdown) so the caller can stop producing further chunks.
+async fn send_chunk(send: &mpsc::Sender<ChatMessageResponse>, content: &str) -> bool {
+    send.send(ChatMessageResponse {
+        message: ChatMessage {
+            content: content.to_string(),
+            tool_calls: vec![],
+            thinking: None,
+        },
+        done: false,
+        is_error: false,
+        usage: None,
+    })
+    .await
+    .is_ok()
 }
 
 /// Update the shared model field only if it's currently `None` and the
@@ -495,67 +502,66 @@ async fn send_done(
     send: &mpsc::Sender<ChatMessageResponse>,
     tool_calls: &[ToolCall],
     usage: Option<TokenUsage>,
-) {
-    let _ = send
-        .send(ChatMessageResponse {
-            message: ChatMessage {
-                content: String::new(),
-                tool_calls: tool_calls.to_vec(),
-                thinking: None,
-            },
-            done: true,
-            is_error: false,
-            usage,
-        })
-        .await;
+) -> bool {
+    send.send(ChatMessageResponse {
+        message: ChatMessage {
+            content: String::new(),
+            tool_calls: tool_calls.to_vec(),
+            thinking: None,
+        },
+        done: true,
+        is_error: false,
+        usage,
+    })
+    .await
+    .is_ok()
 }
 
 /// Send an error response with done: true.
-async fn send_error(send: &mpsc::Sender<ChatMessageResponse>, message: &str) {
-    let _ = send
-        .send(ChatMessageResponse {
-            message: ChatMessage {
-                content: message.to_string(),
-                tool_calls: vec![],
-                thinking: None,
-            },
-            done: true,
-            is_error: true,
-            usage: None,
-        })
-        .await;
+async fn send_error(send: &mpsc::Sender<ChatMessageResponse>, message: &str) -> bool {
+    send.send(ChatMessageResponse {
+        message: ChatMessage {
+            content: message.to_string(),
+            tool_calls: vec![],
+            thinking: None,
+        },
+        done: true,
+        is_error: true,
+        usage: None,
+    })
+    .await
+    .is_ok()
 }
 
 impl Provider for SockudoProvider {
-    fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+    async fn health_check(&self) -> Result<(), String> {
         let url = self.health_url();
-        let client = self.http_client.clone();
-        Box::pin(async move {
-            match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => Ok(()),
-                // 404 = no such endpoint; skip the response body (often a
-                // large HTML/JSON error page).
-                Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err(format!(
-                    "Sockudo health check failed: HTTP 404 (no endpoint at {url})"
-                )),
-                Ok(resp) => Err(format!(
-                    "Sockudo health check failed: HTTP {}: {}",
-                    resp.status().as_u16(),
-                    resp.text().await.unwrap_or_default()
-                )),
-                Err(e) => Err(format!("Cannot reach Sockudo at {}: {}", url, e)),
-            }
-        })
+        match self.http_client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => Ok(()),
+            // 404 = no such endpoint; skip the response body (often a
+            // large HTML/JSON error page).
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err(format!(
+                "Sockudo health check failed: HTTP 404 (no endpoint at {url})"
+            )),
+            Ok(resp) => Err(format!(
+                "Sockudo health check failed: HTTP {}: {}",
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default()
+            )),
+            Err(e) => Err(format!("Cannot reach Sockudo at {}: {}", url, e)),
+        }
     }
 
-    fn list_models(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
-        let model = self.model.lock().ok().and_then(|m| m.clone());
-        Box::pin(async move {
-            // Sockudo AI Transport doesn't expose a model list endpoint.
-            // Return the currently selected model if set, or an empty vec
-            // so that auto-selection can prompt the user on first launch.
-            model.into_iter().collect()
-        })
+    async fn list_models(&self) -> Vec<String> {
+        // Sockudo AI Transport doesn't expose a model list endpoint.
+        // Return the currently selected model if set, or an empty vec
+        // so that auto-selection can prompt the user on first launch.
+        self.model
+            .lock()
+            .ok()
+            .and_then(|m| m.clone())
+            .into_iter()
+            .collect()
     }
 
     fn select_model(&mut self, name: String) {
@@ -572,12 +578,11 @@ impl Provider for SockudoProvider {
         self.timeout_secs = timeout_secs;
     }
 
-    fn chat(
+    async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> Pin<Box<dyn Future<Output = Result<mpsc::Receiver<ChatMessageResponse>, String>> + Send>>
-    {
+    ) -> Result<mpsc::Receiver<ChatMessageResponse>, String> {
         // Sockudo doesn't require a locally-selected model — the worker
         // picks the backend model (or uses its default). We send the model
         // name if we have one, otherwise omit it and let the worker decide.
@@ -586,7 +591,7 @@ impl Provider for SockudoProvider {
         let model = self.model.lock().ok().and_then(|m| m.clone());
         let model_for_input = model.as_deref().filter(|s| !s.is_empty());
 
-        let (send, recv) = mpsc::channel::<ChatMessageResponse>(1024);
+        let (send, recv) = mpsc::channel::<ChatMessageResponse>(super::STREAM_CHANNEL_CAPACITY);
 
         let mut ai_input = build_ai_input_opt(model_for_input, &messages, &tools);
         let worker_channel = "ai-output".to_string();
@@ -608,7 +613,7 @@ impl Provider for SockudoProvider {
             }
         });
 
-        Box::pin(async move { Ok(recv) })
+        Ok(recv)
     }
 }
 

@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -13,6 +11,10 @@ use crate::{
         ChatMessage, ChatMessageResponse, Message, Role, ToolCall, ToolCallFunction, ToolDefinition,
     },
 };
+
+/// Default per-request timeout for OpenAI-compatible providers when no
+/// explicit value is configured (via `/timeout` or settings).
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// Shared inner state for OpenAI-compatible providers (llama.cpp, vLLM, etc.).
 ///
@@ -27,6 +29,14 @@ pub struct OpenAiCompatInner {
     /// request. Used by hosted OpenAI-compatible APIs (e.g. OpenRouter,
     /// Together, self-hosted gateways) that require authentication.
     api_key: Option<SecretString>,
+    /// Per-request timeout in seconds, applied to connecting and reading the
+    /// HTTP response. The default (30s) covers a slow backend; increase via
+    /// `/timeout <secs>` for large-context requests.
+    timeout_secs: u64,
+    /// Maximum number of attempts for transient failures (connection errors,
+    /// timeouts, 5xx responses). 1 = no retries. 4xx responses are never
+    /// retried. Backoff between attempts: 1s, 2s, 4s, …
+    max_retries: u32,
 }
 
 impl OpenAiCompatInner {
@@ -36,9 +46,22 @@ impl OpenAiCompatInner {
 
     /// Create a new inner state with an optional bearer token.
     pub fn with_api_key(base_url: String, api_key: Option<SecretString>) -> Self {
+        Self::with_options(base_url, api_key, DEFAULT_REQUEST_TIMEOUT_SECS, 0)
+    }
+
+    /// Create a new inner state with explicit timeout/retry configuration.
+    pub fn with_options(
+        base_url: String,
+        api_key: Option<SecretString>,
+        timeout_secs: u64,
+        max_retries: u32,
+    ) -> Self {
+        // Read timeout bounds how long we wait between bytes on an active
+        // stream; add slack over the request timeout so long generations
+        // that keep producing tokens are never cut off mid-stream.
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(15))
-            .read_timeout(Duration::from_secs(300))
+            .read_timeout(Duration::from_secs(timeout_secs + 60))
             .build()
             .unwrap_or_else(|_| Client::new());
         OpenAiCompatInner {
@@ -46,35 +69,59 @@ impl OpenAiCompatInner {
             base_url,
             model: None,
             api_key,
+            timeout_secs,
+            max_retries,
         }
     }
 
+    /// Current request timeout in seconds.
+    pub fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
+    }
+
+    /// Current maximum retry count.
+    pub fn max_retries(&self) -> u32 {
+        self.max_retries
+    }
+
+    /// Update the request timeout. Applies to subsequent requests (the HTTP
+    /// client's read timeout is rebuilt lazily on the next `chat()`).
+    pub fn set_timeout(&mut self, timeout_secs: u64) {
+        self.timeout_secs = timeout_secs;
+        self.client = Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(timeout_secs + 60))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+    }
+
+    /// Update the maximum retry count. Applies to subsequent requests.
+    pub fn set_retries(&mut self, max_retries: u32) {
+        self.max_retries = max_retries;
+    }
+
     /// Perform a health check against the server's `/health` endpoint.
-    pub fn health_check(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+    pub async fn health_check(&self) -> Result<(), String> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
-        let client = self.client.clone();
-        let api_key = self.api_key.clone();
-        Box::pin(async move {
-            let mut req = client.get(&url);
-            if let Some(key) = &api_key {
-                req = req.bearer_auth(key.expose_secret());
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key.expose_secret());
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => Ok(()),
+            // A 404 usually means the server simply has no /health
+            // endpoint. Don't dump its response body (often a large HTML
+            // or JSON error page) into the warning.
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
+                Err("Server returned 404 (no /health endpoint)".to_string())
             }
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => Ok(()),
-                // A 404 usually means the server simply has no /health
-                // endpoint. Don't dump its response body (often a large HTML
-                // or JSON error page) into the warning.
-                Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
-                    Err("Server returned 404 (no /health endpoint)".to_string())
-                }
-                Ok(resp) => Err(format!(
-                    "Server returned {}: {}",
-                    resp.status().as_u16(),
-                    resp.text().await.unwrap_or_default()
-                )),
-                Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
-            }
-        })
+            Ok(resp) => Err(format!(
+                "Server returned {}: {}",
+                resp.status().as_u16(),
+                resp.text().await.unwrap_or_default()
+            )),
+            Err(e) => Err(format!("Cannot reach {}: {}", url, e)),
+        }
     }
 
     pub fn select_model(&mut self, name: String) {
@@ -95,45 +142,36 @@ impl OpenAiCompatInner {
 
     /// Fetch the model list from the server's `/v1/models` endpoint.
     /// Returns the list of model IDs, or an empty vec on failure.
-    pub fn fetch_model_list(&self) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> {
+    pub async fn fetch_model_list(&self) -> Vec<String> {
         let url = format!(
             "{}/v1/models",
             self.base_url.trim_end_matches('/').trim_end_matches("/v1")
         );
-        let client = self.client.clone();
-        let current_model = self.model.clone();
-        let api_key = self.api_key.clone();
-        Box::pin(async move {
-            let mut req = client.get(&url);
-            if let Some(key) = &api_key {
-                req = req.bearer_auth(key.expose_secret());
-            }
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.json::<ModelListResponse>().await {
-                        Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
-                        Err(_) => current_model.into_iter().collect(),
-                    }
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key.expose_secret());
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<ModelListResponse>().await {
+                    Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
+                    Err(_) => self.model.clone().into_iter().collect(),
                 }
-                _ => current_model.into_iter().collect(),
             }
-        })
+            _ => self.model.clone().into_iter().collect(),
+        }
     }
 
     /// Stream chat completions using the OpenAI-compatible API.
     /// Returns a receiver for streaming response chunks, or an error string
     /// if the request cannot be started.
-    pub fn chat(
+    pub async fn chat(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String>>
-                + Send,
-        >,
-    > {
-        let (send, recv) = tokio::sync::mpsc::channel::<ChatMessageResponse>(1024);
+    ) -> Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String> {
+        let (send, recv) =
+            tokio::sync::mpsc::channel::<ChatMessageResponse>(super::STREAM_CHANNEL_CAPACITY);
 
         let model = self.model.clone().unwrap_or_default();
         let openai_messages = messages.into_iter().map(to_openai_message).collect();
@@ -141,6 +179,8 @@ impl OpenAiCompatInner {
         let client = self.client.clone();
         let chat_url = self.chat_url();
         let api_key = self.api_key.clone();
+        let timeout_secs = self.timeout_secs;
+        let max_retries = self.max_retries;
 
         let body = ChatRequest {
             model,
@@ -154,12 +194,82 @@ impl OpenAiCompatInner {
 
         // Spawn the streaming work on a background task
         tokio::spawn(async move {
-            let _usage =
-                stream_chat_completions(&client, &chat_url, &body, api_key.as_ref(), &send).await;
+            let _usage = chat_with_retries(
+                &client,
+                &chat_url,
+                &body,
+                api_key.as_ref(),
+                timeout_secs,
+                max_retries,
+                &send,
+            )
+            .await;
         });
 
-        Box::pin(async move { Ok(recv) })
+        Ok(recv)
     }
+}
+
+/// Send the chat request with retry + exponential backoff for transient
+/// failures, then stream the response chunks through `send`.
+///
+/// Retryable failures: connection errors, request timeouts (when the whole
+/// attempt is cut off before any output), and 5xx / 429 responses. Once a
+/// terminal chunk has reached the receiver (success, mid-stream error, or a
+/// 4xx error), the outcome is final — retrying would duplicate output.
+///
+/// Backoff between attempts: 1s, 2s, 4s, … Returns the token usage when a
+/// final attempt succeeds.
+async fn chat_with_retries(
+    client: &reqwest::Client,
+    url: &str,
+    body: &ChatRequest,
+    api_key: Option<&SecretString>,
+    timeout_secs: u64,
+    max_retries: u32,
+    send: &tokio::sync::mpsc::Sender<ChatMessageResponse>,
+) -> Option<crate::provider::TokenUsage> {
+    let max_attempts = max_retries.max(1);
+
+    for attempt in 1..=max_attempts {
+        let result = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            stream_chat_completions(client, url, body, api_key, send),
+        )
+        .await;
+
+        match result {
+            // The attempt produced a terminal chunk (success or surfaced
+            // error) — the receiver already has the outcome, don't retry.
+            Ok(AttemptOutcome::Final(usage)) => return usage,
+            // The attempt failed before delivering anything.
+            Ok(AttemptOutcome::Retryable(e)) => {
+                if attempt >= max_attempts {
+                    send_error_chunk(send, &format!("Error after {attempt} attempt(s): {e}")).await;
+                    return None;
+                }
+            }
+            // The whole attempt timed out before completing.
+            Err(_) => {
+                if attempt >= max_attempts {
+                    send_error_chunk(
+                        send,
+                        &format!(
+                            "Error: Request timed out after {timeout_secs}s ({attempt} attempt(s))"
+                        ),
+                    )
+                    .await;
+                    return None;
+                }
+            }
+        }
+
+        // Exponential backoff: 1s, 2s, 4s, ...
+        let backoff = Duration::from_secs(1 << (attempt - 1));
+        tokio::time::sleep(backoff).await;
+    }
+
+    None
 }
 
 // ── OpenAI-compatible request/response types ──
@@ -390,61 +500,65 @@ pub fn to_openai_tool(ti: ToolDefinition) -> OpenAITool {
     }
 }
 
+/// Outcome of a single streaming attempt.
+///
+/// `Retryable` failures happen before anything was delivered to the
+/// receiver, so the attempt can be repeated cleanly. `Final` outcomes
+/// already produced a terminal chunk on the channel (success or an error
+/// the receiver has seen), so retrying would duplicate output.
+enum AttemptOutcome {
+    /// Nothing was sent to the receiver — safe to retry.
+    Retryable(String),
+    /// A final chunk (success or error) was already sent.
+    Final(Option<crate::provider::TokenUsage>),
+}
+
+/// Determine whether an HTTP status code should be retried.
+///
+/// 5xx responses (server-side trouble) and 429 (rate limit) are transient;
+/// other 4xx errors indicate a request problem that retrying won't fix.
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
 /// Stream chat completions from an OpenAI-compatible endpoint.
-/// Returns accumulated tool calls and final content via the sender.
-/// Also returns the token usage if available.
+///
+/// Returns `AttemptOutcome::Retryable` when the request failed before any
+/// chunk reached the receiver (connection error, non-retryable status
+/// surfaced via `Err`); returns `AttemptOutcome::Final` once a terminal
+/// chunk (success or surfaced error) has been delivered.
 ///
 /// If `api_key` is `Some`, the request includes an
 /// `Authorization: Bearer <key>` header.
-pub async fn stream_chat_completions(
+async fn stream_chat_completions(
     client: &reqwest::Client,
     url: &str,
     body: &ChatRequest,
     api_key: Option<&SecretString>,
     send: &tokio::sync::mpsc::Sender<ChatMessageResponse>,
-) -> Option<crate::provider::TokenUsage> {
+) -> AttemptOutcome {
     let mut request = client.post(url).json(body);
     if let Some(key) = api_key {
         request = request.bearer_auth(key.expose_secret());
     }
     let response = match request.send().await {
         Ok(r) => r,
-        Err(e) => {
-            let _ = send
-                .send(ChatMessageResponse {
-                    message: ChatMessage {
-                        content: format!("Error: {}", e),
-                        tool_calls: vec![],
-                        thinking: None,
-                    },
-                    done: true,
-                    is_error: true,
-                    usage: None,
-                })
-                .await;
-            return None;
-        }
+        Err(e) => return AttemptOutcome::Retryable(format!("Error: {}", e)),
     };
 
     // If the server returned a non-success status, surface the body as an
     // error instead of feeding it into the SSE parser (which would silently
-    // drop it).
+    // drop it). Server-side (5xx) and rate-limit (429) failures are retried
+    // by the caller; client errors (4xx) are surfaced immediately.
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        let _ = send
-            .send(ChatMessageResponse {
-                message: ChatMessage {
-                    content: format!("Error: HTTP {} — {}", status.as_u16(), body),
-                    tool_calls: vec![],
-                    thinking: None,
-                },
-                done: true,
-                is_error: true,
-                usage: None,
-            })
-            .await;
-        return None;
+        let msg = format!("Error: HTTP {} — {}", status.as_u16(), body);
+        if is_retryable_status(status) {
+            return AttemptOutcome::Retryable(msg);
+        }
+        send_error_chunk(send, &msg).await;
+        return AttemptOutcome::Final(None);
     }
 
     let mut stream = response.bytes_stream();
@@ -458,20 +572,10 @@ pub async fn stream_chat_completions(
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
-                // Stream read error — surface it rather than silently breaking
-                let _ = send
-                    .send(ChatMessageResponse {
-                        message: ChatMessage {
-                            content: format!("\n\nStream error: {}", e),
-                            tool_calls: vec![],
-                            thinking: None,
-                        },
-                        done: true,
-                        is_error: true,
-                        usage: None,
-                    })
-                    .await;
-                break;
+                // Stream read error — surface it rather than silently breaking.
+                // This is final: partial output may already have been delivered.
+                send_error_chunk(send, &format!("\n\nStream error: {}", e)).await;
+                return AttemptOutcome::Final(token_usage);
             }
         };
 
@@ -531,7 +635,9 @@ pub async fn stream_chat_completions(
         }
 
         if !response_content.is_empty() {
-            let _ = send
+            // If the receiver is gone (user interrupt, shutdown), stop
+            // reading the HTTP stream instead of draining the rest of it.
+            if send
                 .send(ChatMessageResponse {
                     message: ChatMessage {
                         content: response_content.clone(),
@@ -542,7 +648,11 @@ pub async fn stream_chat_completions(
                     is_error: false,
                     usage: None,
                 })
-                .await;
+                .await
+                .is_err()
+            {
+                return AttemptOutcome::Final(token_usage);
+            }
             response_content.clear();
         }
     }
@@ -581,5 +691,85 @@ pub async fn stream_chat_completions(
         })
         .await;
 
-    token_usage
+    AttemptOutcome::Final(token_usage)
+}
+
+/// Send a terminal error chunk (done: true, is_error: true) to the receiver.
+async fn send_error_chunk(send: &tokio::sync::mpsc::Sender<ChatMessageResponse>, message: &str) {
+    let _ = send
+        .send(ChatMessageResponse {
+            message: ChatMessage {
+                content: message.to_string(),
+                tool_calls: vec![],
+                thinking: None,
+            },
+            done: true,
+            is_error: true,
+            usage: None,
+        })
+        .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 5xx and 429 are transient and should be retried.
+    #[test]
+    fn retryable_status_codes() {
+        assert!(is_retryable_status(reqwest::StatusCode::BAD_GATEWAY));
+        assert!(is_retryable_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(is_retryable_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(is_retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
+    }
+
+    /// 4xx responses (other than 429) mean the request itself is wrong —
+    /// retrying won't help, so they must not be retried.
+    #[test]
+    fn non_retryable_status_codes() {
+        assert!(!is_retryable_status(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!is_retryable_status(reqwest::StatusCode::NOT_FOUND));
+        assert!(!is_retryable_status(reqwest::StatusCode::BAD_REQUEST));
+        assert!(!is_retryable_status(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        ));
+    }
+
+    /// Defaults for fresh inner state: 30s timeout, no retries (matches the
+    /// pre-change hardcoded behaviour for retries and read-timeout headroom).
+    #[test]
+    fn defaults_timeout_and_retries() {
+        let inner = OpenAiCompatInner::new("http://localhost:8080".to_string());
+        assert_eq!(inner.timeout_secs(), 30);
+        assert_eq!(inner.max_retries(), 0);
+    }
+
+    /// Explicit options constructor stores timeout and retries.
+    #[test]
+    fn with_options_stores_configuration() {
+        let inner =
+            OpenAiCompatInner::with_options("http://localhost:8080".to_string(), None, 120, 5);
+        assert_eq!(inner.timeout_secs(), 120);
+        assert_eq!(inner.max_retries(), 5);
+    }
+
+    /// set_timeout rebuilds the HTTP client and updates the stored value.
+    #[test]
+    fn set_timeout_updates_value() {
+        let mut inner = OpenAiCompatInner::new("http://localhost:8080".to_string());
+        inner.set_timeout(60);
+        assert_eq!(inner.timeout_secs(), 60);
+    }
+
+    /// set_retries updates the stored value.
+    #[test]
+    fn set_retries_updates_value() {
+        let mut inner = OpenAiCompatInner::new("http://localhost:8080".to_string());
+        inner.set_retries(7);
+        assert_eq!(inner.max_retries(), 7);
+    }
 }
