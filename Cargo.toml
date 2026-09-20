@@ -5,8 +5,13 @@ members = [".", "tinyharness-lib", "tinyharness-ui"]
 name = "TinyHarness"
 version = "0.5.0"
 license = "MIT"
-description = "tinyharness - ai coding harness"
+description = "TinyHarness - AI coding harness with pluggable LLM providers and built-in tool calling"
 edition = "2024"
+repository = "https://github.com/PTFOPlayer/TinyHarness"
+homepage = "https://github.com/PTFOPlayer/TinyHarness"
+readme = "README.md"
+keywords = ["ai", "agent", "cli", "llm", "coding-assistant"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "tinyharness"
