@@ -606,10 +606,10 @@ mod tests {
     fn stream_emits_line_only_on_newline() {
         let mut md = MarkdownStream::new();
         let mut buf = Vec::new();
-        md.push(&mut buf, "# Hel").unwrap();
+        md.push(&mut buf, "# He").unwrap();
         // No newline yet: nothing visible except the initial reset.
         assert_eq!(String::from_utf8_lossy(&buf), ASSISTANT_TEXT);
-        md.push(&mut buf, "lo world\nnext\n").unwrap();
+        md.push(&mut buf, "llo world\nnext\n").unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("Hello world"));
         assert!(s.contains("next"));
