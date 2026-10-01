@@ -37,7 +37,7 @@ use tinyharness_ui::ui::input::CommandHelper;
 
 pub use display::{
     format_args_summary, format_context_status, print_context_load_warning,
-    print_conversation_history, summarize_listing_result,
+    print_conversation_history,
 };
 pub use input::read_multiline_input;
 pub use safety::{is_safe_command, strip_safe_descriptor_redirections};

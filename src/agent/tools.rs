@@ -387,20 +387,6 @@ fn render_signal_result_cli<W: Write>(
     Ok(())
 }
 
-/// Format a duration in milliseconds as a human-readable string.
-/// Under 1 second: "42ms", 1-59 seconds: "1.2s", 60+ seconds: "1m 23s"
-fn format_duration(ms: u64) -> String {
-    if ms < 1000 {
-        format!("{}ms ", ms)
-    } else if ms < 60_000 {
-        format!("{:.1}s ", ms as f64 / 1000.0)
-    } else {
-        let mins = ms / 60_000;
-        let secs = (ms % 60_000) / 1000;
-        format!("{}m {}s ", mins, secs)
-    }
-}
-
 async fn execute_generic_tool<W: Write>(
     call: &ToolCall,
     tool_manager: &ToolManager,
@@ -492,94 +478,16 @@ async fn execute_generic_tool<W: Write>(
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
 
-    // For tools that return potentially large listings, show only a summary
-    match call.function.name.as_str() {
-        "read" => {
-            let is_error = result.starts_with("Error:");
-            let summary = result.lines().next().unwrap_or("(empty result)");
-            let indicator = if is_error { RED } else { GREEN };
-            let icon = if is_error { "✗" } else { "✓" };
-            let summary_color = if is_error { RED } else { DIM };
-            writeln!(
-                stdout,
-                "{BG_DIM}  {indicator}{icon}{RESET}{BG_DIM} {DIM}{name}{RESET}{BG_DIM} {duration}{summary_color}{summary}{FILL_EOL}{RESET}",
-                indicator = indicator,
-                icon = icon,
-                name = call.function.name,
-                duration = format_duration(duration_ms),
-                summary_color = summary_color,
-                summary = summary
-            )
-            .unwrap();
-        }
-        "ls" | "grep" | "glob" => {
-            let is_error = result.starts_with("Error:");
-            let summary = super::display::summarize_listing_result(&result, &call.function.name);
-            let indicator = if is_error { RED } else { GREEN };
-            let icon = if is_error { "✗" } else { "✓" };
-            let summary_color = if is_error { RED } else { DIM };
-            writeln!(
-                stdout,
-                "{BG_DIM}  {indicator}{icon}{RESET}{BG_DIM} {DIM}{name}{RESET}{BG_DIM} {duration}{summary_color}{summary}{FILL_EOL}{RESET}",
-                indicator = indicator,
-                icon = icon,
-                name = call.function.name,
-                duration = format_duration(duration_ms),
-                summary_color = summary_color,
-                summary = summary
-            )
-            .unwrap();
-        }
-        _ => {
-            let is_error = result.starts_with("Error:");
-            let indicator = if is_error { RED } else { GREEN };
-            let icon = if is_error { "✗" } else { "✓" };
-
-            if is_error {
-                // Compact single-line error: truncate to fit one line
-                let error_msg = result.lines().next().unwrap_or("Error");
-                // Truncate at 80 chars to keep the line compact
-                let max_err_len = 80;
-                let truncated = if error_msg.len() > max_err_len {
-                    let cut = error_msg.floor_char_boundary(max_err_len - 1);
-                    format!("{}…", &error_msg[..cut])
-                } else {
-                    error_msg.to_string()
-                };
-                writeln!(
-                    stdout,
-                    "{BG_DIM}  {indicator}{icon}{RESET}{BG_DIM} {DIM}{name}{RESET}{BG_DIM} {duration}{RED}{truncated}{FILL_EOL}{RESET}",
-                    indicator = indicator,
-                    icon = icon,
-                    name = call.function.name,
-                    duration = format_duration(duration_ms),
-                    truncated = truncated,
-                )
-                .unwrap();
-            } else {
-                writeln!(
-                    stdout,
-                    "{BG_DIM}  {indicator}{icon}{RESET}{BG_DIM} {DIM}{name}{RESET}{BG_DIM} {duration}",
-                    indicator = indicator,
-                    icon = icon,
-                    name = call.function.name,
-                    duration = format_duration(duration_ms),
-                )
-                .unwrap();
-                tinyharness_ui::ui::wrap::write_wrapped_lines(
-                    stdout,
-                    &result,
-                    &format!("{BG_DIM}      "),
-                    &format!("      {BG_DIM}{DIM}"),
-                    tinyharness_ui::ui::wrap::MAX_LINE_WIDTH,
-                    true, // fill background to end of line
-                )
-                .unwrap();
-            }
-        }
-    }
-    writeln!(stdout, "{RESET}").unwrap();
-    stdout.flush().unwrap();
+    // Render the result through the shared tool-result renderer (same styling
+    // as session-history replay).
+    tinyharness_ui::ui::tool_result::write_tool_result(
+        stdout,
+        &call.function.name,
+        &result,
+        result.starts_with("Error:"),
+        Some(duration_ms),
+    )
+    .unwrap();
 
     // Capture audit-relevant info before returning
     let (audit_tool_name, audit_detail) = audit_info_for_tool(call);
