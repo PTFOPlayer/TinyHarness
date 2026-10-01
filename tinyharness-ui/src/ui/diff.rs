@@ -1,5 +1,10 @@
-use std::{error::Error, io::Write};
+use std::{
+    error::Error,
+    io::{self, Write},
+};
 
+use super::frame::{FOOT, GAP, GUTTER, GUTTER_WIDTH, gutter_line, truncate_ellipsis, write_band};
+use super::wrap::MAX_LINE_WIDTH;
 use crate::style::*;
 
 // ── Diff computation (LCS-based algorithm) ─────────────────────────────────
@@ -86,157 +91,217 @@ pub fn compute_diff<'a>(old: &'a [&str], new: &'a [&str]) -> Vec<DiffLine<'a>> {
 /// Context lines to show around each change in unified diff output.
 const DIFF_CONTEXT_LINES: usize = 3;
 
-/// Render a [`DiffLine`] sequence into unified-diff-style output with line
-/// numbers, `+`/`-`/` ` prefixes, and configurable context around changes.
-#[allow(unused_assignments)]
-fn render_diff_lines<W: Write>(
-    stdout: &mut W,
-    diff: &[DiffLine],
-    old_lines: &[&str],
-    new_lines: &[&str],
-    show_line_numbers: bool,
-) -> Result<(), Box<dyn Error>> {
-    if diff.is_empty() {
-        return Ok(());
+// ── Public API ─────────────────────────────────────────────────────────────
+
+/// Diff-card glyph — "not equal", marking the block as a change preview
+/// rather than a completed tool result.
+const DIFF_GLYPH: &str = "≠";
+
+/// Which side of the diff a rendered row belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Keep,
+    Remove,
+    Add,
+}
+
+impl Kind {
+    /// One-character change indicator, in the column before the line number.
+    fn sign(self) -> char {
+        match self {
+            Kind::Keep => ' ',
+            Kind::Remove => '-',
+            Kind::Add => '+',
+        }
     }
 
-    // Compute line number width
-    let max_line = old_lines.len().max(new_lines.len()).max(1);
-    let num_width = if show_line_numbers {
-        max_line.to_string().len().max(2)
-    } else {
-        0
-    };
+    fn color(self) -> &'static str {
+        match self {
+            Kind::Keep => FG_FAINT,
+            Kind::Remove => FG_ERR,
+            Kind::Add => FG_OK,
+        }
+    }
+}
 
-    // Find hunks: groups of changes with context around them.
-    let change_indices: Vec<usize> = diff
+/// One row of a diff card.
+enum DiffRow {
+    /// A source line, with the number of the side it belongs to.
+    Line {
+        kind: Kind,
+        num: usize,
+        text: String,
+    },
+    /// Hunk boundary: how many unchanged rows were skipped.
+    Gap(usize),
+}
+
+/// Number every row of a computed diff with the line number of its own side,
+/// so a reader can jump straight to the location in their editor.
+fn numbered(diff: &[DiffLine]) -> Vec<(Kind, usize, String)> {
+    let (mut old, mut new) = (0usize, 0usize);
+    diff.iter()
+        .map(|item| match item {
+            DiffLine::Keep(t) => {
+                old += 1;
+                new += 1;
+                (Kind::Keep, old, (*t).to_string())
+            }
+            DiffLine::Remove(t) => {
+                old += 1;
+                (Kind::Remove, old, (*t).to_string())
+            }
+            DiffLine::Add(t) => {
+                new += 1;
+                (Kind::Add, new, (*t).to_string())
+            }
+        })
+        .collect()
+}
+
+/// Collapse numbered rows into hunks around the changes, keeping `context`
+/// unchanged lines on each side and replacing everything else with a
+/// [`DiffRow::Gap`] that says how much was hidden.
+///
+/// Never hides a change — only context — so the preview always shows every
+/// line the tool would touch.
+fn hunked(rows: &[(Kind, usize, String)], context: usize) -> Vec<DiffRow> {
+    let changed: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter_map(|(i, l)| matches!(l, DiffLine::Remove(_) | DiffLine::Add(_)).then_some(i))
+        .filter(|(_, (k, ..))| *k != Kind::Keep)
+        .map(|(i, _)| i)
         .collect();
+    if changed.is_empty() {
+        return vec![];
+    }
 
-    if change_indices.is_empty() {
+    // Merge overlapping windows into hunk ranges.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = changed[0].saturating_sub(context);
+    let mut end = (changed[0] + context + 1).min(rows.len());
+    for &i in &changed[1..] {
+        let lo = i.saturating_sub(context);
+        let hi = (i + context + 1).min(rows.len());
+        if lo <= end {
+            end = end.max(hi);
+        } else {
+            ranges.push((start, end));
+            start = lo;
+            end = hi;
+        }
+    }
+    ranges.push((start, end));
+
+    let mut out: Vec<DiffRow> = Vec::new();
+    let mut cursor = 0usize;
+    for (lo, hi) in ranges {
+        if lo > cursor {
+            out.push(DiffRow::Gap(lo - cursor));
+        }
+        for (kind, num, text) in &rows[lo..hi] {
+            out.push(DiffRow::Line {
+                kind: *kind,
+                num: *num,
+                text: text.clone(),
+            });
+        }
+        cursor = hi;
+    }
+    out
+}
+
+/// Draw a diff card: a `≠` title band naming the operation and target, then
+/// gutter-outlined rows carrying line numbers and `-`/`+` signs.
+///
+/// `stat` is a pre-styled trailing segment for the band (change counts, or a
+/// note like `new file`); pass an empty string to omit it. When `rows` is
+/// empty the card is just the band — the "nothing to change" case.
+fn write_diff_card<W: Write>(
+    w: &mut W,
+    op: &str,
+    path: &str,
+    stat: &str,
+    rows: &[DiffRow],
+) -> io::Result<()> {
+    // `stat` may carry its own inline colors (e.g. `-3 +7`), so it is passed
+    // through as an unstyled segment.
+    let mut segments: Vec<(&str, &str)> = vec![
+        (DIFF_GLYPH, FG_ACCENT),
+        (" ", FG_FAINT),
+        (op, FG_BAND),
+        (" · ", FG_FAINT),
+        (path, FG_ACCENT),
+    ];
+    if !stat.is_empty() {
+        segments.push((" · ", FG_FAINT));
+        segments.push((stat, ""));
+    }
+    write_band(w, &segments)?;
+    if rows.is_empty() {
         return Ok(());
     }
 
-    // Merge overlapping/adjacent hunks
-    let mut hunk_ranges: Vec<(usize, usize)> = Vec::new();
-    let mut hunk_start = change_indices[0].saturating_sub(DIFF_CONTEXT_LINES);
-    let mut hunk_end = (change_indices[0] + DIFF_CONTEXT_LINES + 1).min(diff.len());
+    let num_width = rows
+        .iter()
+        .map(|r| match r {
+            DiffRow::Line { num, .. } => *num,
+            DiffRow::Gap(_) => 0,
+        })
+        .max()
+        .unwrap_or(1)
+        .to_string()
+        .len()
+        .max(2);
+    // Columns left for source text after the gutter, sign, number and space.
+    let text_width = MAX_LINE_WIDTH.saturating_sub(GUTTER_WIDTH + num_width + 3);
+    let last = rows.len() - 1;
 
-    for &idx in &change_indices[1..] {
-        let new_start = idx.saturating_sub(DIFF_CONTEXT_LINES);
-        let new_end = (idx + DIFF_CONTEXT_LINES + 1).min(diff.len());
-
-        if new_start <= hunk_end {
-            hunk_end = hunk_end.max(new_end);
-        } else {
-            hunk_ranges.push((hunk_start, hunk_end));
-            hunk_start = new_start;
-            hunk_end = new_end;
-        }
-    }
-    hunk_ranges.push((hunk_start, hunk_end));
-
-    // Render each hunk
-    for (hunk_idx, &(start, end)) in hunk_ranges.iter().enumerate() {
-        // Add separator between hunks
-        if hunk_idx > 0 {
-            let sep_line = format!(
-                "{}  {}{}",
-                DIM,
-                BOX_COLOR,
-                "·".repeat(if show_line_numbers {
-                    num_width + 1 + 3 + 60
-                } else {
-                    3 + 60
-                })
-            );
-            writeln!(stdout, "{}{}", sep_line, RESET)?;
-        }
-
-        // Count line numbers up to the start of this hunk
-        let mut old_num: usize = 0;
-        #[allow(unused_variables)]
-        let mut new_num: usize = 0;
-        for item in diff.iter().take(start) {
-            match item {
-                DiffLine::Keep(_) => {
-                    old_num += 1;
-                    new_num += 1;
-                }
-                DiffLine::Remove(_) => {
-                    old_num += 1;
-                }
-                DiffLine::Add(_) => {
-                    new_num += 1;
-                }
+    for (i, row) in rows.iter().enumerate() {
+        match row {
+            DiffRow::Line { kind, num, text } => {
+                let glyph = if i == last { FOOT } else { GUTTER };
+                let color = kind.color();
+                gutter_line(
+                    w,
+                    glyph,
+                    &format!(
+                        "{color}{sign}{RESET}{FG_FAINT}{num:>width$}{RESET} {color}{text}{RESET}",
+                        sign = kind.sign(),
+                        num = num,
+                        width = num_width,
+                        text = truncate_ellipsis(text, text_width)
+                    ),
+                )?;
             }
-        }
-
-        for i in start..end {
-            if i >= diff.len() {
-                break;
-            }
-            match &diff[i] {
-                DiffLine::Keep(line) => {
-                    old_num += 1;
-                    new_num += 1;
-                    if show_line_numbers {
-                        writeln!(
-                            stdout,
-                            "  {:>width$} {} {}",
-                            old_num,
-                            DIM,
-                            line,
-                            width = num_width,
-                        )?;
-                    } else {
-                        writeln!(stdout, "  {} {}{}", DIM, line, RESET)?;
-                    }
-                }
-                DiffLine::Remove(line) => {
-                    old_num += 1;
-                    if show_line_numbers {
-                        writeln!(
-                            stdout,
-                            "{}  {:<width$} {}{} {}",
-                            RED,
-                            "-",
-                            RESET,
-                            RED,
-                            line,
-                            width = num_width
-                        )?;
-                    } else {
-                        writeln!(stdout, "{}  - {}{}", RED, RESET, line)?;
-                    }
-                }
-                DiffLine::Add(line) => {
-                    new_num += 1;
-                    if show_line_numbers {
-                        writeln!(
-                            stdout,
-                            "{}  {:<width$} {}{} {}",
-                            GREEN,
-                            "+",
-                            RESET,
-                            GREEN,
-                            line,
-                            width = num_width
-                        )?;
-                    } else {
-                        writeln!(stdout, "{}  + {}{}", GREEN, RESET, line)?;
-                    }
-                }
+            // Gap rows keep the open gutter — the card isn't finished yet.
+            DiffRow::Gap(skipped) => {
+                gutter_line(
+                    w,
+                    GAP,
+                    &format!(
+                        "{FG_FAINT}{skipped} unchanged lines{RESET}",
+                        skipped = skipped
+                    ),
+                )?;
             }
         }
     }
-
     Ok(())
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────
+/// Count removed/added rows and format them as a band stat (`-3 +7`).
+fn stat_of(diff: &[DiffLine]) -> String {
+    let removals = diff
+        .iter()
+        .filter(|l| matches!(l, DiffLine::Remove(_)))
+        .count();
+    let additions = diff
+        .iter()
+        .filter(|l| matches!(l, DiffLine::Add(_)))
+        .count();
+    format!("{FG_ERR}-{removals}{RESET} {FG_OK}+{additions}{RESET}")
+}
 
 /// Show a unified-diff-style view of a write operation (full file).
 /// If the file already exists, reads it and shows a line-by-line diff
@@ -247,94 +312,37 @@ pub fn show_write_preview<W: Write>(
     path: &str,
     new_content: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let existing = std::fs::read_to_string(path);
-
-    let old_lines: Vec<&str> = match &existing {
-        Ok(content) => content.lines().collect(),
-        Err(_) => {
-            // File doesn't exist — show a green preview
-            writeln!(
-                stdout,
-                "\n{}  ── {}New file: {}{} ──{}",
-                BOLD, BOX_COLOR, path, BOLD, RESET
-            )?;
-            writeln!(
-                stdout,
-                "{}     {}{} {}",
-                DIM,
-                BOX_COLOR,
-                "┄".repeat(60),
-                RESET
-            )?;
-            for line in new_content.lines() {
-                writeln!(stdout, "{}  + {}{}", GREEN, RESET, line)?;
-            }
-            writeln!(stdout, "{}     {} {}", DIM, "┄".repeat(60), RESET)?;
-            return Ok(());
-        }
-    };
-
     let new_lines: Vec<&str> = new_content.lines().collect();
 
-    // Compute the diff
+    let Ok(existing) = std::fs::read_to_string(path) else {
+        // File doesn't exist — every line is an addition.
+        let rows: Vec<DiffRow> = new_lines
+            .iter()
+            .enumerate()
+            .map(|(i, t)| DiffRow::Line {
+                kind: Kind::Add,
+                num: i + 1,
+                text: (*t).to_string(),
+            })
+            .collect();
+        let stat = format!(
+            "{FG_OK}new file{RESET} {FG_FAINT}({} lines)",
+            new_lines.len()
+        );
+        write_diff_card(stdout, "write", path, &stat, &rows)?;
+        return Ok(());
+    };
+
+    let old_lines: Vec<&str> = existing.lines().collect();
     let diff = compute_diff(&old_lines, &new_lines);
-
-    // If the file is identical, show a note
-    let has_changes = diff.iter().any(|l| !matches!(l, DiffLine::Keep(_)));
-
-    if !has_changes {
-        writeln!(
-            stdout,
-            "\n{}  ── {}No changes in {}{} ──{}",
-            BOLD, BOX_COLOR, path, BOLD, RESET
-        )?;
+    if !diff.iter().any(|l| !matches!(l, DiffLine::Keep(_))) {
+        write_diff_card(stdout, "write", path, "no changes", &[])?;
         return Ok(());
     }
 
-    // Count additions and removals for the header
-    let removals = diff
-        .iter()
-        .filter(|l| matches!(l, DiffLine::Remove(_)))
-        .count();
-    let additions = diff
-        .iter()
-        .filter(|l| matches!(l, DiffLine::Add(_)))
-        .count();
-
-    writeln!(
-        stdout,
-        "\n{}  ── {}Diff for {}{} ── {}{}-{}{}+{}{}",
-        BOLD, BOX_COLOR, path, BOLD, RED, removals, GREEN, additions, RESET, RESET,
-    )?;
-
-    let max_line = old_lines.len().max(new_lines.len()).max(1);
-    let num_width = max_line.to_string().len().max(2);
-
-    // Separator line
-    writeln!(
-        stdout,
-        "{}  {}{} {} {}",
-        DIM,
-        BOX_COLOR,
-        " ".repeat(num_width),
-        "┄".repeat(60),
-        RESET
-    )?;
-
-    // Render the diff with line numbers
-    render_diff_lines(stdout, &diff, &old_lines, &new_lines, true)?;
-
-    // Ending separator
-    writeln!(
-        stdout,
-        "{}  {}{} {} {}",
-        DIM,
-        BOX_COLOR,
-        " ".repeat(num_width),
-        "┄".repeat(60),
-        RESET
-    )?;
-
+    let rows = hunked(&numbered(&diff), DIFF_CONTEXT_LINES);
+    let stat = stat_of(&diff);
+    write_diff_card(stdout, "write", path, &stat, &rows)?;
     Ok(())
 }
 
@@ -347,120 +355,84 @@ pub fn show_edit_diff<W: Write>(
     old_str: &str,
     new_str: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| -> Box<dyn Error> { format!("Failed to read '{path}': {e}").into() })?;
 
     // Find the byte offset of old_str in the content
-    let offset = match content.find(old_str) {
-        Some(o) => o,
-        None => {
-            writeln!(
-                stdout,
-                "  {}[diff error: 'old_str' not found in file]{}",
-                RED, RESET
-            )?;
-            return Ok(());
-        }
+    let Some(offset) = content.find(old_str) else {
+        let rows = vec![DiffRow::Line {
+            kind: Kind::Remove,
+            num: 0,
+            text: "'old_str' not found in file — the edit would fail".to_string(),
+        }];
+        return write_diff_card(stdout, "edit", path, "match failed", &rows).map_err(Into::into);
     };
 
     // Count newlines before the match to get the line number (0-based)
     let line_number = content[..offset].matches('\n').count();
     let lines: Vec<&str> = content.lines().collect();
-
-    // Split old_str and new_str into lines
     let old_lines: Vec<&str> = old_str.lines().collect();
     let new_lines: Vec<&str> = new_str.lines().collect();
 
-    // Determine context window (show up to 2 lines before and after)
+    // Show a couple of lines of context around the replacement so the change
+    // has a location, not just a content.
     let before_ctx = 2usize;
     let after_ctx = 2usize;
     let start_line = line_number.saturating_sub(before_ctx);
-    let end_line = (line_number + old_lines.len() + after_ctx).min(lines.len());
-    let line_num_width = (end_line + 1).to_string().len().max(2);
 
-    writeln!(
-        stdout,
-        "\n{}  ── {}Diff for {}{} ──{}",
-        BOLD, BOX_COLOR, path, BOLD, RESET
-    )?;
-
-    // Separator line
-    writeln!(
-        stdout,
-        "{}  {}{} {} {}",
-        DIM,
-        BOX_COLOR,
-        " ".repeat(line_num_width),
-        "┄".repeat(60),
-        RESET
-    )?;
-
-    // Lines before the change
-    for (i, line) in lines.iter().enumerate().take(line_number).skip(start_line) {
-        writeln!(
-            stdout,
-            "  {:>width$} {} {}",
-            i + 1,
-            DIM,
-            line,
-            width = line_num_width,
-        )?;
+    let mut rows: Vec<DiffRow> = Vec::new();
+    if start_line > 0 {
+        rows.push(DiffRow::Gap(start_line));
     }
-
-    // Removed lines (old_str) – shown in red with '-'
-    for line in old_lines.iter() {
-        writeln!(
-            stdout,
-            "{}  {:<width$} {}{} {}",
-            RED,
-            "-",
-            RESET,
-            RED,
-            line,
-            width = line_num_width
-        )?;
+    for (i, line) in lines
+        .iter()
+        .enumerate()
+        .take(line_number)
+        .skip(start_line)
+        .map(|(i, l)| (i + 1, l))
+    {
+        rows.push(DiffRow::Line {
+            kind: Kind::Keep,
+            num: i,
+            text: line.to_string(),
+        });
     }
-
-    // Added lines (new_str) – shown in green with '+'
-    for line in new_lines.iter() {
-        writeln!(
-            stdout,
-            "{}  {:<width$} {}{} {}",
-            GREEN,
-            "+",
-            RESET,
-            GREEN,
-            line,
-            width = line_num_width
-        )?;
+    // The window is anchored on the old file, so removals and additions share
+    // one number column — the reader sees both sides of the swap in place.
+    for (i, line) in old_lines.iter().enumerate() {
+        rows.push(DiffRow::Line {
+            kind: Kind::Remove,
+            num: line_number + i + 1,
+            text: line.to_string(),
+        });
     }
-
-    // Lines after the change
+    for (i, line) in new_lines.iter().enumerate() {
+        rows.push(DiffRow::Line {
+            kind: Kind::Add,
+            num: line_number + i + 1,
+            text: line.to_string(),
+        });
+    }
     let after_start = line_number + old_lines.len();
-    for i in after_start..end_line {
-        if i < lines.len() {
-            writeln!(
-                stdout,
-                "  {:>width$} {} {}",
-                i + 1,
-                DIM,
-                lines[i],
-                width = line_num_width,
-            )?;
-        }
+    let end_line = (after_start + after_ctx).min(lines.len());
+    for (i, line) in lines.iter().enumerate().take(end_line).skip(after_start) {
+        rows.push(DiffRow::Line {
+            kind: Kind::Keep,
+            num: i + 1,
+            text: line.to_string(),
+        });
+    }
+    let tail = lines.len().saturating_sub(end_line);
+    if tail > 0 {
+        rows.push(DiffRow::Gap(tail));
     }
 
-    // Ending separator
-    writeln!(
-        stdout,
-        "{}  {}{} {} {}",
-        DIM,
-        BOX_COLOR,
-        " ".repeat(line_num_width),
-        "┄".repeat(60),
-        RESET
-    )?;
-
+    let stat = format!(
+        "{FG_ERR}-{n}{RESET} {FG_OK}+{m}{RESET}",
+        n = old_lines.len(),
+        m = new_lines.len()
+    );
+    write_diff_card(stdout, "edit", path, &stat, &rows)?;
     Ok(())
 }
 

@@ -168,13 +168,18 @@ Mixed chains work:
 
 ### Destructive Tools
 
-`write`, `edit`, and `run` always show a confirmation prompt:
+`write`, `edit`, and `run` always show a confirmation prompt — a title band
+naming the tool and its effect, the command or diff it applies to, then the
+choices:
 
 ```
-  Write to /path/to/file.rs (4194 bytes)
-
-Confirm? (Y)es / (N)o / (A)uto-accept future
+  ▲ Allow? · run — execute a shell command
+    │ $ cargo clippy --workspace -- -D warnings
+  ▲ [y]es  [n]o  [a]uto-accept the rest of this turn ›
 ```
+
+Declining renders a `⊘ … · denied` card, so the transcript records what was
+refused rather than nothing at all.
 
 ### Auto-Accept Mode
 

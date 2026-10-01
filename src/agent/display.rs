@@ -7,6 +7,7 @@ use tinyharness_lib::{
 };
 
 use tinyharness_ui::style::*;
+use tinyharness_ui::ui::tool_result::{ToolStatus, tool_subject};
 
 /// Print a warning if the loaded session's conversation has many messages.
 ///
@@ -120,6 +121,10 @@ pub fn print_conversation_history<W: Write>(
     // result messages can be rendered with the right tool-specific body.
     let mut tool_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    // tool_call_id → (tool name, subject), so the result card can name what
+    // the call acted on — arguments are not persisted on the Tool message.
+    let mut pending_cards: std::collections::HashMap<String, (String, Option<String>)> =
+        std::collections::HashMap::new();
 
     for msg in messages {
         match msg.role {
@@ -140,6 +145,10 @@ pub fn print_conversation_history<W: Write>(
                     stdout
                         .write_all(rendered.strip_suffix('\n').unwrap_or(&rendered).as_bytes())?;
                     writeln!(stdout, "{RESET}")?;
+                    // Blank line after prose. Tool-only turns skip it: the
+                    // assistant header already ends on one, and a doubled gap
+                    // would separate the header from its own cards.
+                    writeln!(stdout)?;
                 }
                 if !msg.tool_calls.is_empty() {
                     for tc in &msg.tool_calls {
@@ -148,26 +157,43 @@ pub fn print_conversation_history<W: Write>(
                         if let Some(id) = &tc.id {
                             tool_names.insert(id.clone(), tc.function.name.clone());
                         }
-                        writeln!(
-                            stdout,
-                            "{BG_DIM}  {DIM}▶ {WHITE}{name}{DIM}{FILL_EOL}{RESET}",
-                            name = tc.function.name
-                        )?;
+                        // Replay shows the call and its result as one card:
+                        // the stored Tool message carries the outcome, so the
+                        // header is emitted there rather than as a separate
+                        // "▶ name" line.
+                        pending_cards.insert(
+                            tc.id.clone().unwrap_or_default(),
+                            (
+                                tc.function.name.clone(),
+                                tool_subject(&tc.function.arguments),
+                            ),
+                        );
                     }
                 }
-                writeln!(stdout)?;
             }
             Role::Tool => {
                 let (tool_name, result_body) =
                     split_tool_result(&msg.content, &tool_names, &msg.tool_call_id);
-                tinyharness_ui::ui::tool_result::write_tool_result(
+                let subject = msg
+                    .tool_call_id
+                    .as_deref()
+                    .and_then(|id| pending_cards.get(id))
+                    .and_then(|(_, subject)| subject.clone());
+                let denied = result_body.starts_with("[Tool denied]");
+                tinyharness_ui::ui::tool_result::write_tool_card(
                     stdout,
                     &tool_name,
-                    result_body,
-                    result_body.starts_with("Error:"),
+                    subject.as_deref(),
+                    if denied {
+                        ToolStatus::Denied
+                    } else if result_body.starts_with("Error:") {
+                        ToolStatus::Error
+                    } else {
+                        ToolStatus::Ok
+                    },
                     None,
+                    result_body,
                 )?;
-                writeln!(stdout, "{RESET}")?;
             }
         }
     }
@@ -358,6 +384,12 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    /// Strip ANSI escape sequences so assertions can match rendered text.
+    fn strip_ansi(s: &str) -> String {
+        let re = regex::Regex::new(r"\x1b\[[0-9;]*[mK]").unwrap();
+        re.replace_all(s, "").to_string()
+    }
 
     #[test]
     fn test_format_args_summary_short_string() {
@@ -583,7 +615,7 @@ mod tests {
                 id: Some("call_0".to_string()),
                 function: ToolCallFunction {
                     name: "read".to_string(),
-                    arguments: serde_json::json!({}),
+                    arguments: serde_json::json!({"path": "src/lib.rs"}),
                     thought_signature: None,
                 },
             }],
@@ -598,9 +630,51 @@ mod tests {
         print_conversation_history(&msgs, &mut buf).unwrap();
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("read"), "tool name should render: {out:?}");
+        assert!(
+            out.contains("src/lib.rs"),
+            "the call's subject should carry over from the assistant message: {out:?}"
+        );
         assert!(out.contains("(5 lines)"), "meta line should render");
-        assert!(out.contains("┊ +2 more lines"), "body should cap at 3");
-        assert!(!out.contains("l4"), "hidden lines must not render");
+        let plain = strip_ansi(&out);
+        assert!(
+            plain.contains("╰ +2 more lines"),
+            "body should cap at 3: {plain:?}"
+        );
+        assert!(!plain.contains("l4"), "hidden lines must not render");
+    }
+
+    #[test]
+    fn test_history_denied_call_renders_as_denied_card() {
+        use tinyharness_lib::provider::{ToolCall, ToolCallFunction};
+        let assistant = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: Some("call_0".to_string()),
+                function: ToolCallFunction {
+                    name: "run".to_string(),
+                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                    thought_signature: None,
+                },
+            }],
+            tool_call_id: None,
+            images: vec![],
+            thinking: None,
+        };
+        let mut tool = Message::simple(
+            Role::Tool,
+            "### run\n\n[Tool denied] The user denied the 'run' tool call",
+        );
+        tool.tool_call_id = Some("call_0".to_string());
+        let mut buf = Vec::new();
+        print_conversation_history(&[assistant, tool], &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains('⊘'),
+            "denied calls use the deny glyph: {out:?}"
+        );
+        assert!(out.contains("rm -rf /"), "subject should render");
+        assert!(!out.contains('●'), "a denial is not a success");
     }
 
     #[test]

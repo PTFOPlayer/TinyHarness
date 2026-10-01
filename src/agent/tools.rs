@@ -14,6 +14,8 @@ use tinyharness_lib::{
 use crate::commands::CommandContext;
 use tinyharness_ui::style::*;
 use tinyharness_ui::ui::confirm::Confirmation;
+use tinyharness_ui::ui::frame::status_line;
+use tinyharness_ui::ui::tool_result::ToolStatus;
 
 use super::confirm::ConfirmationDecision;
 use super::signal::{self, SignalResult};
@@ -55,11 +57,10 @@ pub async fn handle_tool_calls<W: Write>(
     let tool_count = tool_calls.len();
     // Track cumulative tool calls for session stats.
     session.add_tool_calls(tool_count as u64);
-    writeln!(
-        stdout,
-        "\n{BG_TOOL}  {WHITE}{count} tool call(s){FILL_EOL}{RESET}",
-        count = tool_count
-    )?;
+    // Blank line separating the assistant's prose from the first card of the
+    // batch. Cards within the batch stay tight together — they read as one
+    // group.
+    writeln!(stdout)?;
 
     messages.push(Message {
         role: Role::Assistant,
@@ -140,18 +141,24 @@ pub async fn handle_tool_calls<W: Write>(
             ConfirmationDecision::NeedsConfirmation => {
                 match tinyharness_ui::ui::confirm::prompt_tool_confirmation(stdout, &call)? {
                     Confirmation::No => {
-                        stdout.write_all(
-                            format!("  {}Skipped{}{}\n", ORANGE, RESET, BOLD).as_bytes(),
+                        // Denials get a card of their own so the transcript
+                        // shows what was refused, rather than a bare word.
+                        tinyharness_ui::ui::tool_result::write_tool_card(
+                            stdout,
+                            &call.function.name,
+                            tinyharness_ui::ui::tool_result::tool_subject(&call.function.arguments)
+                                .as_deref(),
+                            ToolStatus::Denied,
+                            None,
+                            "",
                         )?;
-                        stdout.flush()?;
                         (false, false)
                     }
                     Confirmation::AutoAccept => {
                         *auto_accept = true;
                         writeln!(
                             stdout,
-                            "  {}Auto-accept enabled for the rest of this turn{}",
-                            GREEN, RESET
+                            "  {FG_OK}●{RESET} {DIM}auto-accepting the rest of this turn{RESET}"
                         )?;
                         (true, true)
                     }
@@ -178,7 +185,7 @@ pub async fn handle_tool_calls<W: Write>(
         }
 
         // Generic tool execution — collect result for batching
-        let result = execute_generic_tool(&call, tool_manager, stdout, auto_accepted).await;
+        let result = execute_generic_tool(&call, tool_manager, stdout).await;
 
         // Log to audit if this was an auditable tool (run/write/edit)
         log_tool_audit(
@@ -220,39 +227,36 @@ fn handle_question_cli<W: Write>(
         return Ok(());
     }
 
-    // Display the question and options
+    // Display the question and options inside the same frame language as the
+    // tool cards: a band for the ask, a gutter for the options.
+    writeln!(stdout)?;
+    tinyharness_ui::ui::frame::write_band(
+        stdout,
+        &[("?", FG_ACCENT), (" ", FG_FAINT), ("Question", FG_MUTED)],
+    )?;
     writeln!(
         stdout,
-        "\n{}  ┌─── {}❓ Question {}─────{}",
-        BOLD, CYAN, BOLD, RESET
+        "  {FG_FAINT}│{RESET} {BOLD}{question}{RESET}",
+        question = question
     )?;
-    writeln!(stdout, "  │ {}{}{}", BOLD, question, RESET)?;
-    writeln!(stdout, "  │")?;
     for (i, answer) in answers.iter().enumerate() {
         writeln!(
             stdout,
-            "  │   {}{}.{}) {} {}{}",
-            GREEN,
-            i + 1,
-            RESET,
-            BOLD,
-            answer,
-            RESET
+            "  {FG_FAINT}│{RESET}   {FG_OK}{n}{RESET}{FG_FAINT}){RESET} {BOLD}{answer}{RESET}",
+            n = i + 1,
+            answer = answer
         )?;
     }
-    writeln!(stdout, "  │")?;
     writeln!(
         stdout,
-        "  │   {}Enter anything else to skip with a custom answer{}",
-        DIM, RESET
+        "  {FG_FAINT}╰{RESET} {FG_FAINT}anything else skips with a custom answer{RESET}"
     )?;
-    writeln!(stdout, "  └{}──────────────────────────────{}", BOLD, RESET)?;
 
     let answer_count = answers.len();
     write!(
         stdout,
-        "  {}Your choice (1-{} or type to skip): {}",
-        BOLD, answer_count, RESET
+        "  {BOLD}Your choice{RESET} {FG_FAINT}(1-{answer_count} or type to skip){RESET}{FG_FAINT} ›{RESET} ",
+        answer_count = answer_count
     )?;
     stdout.flush()?;
 
@@ -282,14 +286,14 @@ fn handle_question_cli<W: Write>(
     if is_skip {
         writeln!(
             stdout,
-            "  {}⊘{} Skipped with: {}{}{}",
-            ORANGE, RESET, BOLD, selected_answer, RESET
+            "  {FG_WARN}⊘{RESET} {FG_FAINT}skipped with{RESET} {BOLD}{answer}{RESET}",
+            answer = selected_answer
         )?;
     } else {
         writeln!(
             stdout,
-            "  {}✓{} Selected: {}{}{}",
-            GREEN, RESET, BOLD, selected_answer, RESET
+            "  {FG_OK}●{RESET} {FG_FAINT}answered{RESET} {BOLD}{answer}{RESET}",
+            answer = selected_answer
         )?;
     }
     stdout.flush()?;
@@ -316,16 +320,22 @@ fn render_signal_result_cli<W: Write>(
             new_mode,
             already_in,
         } => {
+            // One-line outcomes use the card glyphs so the whole transcript
+            // speaks the same visual language: `●` something happened,
+            // `⊘` nothing did, `✕` it failed.
             if *already_in {
-                writeln!(
+                status_line(
                     stdout,
-                    "  {ORANGE}Already in '{new_mode}' mode. No change was made.{RESET}",
+                    "⊘",
+                    FG_WARN,
+                    &format!("already in '{new_mode}' mode — no change"),
                 )?;
             } else {
-                writeln!(
+                status_line(
                     stdout,
-                    "\n{}{}🔄 Mode switched: {} → {}{}",
-                    BOLD, BLUE, old_mode, new_mode, RESET
+                    "●",
+                    FG_ACCENT,
+                    &format!("mode switched: {old_mode} → {new_mode}"),
                 )?;
             }
             stdout.flush()?;
@@ -336,13 +346,9 @@ fn render_signal_result_cli<W: Write>(
             error,
         } => {
             if *success {
-                writeln!(
-                    stdout,
-                    "\n{}  {}▶ auto_compact{} Compacting conversation history...",
-                    DIM, CYAN, RESET
-                )?;
+                status_line(stdout, "●", FG_ACCENT, "compacting conversation history…")?;
             } else if let Some(e) = error {
-                writeln!(stdout, "\n{}⚠ Auto-compact failed: {}{}", RED, e, RESET)?;
+                status_line(stdout, "✕", FG_ERR, &format!("auto-compact failed: {e}"))?;
             }
             stdout.flush()?;
         }
@@ -353,22 +359,25 @@ fn render_signal_result_cli<W: Write>(
             found,
         } => {
             if *already_active {
-                writeln!(
+                status_line(
                     stdout,
-                    "\n{}⚠ Skill '{}' is already active.{}",
-                    ORANGE, name, RESET
+                    "⊘",
+                    FG_WARN,
+                    &format!("skill '{name}' already active"),
                 )?;
             } else if *found {
-                writeln!(
+                status_line(
                     stdout,
-                    "\n{}{}⚡ Skill activated: {}{}{} — {}{}",
-                    BOLD, CYAN, BOLD, name, RESET, description, RESET
+                    "●",
+                    FG_ACCENT,
+                    &format!("skill activated: {name} — {description}"),
                 )?;
             } else {
-                writeln!(
+                status_line(
                     stdout,
-                    "\n{}⚠ Skill '{}' not found — it may have been removed.{}",
-                    RED, name, RESET
+                    "✕",
+                    FG_ERR,
+                    &format!("skill '{name}' not found — it may have been removed"),
                 )?;
             }
             stdout.flush()?;
@@ -377,10 +386,11 @@ fn render_signal_result_cli<W: Write>(
             // Question is handled separately via handle_question_cli
         }
         SignalResult::ParseError { tool_name } => {
-            writeln!(
+            status_line(
                 stdout,
-                "\n{}⚠ Could not parse arguments for signal tool '{}'.{}",
-                RED, tool_name, RESET
+                "✕",
+                FG_ERR,
+                &format!("could not parse arguments for signal tool '{tool_name}'"),
             )?;
         }
     }
@@ -391,56 +401,14 @@ async fn execute_generic_tool<W: Write>(
     call: &ToolCall,
     tool_manager: &ToolManager,
     stdout: &mut W,
-    auto_accepted: bool,
 ) -> GenericToolResult {
-    // Show the "Executing..." header line
-    if auto_accepted {
-        if call.function.name == "run" {
-            if let Some(cmd) = call
-                .function
-                .arguments
-                .get("command")
-                .and_then(|v| v.as_str())
-            {
-                writeln!(
-                    stdout,
-                    "{BG_DIM}  {DIM}▶ {WHITE}{name}{DIM} (auto-accepted){FILL_EOL}{RESET}",
-                    name = call.function.name
-                )
-                .unwrap();
-                writeln!(
-                    stdout,
-                    "{BG_DIM}      {BRIGHT_CYAN}{cmd}{FILL_EOL}{RESET}",
-                    cmd = cmd
-                )
-                .unwrap();
-            } else {
-                writeln!(
-                    stdout,
-                    "{BG_DIM}  {DIM}▶ {WHITE}{name}{DIM} (auto-accepted){FILL_EOL}{RESET}",
-                    name = call.function.name
-                )
-                .unwrap();
-            }
-        } else {
-            writeln!(
-                stdout,
-                "{BG_DIM}  {DIM}▶ {WHITE}{name}{DIM} (auto-accepted){FILL_EOL}{RESET}",
-                name = call.function.name
-            )
-            .unwrap();
-        }
-    } else {
-        writeln!(
-            stdout,
-            "{BG_DIM}  {DIM}▶ {WHITE}{name}{DIM} Executing...{FILL_EOL}{RESET}",
-            name = call.function.name
-        )
-        .unwrap();
-    }
-    stdout.flush().unwrap();
+    use tinyharness_ui::ui::tool_result::{ToolStatus, tool_subject, write_tool_card};
 
-    // Spinner state for tool execution animation
+    let subject = tool_subject(&call.function.arguments);
+    // The progress line is drawn lazily: instant calls never show it, so the
+    // common case stays one card per call with no flicker. It is erased once
+    // the real card is printed, which is why the tool/subject are not repeated
+    // there.
     let mut spinner_idx: usize = 0;
     let mut has_shown_spinner = false;
 
@@ -454,7 +422,7 @@ async fn execute_generic_tool<W: Write>(
     let result = loop {
         tokio::select! {
             result = &mut tool_fut => {
-                // Tool finished — clear spinner line if we showed one
+                // Tool finished — clear the progress line if we showed one.
                 if has_shown_spinner {
                     write!(stdout, "\r{CLEAR_LINE}{RESET}").unwrap();
                     stdout.flush().unwrap();
@@ -462,36 +430,51 @@ async fn execute_generic_tool<W: Write>(
                 break result;
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {
-                // Animate spinner
+                // Animate: redraw the whole progress line each tick so a
+                // shrinking frame never leaves stale text behind.
                 let frame = SPINNER_FRAMES[spinner_idx % SPINNER_FRAMES.len()];
                 spinner_idx += 1;
                 if has_shown_spinner {
-                    write!(stdout, "\r{DIM}{frame} {RESET}").unwrap();
+                    write!(stdout, "\r{CLEAR_LINE}").unwrap();
                 } else {
-                    write!(stdout, "{DIM}{frame} {RESET}").unwrap();
                     has_shown_spinner = true;
                 }
+                write!(
+                    stdout,
+                    "  {FG_ACCENT}{frame}{RESET} {FG_MUTED}{name}{RESET}{rest}",
+                    name = call.function.name,
+                    rest = subject
+                        .as_deref()
+                        .map(|s| format!(" {FG_FAINT}·{RESET} {FG_FAINT}{s}{RESET}"))
+                        .unwrap_or_default(),
+                )
+                .unwrap();
                 stdout.flush().unwrap();
             }
         }
     };
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
+    let is_error = result.starts_with("Error:");
 
-    // Render the result through the shared tool-result renderer (same styling
-    // as session-history replay).
-    tinyharness_ui::ui::tool_result::write_tool_result(
+    // Render the card through the shared renderer (same styling as
+    // session-history replay), so live and replayed transcripts match.
+    write_tool_card(
         stdout,
         &call.function.name,
-        &result,
-        result.starts_with("Error:"),
+        subject.as_deref(),
+        if is_error {
+            ToolStatus::Error
+        } else {
+            ToolStatus::Ok
+        },
         Some(duration_ms),
+        &result,
     )
     .unwrap();
 
     // Capture audit-relevant info before returning
     let (audit_tool_name, audit_detail) = audit_info_for_tool(call);
-    let is_error = result.starts_with("Error:");
 
     // For read tool on image files, load the image data for the model to view.
     // The read tool prefixes image results with "[IMAGE] path" so we can detect them.
