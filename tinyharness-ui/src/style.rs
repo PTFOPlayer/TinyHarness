@@ -18,9 +18,17 @@ pub const WHITE: &str = "\x1b[37m";
 
 // Bright / extended colors
 pub const GRAY: &str = "\x1b[90m";
-pub const ORANGE: &str = "\x1b[38;5;208m";
+pub const ORANGE: &str = "\x1b[38;5;208m"; // Warning / notice accent (matches `Output::warning`)
 pub const BRIGHT_YELLOW: &str = "\x1b[93m";
 pub const BRIGHT_CYAN: &str = "\x1b[96m";
+
+// Assistant prose: rendered in the terminal's *default* foreground so it stays
+// legible against any user theme (the modern CLI convention). Emitted once,
+// before the first streamed content chunk, to clear any residual styling left
+// behind by the spinner, the thinking block, or ANSI sequences that happened to
+// be present in the model's own output. This is the single hook for theming
+// assistant text later.
+pub const ASSISTANT_TEXT: &str = RESET;
 
 // Thinking/reasoning chain colors
 pub const THINK_COLOR: &str = "\x1b[35m"; // Magenta for thinking text
@@ -37,7 +45,7 @@ pub const FILL_EOL: &str = "\x1b[K";
 // UI styling presets
 pub const TITLE_COLOR: &str = CYAN; // For titles and headers
 pub const BOX_COLOR: &str = BLUE; // For box borders and frames
-pub const WARNING_COLOR: &str = YELLOW; // For warnings and alerts
+pub const WARNING_COLOR: &str = ORANGE; // For warnings and alerts (matches `Output::warning`)
 pub const ACCENT_COLOR: &str = MAGENTA; // For highlights and emphasis
 
 // Special escape sequences

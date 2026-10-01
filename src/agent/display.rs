@@ -96,6 +96,16 @@ pub fn print_context_load_warning<W: Write>(
     Ok(())
 }
 
+/// Separate assistant output from user input without coloring the prose.
+pub fn write_assistant_header<W: Write>(stdout: &mut W) -> std::io::Result<()> {
+    writeln!(
+        stdout,
+        "\n{RESET}{DIM}──{RESET} {BOLD}{CYAN}Assistant{RESET} {DIM}{}{RESET}\n",
+        "─".repeat(28)
+    )?;
+    stdout.flush()
+}
+
 /// Print the conversation history from loaded messages so the user can see
 /// what was discussed in the resumed session.
 pub fn print_conversation_history<W: Write>(
@@ -110,13 +120,21 @@ pub fn print_conversation_history<W: Write>(
         match msg.role {
             Role::System => {}
             Role::User => {
-                writeln!(stdout, "{}> {}{}", BLUE, msg.content, RESET)?;
+                writeln!(stdout, "{BOLD}{BLUE}You >{RESET} {}", msg.content)?;
             }
             Role::Assistant => {
+                if !msg.content.is_empty() || !msg.tool_calls.is_empty() {
+                    write_assistant_header(stdout)?;
+                }
                 if !msg.content.is_empty() {
-                    write!(stdout, "{}", ORANGE)?;
-                    stdout.write_all(msg.content.as_bytes())?;
-                    writeln!(stdout, "{}", RESET)?;
+                    // Render prose with the same markdown styling as live
+                    // streaming so a reloaded session looks identical to the
+                    // original run.
+                    write!(stdout, "{ASSISTANT_TEXT}")?;
+                    let rendered = tinyharness_ui::ui::markdown::render_markdown(&msg.content);
+                    stdout
+                        .write_all(rendered.strip_suffix('\n').unwrap_or(&rendered).as_bytes())?;
+                    writeln!(stdout, "{RESET}")?;
                 }
                 if !msg.tool_calls.is_empty() {
                     for tc in &msg.tool_calls {
@@ -535,5 +553,90 @@ mod tests {
         assert!(result.contains("?/8.2K")); // unknown / 8192
         // Should have dim gray color for the token part
         assert!(result.contains(GRAY));
+    }
+
+    #[test]
+    fn test_history_labels_separate_user_and_assistant() {
+        let messages = vec![
+            Message::simple(Role::User, "question"),
+            Message::simple(Role::Assistant, "answer"),
+        ];
+        let mut out = Vec::new();
+        print_conversation_history(&messages, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(&format!("You >{RESET} question\n")));
+        assert!(out.contains("Assistant"));
+        assert!(out.find("question").unwrap() < out.find("Assistant").unwrap());
+        assert!(out.find("Assistant").unwrap() < out.find("answer").unwrap());
+        assert!(out.ends_with(&format!("answer{RESET}\n\n")));
+    }
+
+    #[test]
+    fn test_history_assistant_message_exact_newlines_without_trailing() {
+        // Content WITHOUT a trailing newline: the markdown renderer adds one,
+        // and the final writeln! adds the message-terminating newline. The
+        // result must be exactly one blank line after the message — never two.
+        let msgs = vec![Message::simple(Role::Assistant, "hello world")];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let mut header = Vec::new();
+        write_assistant_header(&mut header).unwrap();
+        let header = String::from_utf8(header).unwrap();
+        assert_eq!(
+            out,
+            format!("{header}{ASSISTANT_TEXT}hello world{RESET}\n\n")
+        );
+    }
+
+    #[test]
+    fn test_history_assistant_message_exact_newlines_with_trailing() {
+        // Content WITH a trailing newline must yield the same output as
+        // without it — no doubled blank line between history messages.
+        let msgs = vec![Message::simple(Role::Assistant, "hello world\n")];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let mut header = Vec::new();
+        write_assistant_header(&mut header).unwrap();
+        let header = String::from_utf8(header).unwrap();
+        assert_eq!(
+            out,
+            format!("{header}{ASSISTANT_TEXT}hello world{RESET}\n\n")
+        );
+    }
+
+    #[test]
+    fn test_history_multi_paragraph_no_doubled_blanks() {
+        // Two assistant messages in a row: exactly one blank line separates
+        // each message block.
+        let msgs = vec![
+            Message::simple(Role::Assistant, "first"),
+            Message::simple(Role::Assistant, "second"),
+        ];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let mut header = Vec::new();
+        write_assistant_header(&mut header).unwrap();
+        let header = String::from_utf8(header).unwrap();
+        assert_eq!(
+            out,
+            format!(
+                "{header}{ASSISTANT_TEXT}first{RESET}\n\n{header}{ASSISTANT_TEXT}second{RESET}\n\n"
+            )
+        );
+    }
+
+    #[test]
+    fn test_history_multiline_content_rendered_as_markdown() {
+        // Headings get markdown-styled on reload, matching live streaming.
+        let msgs = vec![Message::simple(Role::Assistant, "# Title\nbody")];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains(BOLD), "heading should be bold: {out:?}");
+        assert!(out.contains("body"));
+        assert!(out.ends_with(&format!("{RESET}\n\n")));
     }
 }
