@@ -37,7 +37,7 @@ use tinyharness_ui::ui::input::CommandHelper;
 
 pub use display::{
     format_args_summary, format_context_status, print_context_load_warning,
-    print_conversation_history, summarize_listing_result,
+    print_conversation_history,
 };
 pub use input::read_multiline_input;
 pub use safety::{is_safe_command, strip_safe_descriptor_redirections};
@@ -58,29 +58,11 @@ pub async fn run_agent_loop(
     let mut stdout = Output::stdout();
     stdout.write_all(
         format!(
-            "{}╔════════════════════════════════════════════════════════╗{}\n",
-            BOX_COLOR, RESET
-        )
-        .as_bytes(),
-    )?;
-    stdout.write_all(
-        format!(
-            "{}║{}           {}TinyHarness AI Assistant{}                     {}║{}\n",
-            BOX_COLOR, RESET, BOLD, TITLE_COLOR, BOX_COLOR, RESET
-        )
-        .as_bytes(),
-    )?;
-    stdout.write_all(
-        format!(
-            "{}╚════════════════════════════════════════════════════════╝{}\n\n",
-            BOX_COLOR, RESET
-        )
-        .as_bytes(),
-    )?;
-    stdout.write_all(
-        format!(
-            "{}Tip:{} Type {} to see available commands\n\n",
-            GRAY, RESET, "/help"
+            "{BOLD}{TITLE_COLOR}TinyHarness{RESET}{BOLD} AI Assistant{RESET} {DIM}v{}{RESET}\n\
+             {DIM}{}{RESET}\n\
+             {DIM}Tip:{RESET} {CYAN}/help{RESET} {DIM}shows all commands{RESET}\n\n",
+            env!("CARGO_PKG_VERSION"),
+            "─".repeat(44)
         )
         .as_bytes(),
     )?;
@@ -199,7 +181,7 @@ pub async fn run_agent_loop(
         };
 
         let prompt = format!(
-            "{}{}{}\n{}[{}]{}{}> {}{}",
+            "{}{}{}\n{}[{}]{}{} {BOLD}{BLUE}You >{RESET} {}{}",
             status_line,
             session_suffix,
             RESET,
@@ -322,6 +304,9 @@ pub async fn run_agent_loop(
         // auto_accept persists across all agent iterations within this user turn,
         let mut auto_accept = false;
 
+        // One visible boundary per user turn; tool iterations remain within it.
+        display::write_assistant_header(&mut stdout)?;
+
         loop {
             // Filter tools based on current mode and settings
             let (_, _, merged) = load_merged_settings();
@@ -366,7 +351,12 @@ pub async fn run_agent_loop(
             // debug metric fires about once per second instead of per chunk.
             let mut backpressure_log_ticks: u32 = 0;
 
-            stdout.write_all(ORANGE.as_bytes())?;
+            // Line-buffered markdown renderer for the assistant's reply: emits
+            // each line (styled) as soon as its newline arrives, and always
+            // starts from a clean ANSI state — the previous code relied on an
+            // ambient orange color that the spinner/thinking RESET could tear
+            // down mid-stream ("random orange" bug).
+            let mut md_stream = tinyharness_ui::ui::markdown::MarkdownStream::new();
 
             loop {
                 tokio::select! {
@@ -438,7 +428,7 @@ pub async fn run_agent_loop(
                                     }
 
                                     response_content.push_str(&msg.message.content);
-                                    stdout.write_all(msg.message.content.as_bytes())?;
+                                    md_stream.push(&mut stdout, &msg.message.content)?;
                                     stdout.flush()?;
                                 }
 
@@ -500,6 +490,9 @@ pub async fn run_agent_loop(
                 write!(stdout, "\r{CLEAR_LINE}")?;
                 stdout.flush()?;
             }
+
+            // Flush the markdown renderer's trailing partial line.
+            md_stream.finish(&mut stdout)?;
 
             // Close thinking styling if stream ended while still in thinking mode
             if thinking_header_shown {
@@ -632,8 +625,8 @@ pub async fn run_agent_loop(
             break;
         }
 
-        // Blank line after agent response for visual separation
-        writeln!(stdout)?;
+        // End a partial output line and leave space before the next prompt.
+        writeln!(stdout, "{RESET}\n")?;
     }
 
     // Save history on exit

@@ -7,6 +7,7 @@ use tinyharness_lib::{
 };
 
 use tinyharness_ui::style::*;
+use tinyharness_ui::ui::tool_result::{ToolStatus, tool_subject};
 
 /// Print a warning if the loaded session's conversation has many messages.
 ///
@@ -96,6 +97,16 @@ pub fn print_context_load_warning<W: Write>(
     Ok(())
 }
 
+/// Separate assistant output from user input without coloring the prose.
+pub fn write_assistant_header<W: Write>(stdout: &mut W) -> std::io::Result<()> {
+    writeln!(
+        stdout,
+        "\n{RESET}{DIM}──{RESET} {BOLD}{CYAN}Assistant{RESET} {DIM}{}{RESET}\n",
+        "─".repeat(28)
+    )?;
+    stdout.flush()
+}
+
 /// Print the conversation history from loaded messages so the user can see
 /// what was discussed in the resumed session.
 pub fn print_conversation_history<W: Write>(
@@ -106,58 +117,83 @@ pub fn print_conversation_history<W: Write>(
         return Ok(());
     }
 
+    // tool_call_id → tool name, populated from Assistant messages so Tool
+    // result messages can be rendered with the right tool-specific body.
+    let mut tool_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    // tool_call_id → (tool name, subject), so the result card can name what
+    // the call acted on — arguments are not persisted on the Tool message.
+    let mut pending_cards: std::collections::HashMap<String, (String, Option<String>)> =
+        std::collections::HashMap::new();
+
     for msg in messages {
         match msg.role {
             Role::System => {}
             Role::User => {
-                writeln!(stdout, "{}> {}{}", BLUE, msg.content, RESET)?;
+                writeln!(stdout, "{BOLD}{BLUE}You >{RESET} {}", msg.content)?;
             }
             Role::Assistant => {
+                if !msg.content.is_empty() || !msg.tool_calls.is_empty() {
+                    write_assistant_header(stdout)?;
+                }
                 if !msg.content.is_empty() {
-                    write!(stdout, "{}", ORANGE)?;
-                    stdout.write_all(msg.content.as_bytes())?;
-                    writeln!(stdout, "{}", RESET)?;
+                    // Render prose with the same markdown styling as live
+                    // streaming so a reloaded session looks identical to the
+                    // original run.
+                    write!(stdout, "{ASSISTANT_TEXT}")?;
+                    let rendered = tinyharness_ui::ui::markdown::render_markdown(&msg.content);
+                    stdout
+                        .write_all(rendered.strip_suffix('\n').unwrap_or(&rendered).as_bytes())?;
+                    writeln!(stdout, "{RESET}")?;
+                    // Blank line after prose. Tool-only turns skip it: the
+                    // assistant header already ends on one, and a doubled gap
+                    // would separate the header from its own cards.
+                    writeln!(stdout)?;
                 }
                 if !msg.tool_calls.is_empty() {
                     for tc in &msg.tool_calls {
-                        writeln!(
-                            stdout,
-                            "{BG_DIM}  {DIM}▶ {WHITE}{name}{DIM}{FILL_EOL}{RESET}",
-                            name = tc.function.name
-                        )?;
+                        // Remember tool names so the following Tool messages
+                        // can render with the correct tool-specific body.
+                        if let Some(id) = &tc.id {
+                            tool_names.insert(id.clone(), tc.function.name.clone());
+                        }
+                        // Replay shows the call and its result as one card:
+                        // the stored Tool message carries the outcome, so the
+                        // header is emitted there rather than as a separate
+                        // "▶ name" line.
+                        pending_cards.insert(
+                            tc.id.clone().unwrap_or_default(),
+                            (
+                                tc.function.name.clone(),
+                                tool_subject(&tc.function.arguments),
+                            ),
+                        );
                     }
                 }
-                writeln!(stdout)?;
             }
             Role::Tool => {
-                let tool_name = msg.content.split('\'').nth(1).unwrap_or("tool");
-                let result_body = extract_tool_result_body(&msg.content, tool_name);
-
-                if tool_name == "read" {
-                    let summary = result_body.lines().next().unwrap_or("(empty result)");
-                    writeln!(
-                        stdout,
-                        "{BG_DIM}      {DIM}{summary}{FILL_EOL}{RESET}",
-                        summary = summary
-                    )?;
-                } else if matches!(tool_name, "ls" | "grep" | "glob") {
-                    let summary = summarize_listing_result(result_body, tool_name);
-                    writeln!(
-                        stdout,
-                        "{BG_DIM}      {DIM}{summary}{FILL_EOL}{RESET}",
-                        summary = summary
-                    )?;
-                } else {
-                    tinyharness_ui::ui::wrap::write_wrapped_lines(
-                        stdout,
-                        result_body,
-                        &format!("{BG_DIM}      "),
-                        &format!("      {BG_DIM}{DIM}"),
-                        tinyharness_ui::ui::wrap::MAX_LINE_WIDTH,
-                        true,
-                    )?;
-                }
-                writeln!(stdout, "{RESET}")?;
+                let (tool_name, result_body) =
+                    split_tool_result(&msg.content, &tool_names, &msg.tool_call_id);
+                let subject = msg
+                    .tool_call_id
+                    .as_deref()
+                    .and_then(|id| pending_cards.get(id))
+                    .and_then(|(_, subject)| subject.clone());
+                let denied = result_body.starts_with("[Tool denied]");
+                tinyharness_ui::ui::tool_result::write_tool_card(
+                    stdout,
+                    &tool_name,
+                    subject.as_deref(),
+                    if denied {
+                        ToolStatus::Denied
+                    } else if result_body.starts_with("Error:") {
+                        ToolStatus::Error
+                    } else {
+                        ToolStatus::Ok
+                    },
+                    None,
+                    result_body,
+                )?;
             }
         }
     }
@@ -286,43 +322,29 @@ pub fn display_context_status<W: Write>(
     Ok(())
 }
 
-/// Extract the result body from a tool result message.
-fn extract_tool_result_body<'a>(content: &'a str, tool_name: &str) -> &'a str {
-    let prefix = format!("Tool '{tool_name}' result:\n");
-    content
-        .strip_prefix(&prefix)
-        .or_else(|| content.strip_prefix(&prefix))
-        .unwrap_or(content)
-}
-
-/// Produce a one-line summary for listing tools (ls, grep, glob).
-pub fn summarize_listing_result(result: &str, tool_name: &str) -> String {
-    if result.starts_with("Error:") || result.starts_with("No ") || result == "Directory is empty" {
-        return result.to_string();
+/// Split a stored tool result into `(tool_name, result_body)`.
+///
+/// Tool results are persisted as `### {tool}\n\n{result}`. When the tool name
+/// can't be recovered from the prefix, falls back to the assistant's
+/// `tool_calls` map (id → name) or the message's own `tool_call_id`, so older
+/// sessions with different prefixes still resolve the tool name.
+fn split_tool_result<'a>(
+    content: &'a str,
+    tool_names: &std::collections::HashMap<String, String>,
+    tool_call_id: &Option<String>,
+) -> (String, &'a str) {
+    if let Some(rest) = content.strip_prefix("### ")
+        && let Some((name, body)) = rest.split_once("\n\n")
+    {
+        return (name.trim().to_string(), body);
     }
-
-    let lines: Vec<&str> = result.lines().collect();
-    let count = lines.len();
-    let label = match tool_name {
-        "ls" => "entries",
-        "grep" => "matches",
-        "glob" => "files",
-        _ => "results",
-    };
-
-    const PREVIEW: usize = 3;
-    if count <= PREVIEW {
-        format!("{} {} — {}", count, label, result)
-    } else {
-        let preview: Vec<&str> = lines.iter().take(PREVIEW).copied().collect();
-        format!(
-            "{} {} — {} ... ({} more)",
-            count,
-            label,
-            preview.join(", "),
-            count - PREVIEW
-        )
-    }
+    // Fallbacks: the originating call's name, looked up by id.
+    let fallback = tool_call_id
+        .as_deref()
+        .and_then(|id| tool_names.get(id))
+        .cloned()
+        .unwrap_or_else(|| "tool".to_string());
+    (fallback, content)
 }
 
 /// Format tool call arguments as a compact single-line summary.
@@ -359,72 +381,14 @@ fn format_args_summary_impl(arguments: &serde_json::Value, truncate: bool) -> St
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
-    #[test]
-    fn test_summarize_ls_error_passthrough() {
-        let result = summarize_listing_result("Error: Path '/nope' does not exist", "ls");
-        assert_eq!(result, "Error: Path '/nope' does not exist");
-    }
-
-    #[test]
-    fn test_summarize_ls_empty_dir() {
-        let result = summarize_listing_result("Directory is empty", "ls");
-        assert_eq!(result, "Directory is empty");
-    }
-
-    #[test]
-    fn test_summarize_ls_no_matches() {
-        let result = summarize_listing_result("No matches found for pattern 'xyz'", "grep");
-        assert_eq!(result, "No matches found for pattern 'xyz'");
-    }
-
-    #[test]
-    fn test_summarize_ls_few_entries() {
-        let result = summarize_listing_result("Cargo.toml\nCargo.lock\nsrc", "ls");
-        assert_eq!(result, "3 entries — Cargo.toml\nCargo.lock\nsrc");
-    }
-
-    #[test]
-    fn test_summarize_ls_many_entries() {
-        let entries: Vec<String> = (0..10).map(|i| format!("file{i}")).collect();
-        let input = entries.join("\n");
-        let result = summarize_listing_result(&input, "ls");
-        assert_eq!(result, "10 entries — file0, file1, file2 ... (7 more)");
-    }
-
-    #[test]
-    fn test_summarize_grep_many_matches() {
-        let matches: Vec<String> = (1..=5).map(|i| format!("src/main.rs:{}:foo", i)).collect();
-        let input = matches.join("\n");
-        let result = summarize_listing_result(&input, "grep");
-        assert_eq!(
-            result,
-            "5 matches — src/main.rs:1:foo, src/main.rs:2:foo, src/main.rs:3:foo ... (2 more)"
-        );
-    }
-
-    #[test]
-    fn test_summarize_glob_no_files() {
-        let result = summarize_listing_result("No files found matching pattern '*.xyz'", "glob");
-        assert_eq!(result, "No files found matching pattern '*.xyz'");
-    }
-
-    #[test]
-    fn test_summarize_glob_many_files() {
-        let files: Vec<String> = (0..6).map(|i| format!("src/file{i}.rs")).collect();
-        let input = files.join("\n");
-        let result = summarize_listing_result(&input, "glob");
-        assert_eq!(
-            result,
-            "6 files — src/file0.rs, src/file1.rs, src/file2.rs ... (3 more)"
-        );
-    }
-
-    #[test]
-    fn test_summarize_single_entry() {
-        let result = summarize_listing_result("Cargo.toml", "ls");
-        assert_eq!(result, "1 entries — Cargo.toml");
+    /// Strip ANSI escape sequences so assertions can match rendered text.
+    fn strip_ansi(s: &str) -> String {
+        let re = regex::Regex::new(r"\x1b\[[0-9;]*[mK]").unwrap();
+        re.replace_all(s, "").to_string()
     }
 
     #[test]
@@ -535,5 +499,189 @@ mod tests {
         assert!(result.contains("?/8.2K")); // unknown / 8192
         // Should have dim gray color for the token part
         assert!(result.contains(GRAY));
+    }
+
+    #[test]
+    fn test_history_labels_separate_user_and_assistant() {
+        let messages = vec![
+            Message::simple(Role::User, "question"),
+            Message::simple(Role::Assistant, "answer"),
+        ];
+        let mut out = Vec::new();
+        print_conversation_history(&messages, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(&format!("You >{RESET} question\n")));
+        assert!(out.contains("Assistant"));
+        assert!(out.find("question").unwrap() < out.find("Assistant").unwrap());
+        assert!(out.find("Assistant").unwrap() < out.find("answer").unwrap());
+        assert!(out.ends_with(&format!("answer{RESET}\n\n")));
+    }
+
+    #[test]
+    fn test_history_assistant_message_exact_newlines_without_trailing() {
+        // Content WITHOUT a trailing newline: the markdown renderer adds one,
+        // and the final writeln! adds the message-terminating newline. The
+        // result must be exactly one blank line after the message — never two.
+        let msgs = vec![Message::simple(Role::Assistant, "hello world")];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let mut header = Vec::new();
+        write_assistant_header(&mut header).unwrap();
+        let header = String::from_utf8(header).unwrap();
+        assert_eq!(
+            out,
+            format!("{header}{ASSISTANT_TEXT}hello world{RESET}\n\n")
+        );
+    }
+
+    #[test]
+    fn test_history_assistant_message_exact_newlines_with_trailing() {
+        // Content WITH a trailing newline must yield the same output as
+        // without it — no doubled blank line between history messages.
+        let msgs = vec![Message::simple(Role::Assistant, "hello world\n")];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let mut header = Vec::new();
+        write_assistant_header(&mut header).unwrap();
+        let header = String::from_utf8(header).unwrap();
+        assert_eq!(
+            out,
+            format!("{header}{ASSISTANT_TEXT}hello world{RESET}\n\n")
+        );
+    }
+
+    #[test]
+    fn test_history_multi_paragraph_no_doubled_blanks() {
+        // Two assistant messages in a row: exactly one blank line separates
+        // each message block.
+        let msgs = vec![
+            Message::simple(Role::Assistant, "first"),
+            Message::simple(Role::Assistant, "second"),
+        ];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let mut header = Vec::new();
+        write_assistant_header(&mut header).unwrap();
+        let header = String::from_utf8(header).unwrap();
+        assert_eq!(
+            out,
+            format!(
+                "{header}{ASSISTANT_TEXT}first{RESET}\n\n{header}{ASSISTANT_TEXT}second{RESET}\n\n"
+            )
+        );
+    }
+
+    #[test]
+    fn test_history_multiline_content_rendered_as_markdown() {
+        // Headings get markdown-styled on reload, matching live streaming.
+        let msgs = vec![Message::simple(Role::Assistant, "# Title\nbody")];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains(BOLD), "heading should be bold: {out:?}");
+        assert!(out.contains("body"));
+        assert!(out.ends_with(&format!("{RESET}\n\n")));
+    }
+
+    #[test]
+    fn test_split_tool_result_stored_prefix() {
+        let names = HashMap::new();
+        let content = "### read\n\n(2 lines)\nfoo\nbar";
+        let (name, body) = split_tool_result(content, &names, &None);
+        assert_eq!(name, "read");
+        assert_eq!(body, "(2 lines)\nfoo\nbar");
+    }
+
+    #[test]
+    fn test_split_tool_result_falls_back_to_call_id() {
+        let mut names = HashMap::new();
+        names.insert("call_0".to_string(), "run".to_string());
+        let content = "plain output without prefix";
+        let (name, body) = split_tool_result(content, &names, &Some("call_0".to_string()));
+        assert_eq!(name, "run");
+        assert_eq!(body, "plain output without prefix");
+    }
+
+    #[test]
+    fn test_history_tool_result_uses_call_name_and_caps_body() {
+        use tinyharness_lib::provider::{ToolCall, ToolCallFunction};
+        let assistant = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: Some("call_0".to_string()),
+                function: ToolCallFunction {
+                    name: "read".to_string(),
+                    arguments: serde_json::json!({"path": "src/lib.rs"}),
+                    thought_signature: None,
+                },
+            }],
+            tool_call_id: None,
+            images: vec![],
+            thinking: None,
+        };
+        let mut tool = Message::simple(Role::Tool, "### read\n\n(5 lines)\nl1\nl2\nl3\nl4\nl5");
+        tool.tool_call_id = Some("call_0".to_string());
+        let msgs = vec![assistant, tool];
+        let mut buf = Vec::new();
+        print_conversation_history(&msgs, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("read"), "tool name should render: {out:?}");
+        assert!(
+            out.contains("src/lib.rs"),
+            "the call's subject should carry over from the assistant message: {out:?}"
+        );
+        assert!(out.contains("(5 lines)"), "meta line should render");
+        let plain = strip_ansi(&out);
+        assert!(
+            plain.contains("╰ +2 more lines"),
+            "body should cap at 3: {plain:?}"
+        );
+        assert!(!plain.contains("l4"), "hidden lines must not render");
+    }
+
+    #[test]
+    fn test_history_denied_call_renders_as_denied_card() {
+        use tinyharness_lib::provider::{ToolCall, ToolCallFunction};
+        let assistant = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: Some("call_0".to_string()),
+                function: ToolCallFunction {
+                    name: "run".to_string(),
+                    arguments: serde_json::json!({"command": "rm -rf /"}),
+                    thought_signature: None,
+                },
+            }],
+            tool_call_id: None,
+            images: vec![],
+            thinking: None,
+        };
+        let mut tool = Message::simple(
+            Role::Tool,
+            "### run\n\n[Tool denied] The user denied the 'run' tool call",
+        );
+        tool.tool_call_id = Some("call_0".to_string());
+        let mut buf = Vec::new();
+        print_conversation_history(&[assistant, tool], &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains('⊘'),
+            "denied calls use the deny glyph: {out:?}"
+        );
+        assert!(out.contains("rm -rf /"), "subject should render");
+        assert!(!out.contains('●'), "a denial is not a success");
+    }
+
+    #[test]
+    fn test_split_tool_result_unknown_defaults_to_tool() {
+        let names = HashMap::new();
+        let (name, body) = split_tool_result("hello", &names, &None);
+        assert_eq!(name, "tool");
+        assert_eq!(body, "hello");
     }
 }
