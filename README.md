@@ -107,7 +107,7 @@ Connects to `http://127.0.0.1:8000` by default.
 ```bash
 tinyharness --openai-compat --url https://openrouter.ai/api/v1 --api-key <YOUR_KEY>
 ```
-Requires `--url` (no default URL) and an API key. You can also set the `OPENAI_API_KEY` environment variable instead of `--api-key`. Bearer auth is sent on every request. A failed health check only warns — use `--skip-health-check` if the gateway doesn't expose a `/health` endpoint.
+Requires `--url` (no default URL) and an API key. You can also set the `OPENAI_API_KEY` environment variable instead of `--api-key`. Bearer auth is sent on every request. The startup health check probes `/health` and, when the server returns 404 (no such endpoint), falls back to `/v1/models` — a non-empty model list is treated as healthy. A failed health check only warns — use `--skip-health-check` if the gateway exposes neither endpoint.
 
 **Sockudo** (⚠️ highly experimental):
 ```bash

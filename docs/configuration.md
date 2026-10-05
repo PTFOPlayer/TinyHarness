@@ -68,7 +68,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>`, `OPENAI_API_KEY` env var, or `--config` interactive setup. Use `--api-key -` to clear the saved key |
-| `skip_health_check` | bool | `false` | Skip the provider health check at startup. A failed health check only warns and doesn't block startup; errors surface on the first request. Set via `--skip-health-check` to suppress the warning |
+| `skip_health_check` | bool | `false` | Skip the provider health check at startup. A failed health check only warns and doesn't block startup; errors surface on the first request. Set via `--skip-health-check` to suppress the warning. OpenAI-compatible providers probe `/health` first and fall back to `/v1/models` when the server has no `/health` endpoint (404) — a non-empty model list counts as healthy |
 
 **API key resolution precedence:**
 1. `--api-key <key>` CLI flag (highest — also persists to settings)

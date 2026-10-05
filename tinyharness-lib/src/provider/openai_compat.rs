@@ -101,6 +101,16 @@ impl OpenAiCompatInner {
     }
 
     /// Perform a health check against the server's `/health` endpoint.
+    ///
+    /// Servers that don't expose `/health` answer with HTTP 404 (llama.cpp,
+    /// many gateways and proxies). In that case we fall back to
+    /// `/v1/models`: a reachable endpoint returning a non-empty model list
+    /// proves the backend is up and usable, so it counts as a successful
+    /// health check. An empty list — or a failing `/v1/models` request — is
+    /// reported as a failure, since it tells us nothing about the server.
+    ///
+    /// Any other `/health` status (5xx, 401, …) is reported directly and is
+    /// never masked by the fallback: the endpoint exists, it is unhappy.
     pub async fn health_check(&self) -> Result<(), String> {
         let url = format!("{}/health", self.base_url.trim_end_matches('/'));
         let mut req = self.client.get(&url);
@@ -111,9 +121,19 @@ impl OpenAiCompatInner {
             Ok(resp) if resp.status().is_success() => Ok(()),
             // A 404 usually means the server simply has no /health
             // endpoint. Don't dump its response body (often a large HTML
-            // or JSON error page) into the warning.
+            // or JSON error page) into the warning — probe /v1/models
+            // instead.
             Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
-                Err("Server returned 404 (no /health endpoint)".to_string())
+                match self.fetch_models_raw().await {
+                    Ok(models) if !models.is_empty() => Ok(()),
+                    Ok(_) => Err(
+                        "Server has no /health endpoint and /v1/models returned an empty list"
+                            .to_string(),
+                    ),
+                    Err(e) => Err(format!(
+                        "Server has no /health endpoint and /v1/models failed: {e}"
+                    )),
+                }
             }
             Ok(resp) => Err(format!(
                 "Server returned {}: {}",
@@ -140,25 +160,45 @@ impl OpenAiCompatInner {
         )
     }
 
-    /// Fetch the model list from the server's `/v1/models` endpoint.
-    /// Returns the list of model IDs, or an empty vec on failure.
-    pub async fn fetch_model_list(&self) -> Vec<String> {
-        let url = format!(
+    /// Return the `/v1/models` URL for this server.
+    pub fn models_url(&self) -> String {
+        format!(
             "{}/v1/models",
             self.base_url.trim_end_matches('/').trim_end_matches("/v1")
-        );
+        )
+    }
+
+    /// Fetch the model list from `/v1/models`, propagating failures.
+    ///
+    /// Unlike [`Self::fetch_model_list`], this distinguishes "the server
+    /// answered with an empty list" (`Ok(vec![])`) from "the request could
+    /// not be completed" (`Err`), which callers such as the health check
+    /// need in order to interpret the result.
+    pub async fn fetch_models_raw(&self) -> Result<Vec<String>, String> {
+        let url = self.models_url();
         let mut req = self.client.get(&url);
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key.expose_secret());
         }
-        match req.send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<ModelListResponse>().await {
-                    Ok(list) => list.data.into_iter().map(|m| m.id).collect(),
-                    Err(_) => self.model.clone().into_iter().collect(),
-                }
-            }
-            _ => self.model.clone().into_iter().collect(),
+        let resp = match req.send().await {
+            Ok(resp) => resp,
+            Err(e) => return Err(format!("cannot reach {url}: {e}")),
+        };
+        if !resp.status().is_success() {
+            return Err(format!("server returned {}", resp.status().as_u16()));
+        }
+        match resp.json::<ModelListResponse>().await {
+            Ok(list) => Ok(list.data.into_iter().map(|m| m.id).collect()),
+            Err(e) => Err(format!("invalid model list response: {e}")),
+        }
+    }
+
+    /// Fetch the model list from the server's `/v1/models` endpoint.
+    /// Returns the list of model IDs, or an empty vec on failure.
+    pub async fn fetch_model_list(&self) -> Vec<String> {
+        match self.fetch_models_raw().await {
+            Ok(models) => models,
+            Err(_) => self.model.clone().into_iter().collect(),
         }
     }
 
@@ -713,6 +753,74 @@ async fn send_error_chunk(send: &tokio::sync::mpsc::Sender<ChatMessageResponse>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Reason phrase for the canned status lines used by the mock server.
+    fn reason_phrase(status: u16) -> &'static str {
+        match status {
+            200 => "OK",
+            404 => "Not Found",
+            401 => "Unauthorized",
+            500 => "Internal Server Error",
+            503 => "Service Unavailable",
+            _ => "Status",
+        }
+    }
+
+    /// Spawn a minimal HTTP server answering fixed paths, logging every
+    /// requested path in order. Unknown paths get a 404.
+    ///
+    /// Returns `(base_url, request_log, server_handle)`.
+    async fn spawn_mock_server(
+        routes: Vec<(&'static str, u16, &'static str)>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock server bind");
+        let addr = listener.local_addr().expect("mock server addr");
+        let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+        let routes = Arc::new(routes);
+        let log_in = Arc::clone(&log);
+
+        let handle = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let routes = Arc::clone(&routes);
+                let log = Arc::clone(&log_in);
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let n = match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => n,
+                    };
+                    let head = String::from_utf8_lossy(&buf[..n]);
+                    let path = head
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .to_string();
+                    log.lock().unwrap().push(path.clone());
+
+                    let (status, body) = routes
+                        .iter()
+                        .find(|(p, _, _)| *p == path)
+                        .map(|(_, s, b)| (*s, *b))
+                        .unwrap_or((404, "{\"error\":\"not found\"}"));
+                    let resp = format!(
+                        "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\n\
+                         content-length: {len}\r\nconnection: close\r\n\r\n{body}",
+                        reason = reason_phrase(status),
+                        len = body.len(),
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+
+        (format!("http://{addr}"), log, handle)
+    }
 
     /// 5xx and 429 are transient and should be retried.
     #[test]
@@ -771,5 +879,119 @@ mod tests {
         let mut inner = OpenAiCompatInner::new("http://localhost:8080".to_string());
         inner.set_retries(7);
         assert_eq!(inner.max_retries(), 7);
+    }
+
+    /// `models_url` strips a trailing `/v1` so both `http://host` and
+    /// `http://host/v1` resolve to `http://host/v1/models`.
+    #[test]
+    fn models_url_normalises_trailing_v1() {
+        let plain = OpenAiCompatInner::new("http://example.test:1234".to_string());
+        assert_eq!(plain.models_url(), "http://example.test:1234/v1/models");
+        let with_v1 = OpenAiCompatInner::new("http://example.test:1234/v1".to_string());
+        assert_eq!(with_v1.models_url(), "http://example.test:1234/v1/models");
+    }
+
+    /// A working `/health` endpoint short-circuits the check — `/v1/models`
+    /// is never queried.
+    #[tokio::test]
+    async fn health_check_uses_health_endpoint_when_present() {
+        let (base, log, _server) =
+            spawn_mock_server(vec![("/health", 200, "{\"status\":\"ok\"}")]).await;
+        let inner = OpenAiCompatInner::new(base);
+
+        assert!(inner.health_check().await.is_ok());
+        assert_eq!(log.lock().unwrap().as_slice(), ["/health".to_string()]);
+    }
+
+    /// No `/health` endpoint (404) but a non-empty `/v1/models` list counts
+    /// as a successful health check.
+    #[tokio::test]
+    async fn health_check_falls_back_to_models_endpoint() {
+        let (base, log, _server) = spawn_mock_server(vec![(
+            "/v1/models",
+            200,
+            "{\"data\":[{\"id\":\"gpt-4o-mini\"}]}",
+        )])
+        .await;
+        let inner = OpenAiCompatInner::new(base);
+
+        assert!(inner.health_check().await.is_ok());
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["/health".to_string(), "/v1/models".to_string()]
+        );
+    }
+
+    /// An empty model list proves nothing, so the fallback fails with a
+    /// message mentioning both endpoints.
+    #[tokio::test]
+    async fn health_check_fallback_rejects_empty_model_list() {
+        let (base, _log, _server) =
+            spawn_mock_server(vec![("/v1/models", 200, "{\"data\":[]}")]).await;
+        let inner = OpenAiCompatInner::new(base);
+
+        let err = inner.health_check().await.expect_err("should fail");
+        assert!(err.contains("/health"), "unexpected error: {err}");
+        assert!(err.contains("empty list"), "unexpected error: {err}");
+    }
+
+    /// A `/v1/models` endpoint that errors out also fails the health check.
+    #[tokio::test]
+    async fn health_check_fallback_reports_models_failure() {
+        let (base, _log, _server) =
+            spawn_mock_server(vec![("/v1/models", 500, "{\"error\":\"boom\"}")]).await;
+        let inner = OpenAiCompatInner::new(base);
+
+        let err = inner.health_check().await.expect_err("should fail");
+        assert!(err.contains("/health"), "unexpected error: {err}");
+        assert!(err.contains("500"), "unexpected error: {err}");
+    }
+
+    /// Non-404 `/health` responses are reported as-is — the fallback must
+    /// not mask a health endpoint that exists but is unhappy.
+    #[tokio::test]
+    async fn health_check_does_not_mask_non_404_errors() {
+        let (base, log, _server) =
+            spawn_mock_server(vec![("/health", 503, "{\"status\":\"unhealthy\"}")]).await;
+        let inner = OpenAiCompatInner::new(base);
+
+        let err = inner.health_check().await.expect_err("should fail");
+        assert!(err.contains("503"), "unexpected error: {err}");
+        assert_eq!(log.lock().unwrap().as_slice(), ["/health".to_string()]);
+    }
+
+    /// `fetch_models_raw` propagates errors instead of silently returning
+    /// the currently selected model.
+    #[tokio::test]
+    async fn fetch_models_raw_propagates_errors() {
+        let (base, _log, _server) = spawn_mock_server(vec![]).await;
+        let inner = OpenAiCompatInner::new(base);
+        assert!(inner.fetch_models_raw().await.is_err());
+
+        let (base, _log, _server) = spawn_mock_server(vec![(
+            "/v1/models",
+            200,
+            "{\"data\":[{\"id\":\"alpha\"},{\"id\":\"beta\"}]}",
+        )])
+        .await;
+        let inner = OpenAiCompatInner::new(base);
+        assert_eq!(
+            inner.fetch_models_raw().await.expect("ok"),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+    }
+
+    /// `fetch_model_list` keeps its lenient contract: on failure it falls
+    /// back to the currently selected model.
+    #[tokio::test]
+    async fn fetch_model_list_falls_back_to_selected_model() {
+        let (base, _log, _server) = spawn_mock_server(vec![]).await;
+        let mut inner = OpenAiCompatInner::new(base);
+        inner.select_model("chosen-model".to_string());
+
+        assert_eq!(
+            inner.fetch_model_list().await,
+            vec!["chosen-model".to_string()]
+        );
     }
 }
