@@ -521,8 +521,11 @@ pub struct Settings {
     pub auto_accept_mode: AutoAcceptMode,
     /// Skip the provider health check at startup (default: false).
     /// Useful for the `--openai-compat` provider when the gateway requires a
-    /// separate scope on `/health`, or for any server without a `/health`
-    /// endpoint. When true, the agent proceeds straight to model selection
+    /// separate scope on `/health`, or for any server where neither `/health`
+    /// nor `/v1/models` can vouch for the backend. When the server has no
+    /// `/health` endpoint (HTTP 404), the check automatically falls back to
+    /// `/v1/models` and passes if that returns a non-empty model list.
+    /// When true, the agent proceeds straight to model selection
     /// and reports any connection error on the first real request instead.
     pub skip_health_check: bool,
     /// List of command prefixes considered safe for auto-accept (default: see get_default_safe_commands)

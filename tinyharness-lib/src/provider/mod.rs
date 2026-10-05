@@ -162,7 +162,9 @@ pub trait Provider: Send + Sync {
     /// Check whether the backend is reachable and healthy.
     ///
     /// Called once at startup; a failure is a non-fatal warning — errors
-    /// surface on the first real request.
+    /// surface on the first real request. Providers whose dedicated health
+    /// endpoint may be missing (OpenAI-compatible servers) fall back to the
+    /// model list: a non-empty list proves the backend is up.
     fn health_check(&self) -> impl Future<Output = Result<(), String>> + Send;
 
     /// List model names available on the backend.

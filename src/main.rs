@@ -70,8 +70,9 @@ struct Args {
     api_key: Option<String>,
 
     /// Skip the provider health check at startup. Useful when the server
-    /// requires a separate scope on `/health`, doesn't expose one, or you
-    /// want the agent to start fast and surface errors on the first request.
+    /// requires a separate scope on `/health`, exposes neither `/health` nor
+    /// `/v1/models`, or you want the agent to start fast and surface errors
+    /// on the first request.
     #[arg(long)]
     skip_health_check: bool,
 
