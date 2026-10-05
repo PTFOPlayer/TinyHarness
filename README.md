@@ -384,13 +384,34 @@ Terminal UI abstractions — reusable output formatting, diff display, and confi
 tinyharness-ui/src/
 ├── lib.rs               Module declarations
 ├── output.rs            Structured output writer (stdout/stderr abstraction)
-├── style.rs             ANSI color constants (BOLD, CYAN, RED, BG_TOOL, SPINNER_FRAMES, etc.)
+├── style.rs             ANSI color constants (BOLD, CYAN, the tool-frame palette, SPINNER_FRAMES)
 └── ui/
     ├── mod.rs            Module declarations
     ├── confirm.rs        Tool call confirmation prompts (Yes/No/Auto-accept)
     ├── diff.rs           Unified diff display
+    ├── frame.rs          Shared layout primitives for the tool-frame family
     ├── input.rs          CommandHelper for rustyline tab-completion
+    ├── markdown.rs       Incremental markdown renderer for streamed assistant output
+    ├── tool_result.rs    Tool execution cards (status band + capped body)
     └── wrap.rs           Word-wrapped output with ANSI-aware line filling
+```
+
+Tool I/O shares one visual language: a filled **title band** names each call
+(`● run · cargo test --workspace · 2.3s`), and an outlined **gutter** carries
+its body, closing with an elbow so every block reads as one unit.
+
+```
+  ● read · tinyharness-ui/src/ui/frame.rs · 42ms
+    │ (180 lines)
+    │ use std::io::{self, Write};
+    ╰ +176 more lines
+
+  ✕ run · cargo clippy --workspace · 1.5s
+    ╰ error[E0308]: mismatched types
+
+  ▲ Allow? · run — execute a shell command
+    │ $ rm -rf ./target
+  ▲ [y]es  [n]o  [a]uto-accept the rest of this turn ›
 ```
 
 ### Binary crate (`src/`)
