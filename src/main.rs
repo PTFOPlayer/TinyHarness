@@ -16,7 +16,10 @@ use tinyharness_lib::{
     context::WorkspaceContext,
     custom_tools::CustomToolManager,
     mode::AgentMode,
-    provider::{AnyProvider, Message, Provider, Role, SockudoCredentials},
+    provider::{
+        AnyProvider, Message, Provider, Role, SockudoCredentials,
+        model_variants::is_variant_available,
+    },
     session::{Session, SessionStore},
     tools::ToolManager,
 };
@@ -201,7 +204,9 @@ async fn auto_select_model(provider: &mut AnyProvider, saved_model: Option<&Stri
         // we don't silently keep using a stale name carried over from a
         // different provider/endpoint. A mismatch produces a visible
         // warning and we fall back to the first available model.
-        if !models.is_empty() && !models.iter().any(|m| m == saved) {
+        // OpenRouter-style variant suffixes (e.g. `:free`) are ignored so a
+        // saved `model:free` validates against the listed base id.
+        if !models.is_empty() && !is_variant_available(saved, &models) {
             let mut err_out = Output::stderr();
             if let Some(first) = models.first() {
                 let _ = writeln!(
