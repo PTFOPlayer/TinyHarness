@@ -85,6 +85,16 @@ impl Paths {
     /// `env` returns `None` for unset variables. This is the seam for hermetic
     /// tests: no process-global `set_var` (and its parallel-test races) needed.
     ///
+    /// `HOME`, `USERPROFILE`, and the `XDG_*` roots must be absolute, following
+    /// the XDG rule that a relative root is ignored. Absoluteness is
+    /// platform-dependent — `Path::is_absolute` treats `/home/u` as *relative*
+    /// on Windows — so a POSIX-style value inherited from an MSYS/Git Bash
+    /// parent shell is rejected there. Note that the lookup is `HOME` then
+    /// `USERPROFILE`, and the absolute check happens *after*: a `HOME` that is
+    /// set but unusable leaves `home()` as `None` rather than falling through
+    /// to `USERPROFILE`, and the config/data roots degrade to the `.`-relative
+    /// fallback. `Paths` itself never fails, so the tree stays self-consistent.
+    ///
     /// The project directory always comes from the process CWD — it is a
     /// working location, not a configuration value — falling back to `.` if it
     /// cannot be determined.
@@ -326,34 +336,63 @@ mod tests {
         PathBuf::from(path)
     }
 
+    /// Build a root that is absolute on *this* platform.
+    ///
+    /// `Path::is_absolute` is platform-dependent: `/home/u` is relative on
+    /// Windows, and `C:/u` is relative on Linux. `Paths::from_env` rejects
+    /// relative `HOME`/`USERPROFILE`/`XDG_*` values (the XDG spec requires
+    /// ignoring non-absolute roots), so a hard-coded POSIX fixture does not
+    /// merely look wrong on Windows — it is silently discarded and every
+    /// assertion collapses onto the `./.config` fallback. Deriving fixtures
+    /// from the CWD keeps them absolute everywhere.
+    ///
+    /// Nothing is created on disk: `Paths` only computes strings.
+    fn host_root(tag: &str) -> PathBuf {
+        std::env::current_dir()
+            .expect("CWD is absolute on every supported platform")
+            .join(format!("th-{tag}"))
+    }
+
+    /// [`host_root`] as an environment-variable value.
+    fn env_value(root: &Path) -> &str {
+        root.to_str().expect("fixtures are valid UTF-8")
+    }
+
     #[test]
     fn home_fallback_when_no_xdg() {
-        let paths = Paths::from_env(env_map(&[("HOME", "/home/u")]));
-        assert_eq!(paths.config_dir(), abs("/home/u/.config/tinyharness"));
-        assert_eq!(paths.data_dir(), abs("/home/u/.local/share/tinyharness"));
-        assert_eq!(paths.home(), Some(Path::new("/home/u")));
+        let home = host_root("home");
+        let paths = Paths::from_env(env_map(&[("HOME", env_value(&home))]));
+        assert_eq!(paths.config_dir(), home.join(".config/tinyharness"));
+        assert_eq!(paths.data_dir(), home.join(".local/share/tinyharness"));
+        assert_eq!(paths.home(), Some(home.as_path()));
     }
 
     #[test]
     fn xdg_roots_take_precedence_over_home() {
+        let home = host_root("home");
+        let config = host_root("xdg-config");
+        let data = host_root("xdg-data");
         let paths = Paths::from_env(env_map(&[
-            ("HOME", "/home/u"),
-            ("XDG_CONFIG_HOME", "/xdg/config"),
-            ("XDG_DATA_HOME", "/xdg/data"),
+            ("HOME", env_value(&home)),
+            ("XDG_CONFIG_HOME", env_value(&config)),
+            ("XDG_DATA_HOME", env_value(&data)),
         ]));
-        assert_eq!(paths.config_dir(), abs("/xdg/config/tinyharness"));
-        assert_eq!(paths.data_dir(), abs("/xdg/data/tinyharness"));
+        assert_eq!(paths.config_dir(), config.join("tinyharness"));
+        assert_eq!(paths.data_dir(), data.join("tinyharness"));
     }
 
     #[test]
     fn empty_or_relative_xdg_is_ignored() {
+        let home = host_root("home");
         let empty = Paths::from_env(env_map(&[
-            ("HOME", "/home/u"),
+            ("HOME", env_value(&home)),
             ("XDG_CONFIG_HOME", "   "),
+            // Relative on every supported platform, so this exercises the
+            // "must be absolute" rule rather than platform quirks.
             ("XDG_DATA_HOME", "relative/data"),
         ]));
-        assert_eq!(empty.config_dir(), abs("/home/u/.config/tinyharness"));
-        assert_eq!(empty.data_dir(), abs("/home/u/.local/share/tinyharness"));
+        assert_eq!(empty.config_dir(), home.join(".config/tinyharness"));
+        assert_eq!(empty.data_dir(), home.join(".local/share/tinyharness"));
     }
 
     #[test]
@@ -372,23 +411,22 @@ mod tests {
 
     #[test]
     fn userprofile_is_home_fallback() {
-        // Build a host-absolute path so the test passes on Unix and Windows —
-        // `is_absolute` is platform-dependent (`C:/x` is relative on Linux).
-        let home = std::env::current_dir()
-            .expect("CWD is absolute on every supported platform")
-            .join("th-userprofile-home");
-        let paths = Paths::from_env(env_map(&[("USERPROFILE", home.to_str().unwrap())]));
+        let home = host_root("userprofile-home");
+        let paths = Paths::from_env(env_map(&[("USERPROFILE", env_value(&home))]));
         assert_eq!(paths.config_dir(), home.join(".config/tinyharness"));
         assert_eq!(paths.home(), Some(home.as_path()));
     }
 
     #[test]
     fn home_takes_precedence_over_userprofile() {
+        let home = host_root("home");
+        let windows_home = host_root("userprofile");
         let paths = Paths::from_env(env_map(&[
-            ("HOME", "/home/u"),
-            ("USERPROFILE", "/windows/u"),
+            ("HOME", env_value(&home)),
+            ("USERPROFILE", env_value(&windows_home)),
         ]));
-        assert_eq!(paths.config_dir(), abs("/home/u/.config/tinyharness"));
+        assert_eq!(paths.config_dir(), home.join(".config/tinyharness"));
+        assert_eq!(paths.home(), Some(home.as_path()));
     }
 
     #[test]
@@ -396,6 +434,22 @@ mod tests {
         let paths = Paths::from_env(env_map(&[("HOME", "relative/home")]));
         assert_eq!(paths.home(), None);
         assert_eq!(paths.config_dir(), abs(".config/tinyharness"));
+    }
+
+    #[test]
+    fn relative_home_does_not_fall_through_to_userprofile() {
+        // Locks the documented lookup order: HOME is preferred when it is
+        // *set*, and the absolute check runs after the fallback, so an
+        // unusable HOME suppresses home resolution entirely instead of
+        // yielding to a perfectly usable USERPROFILE.
+        let windows_home = host_root("userprofile");
+        let paths = Paths::from_env(env_map(&[
+            ("HOME", "relative/home"),
+            ("USERPROFILE", env_value(&windows_home)),
+        ]));
+        assert_eq!(paths.home(), None);
+        assert_eq!(paths.config_dir(), abs(".config/tinyharness"));
+        assert_eq!(paths.data_dir(), abs(".local/share/tinyharness"));
     }
 
     #[test]
