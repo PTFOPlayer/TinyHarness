@@ -1,167 +1,25 @@
-//! Interactive provider configuration helpers.
+//! Provider resolution helpers: URL prompting, URL/API-key precedence.
 //!
-//! These functions are used by the binary crate when:
-//! - the user passes `--config` (full interactive walkthrough),
-//! - the user passes a provider flag (`--ollama` / `--llama-cpp` / `--vllm`)
-//!   without a `--url` (prompt for the URL only).
+//! Used by the binary crate when the user passes a provider flag
+//! (`--ollama` / `--llama-cpp` / `--vllm` / `--sockudo` / `--openai-compat`)
+//! without a `--url` — we prompt for the URL only.
 //!
-//! All functions read directly from stdin and write user-facing messages to
-//! stdout. They refuse to run when stdin is not a TTY (i.e. the process is
-//! being piped or scripted) and instead return a clear error so callers can
-//! fall back to a non-interactive default.
+//! There is intentionally no interactive setup wizard: configuration is covered
+//! by `docs/configuration.md`, and every setting is reachable via CLI flags or
+//! in-app slash commands (`/model`, `/apikey`, `/timeout`, `/retries`,
+//! `/contextlimit`, …). Sockudo credentials are settings-file-only.
+//!
+//! `prompt_for_url` reads directly from stdin and writes user-facing messages to
+//! stdout. It refuses to run when stdin is not a TTY (i.e. the process is being
+//! piped or scripted) and instead returns a clear error so callers can fall back
+//! to a non-interactive default.
 
 use std::io::{IsTerminal, Write};
 
 use tinyharness_lib::SecretString;
-use tinyharness_lib::config::{ProviderKind, Settings, load_settings, save_settings};
+use tinyharness_lib::config::{ProviderKind, Settings, load_settings_from, save_settings_to};
 use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
-
-/// Result of the interactive setup.
-#[derive(Debug, Clone)]
-pub struct SetupResult {
-    pub provider: ProviderKind,
-    pub url: String,
-    /// True if the user changed the API key during this setup.
-    pub api_key_changed: bool,
-}
-
-/// What the user chose to do with the API key in `prompt_for_api_key`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ApiKeyChoice {
-    /// Keep the existing key (or no key) as-is.
-    Keep,
-    /// Set a new key (the new version is in the `SecretString`)
-    Set(SecretString),
-    /// Remove the existing key.
-    Clear,
-}
-
-/// Display a stored API key in masked form (first 4 + last 4 chars).
-/// Returns "****" for short keys and "(not set)" for `None`.
-pub fn mask_api_key(key: Option<&SecretString>) -> String {
-    match key {
-        None => "(not set)".to_string(),
-        Some(k) => k.masked(),
-    }
-}
-
-/// Prompt the user about the Ollama API key (only relevant for Ollama).
-///
-/// Shows the current state, then offers three options:
-/// - Enter        → keep the current value
-/// - type a key   → set a new key
-/// - type "clear" → remove the existing key
-///
-/// Returns `Err(String)` if stdin is not a TTY.
-pub fn prompt_for_api_key(out: &mut Output) -> Result<ApiKeyChoice, String> {
-    if !std::io::stdin().is_terminal() {
-        return Err(
-            "Interactive API key prompt requires a TTY. Use /apikey inside the app to set the key non-interactively.".to_string(),
-        );
-    }
-
-    let current = load_settings().ollama_api_key;
-    let _ = writeln!(
-        out,
-        "\n{BOLD}Ollama API key (for web search):{RESET} {BLUE}{}{RESET}",
-        mask_api_key(current.as_ref())
-    );
-    let _ = writeln!(
-        out,
-        "{GRAY}Used for the /web_search tool. Optional — leave blank to keep current value, type a key to set it, or type 'clear' to remove it.{RESET}"
-    );
-    let _ = writeln!(
-        out,
-        "{ORANGE}Note:{RESET} the key will be visible while you type. Consider clearing your scrollback after setup."
-    );
-
-    let _ = write!(out, "\n{BOLD}API key [keep]:{RESET} ");
-    let _ = out.flush();
-
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(0) | Err(_) => {
-            // EOF: keep whatever was there
-            return Ok(ApiKeyChoice::Keep);
-        }
-        Ok(_) => {}
-    }
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        Ok(ApiKeyChoice::Keep)
-    } else if trimmed.eq_ignore_ascii_case("clear") {
-        Ok(ApiKeyChoice::Clear)
-    } else {
-        Ok(ApiKeyChoice::Set(SecretString::new(trimmed)))
-    }
-}
-
-/// Prompt the user to select a provider kind from a numbered list.
-///
-/// Returns `Err(String)` if stdin is not a TTY, or the user submits an
-/// unparseable choice.
-pub fn prompt_for_provider(out: &mut Output) -> Result<ProviderKind, String> {
-    if !std::io::stdin().is_terminal() {
-        return Err(
-            "Interactive provider selection requires a TTY. Re-run with --ollama, --llama-cpp, --vllm, --openai-compat, or --sockudo, or pass --url.".to_string(),
-        );
-    }
-
-    let _ = writeln!(out, "\n{BOLD}Select a provider:{RESET}");
-    let _ = writeln!(
-        out,
-        "  {CYAN}1{RESET}) ollama        (default: {GRAY}http://127.0.0.1:11434{RESET})"
-    );
-    let _ = writeln!(
-        out,
-        "  {CYAN}2{RESET}) llama.cpp      (default: {GRAY}http://127.0.0.1:8080{RESET})"
-    );
-    let _ = writeln!(
-        out,
-        "  {CYAN}3{RESET}) vllm           (default: {GRAY}http://127.0.0.1:8000{RESET})"
-    );
-    let _ = writeln!(
-        out,
-        "  {CYAN}4{RESET}) sockudo        (default: {GRAY}http://127.0.0.1:6001{RESET})"
-    );
-    let _ = writeln!(
-        out,
-        "  {CYAN}5{RESET}) openai-compat  (hosted gateway, requires {GRAY}--api-key{RESET})"
-    );
-
-    loop {
-        let _ = write!(out, "\n{BOLD}Choice [1]:{RESET} ");
-        let _ = out.flush();
-        let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
-            Ok(0) | Err(_) => {
-                return Err("No provider selected (stdin closed).".to_string());
-            }
-            Ok(_) => {}
-        }
-        let line = line.trim();
-        if line.is_empty() || line == "1" {
-            return Ok(ProviderKind::Ollama);
-        }
-        if line == "2" {
-            return Ok(ProviderKind::LlamaCpp);
-        }
-        if line == "3" {
-            return Ok(ProviderKind::Vllm);
-        }
-        if line == "4" {
-            return Ok(ProviderKind::Sockudo);
-        }
-        if line == "5" {
-            return Ok(ProviderKind::OpenAiCompat);
-        }
-        let _ = writeln!(
-            out,
-            "{ORANGE}Please enter 1, 2, 3, 4, or 5 (or press Enter for the default).{RESET}"
-        );
-    }
-}
 
 /// Prompt the user for a URL, showing the default. Enter accepts the default.
 ///
@@ -236,12 +94,19 @@ pub fn default_url_for(kind: ProviderKind) -> &'static str {
 }
 
 /// Persist the provider + URL pair to settings.
-pub fn save_provider_settings(kind: ProviderKind, url: &str) {
+///
+/// `paths` is the process-wide [`Paths`](tinyharness_lib::Paths) built at
+/// startup — `main.rs` calls this before a `CommandContext` exists, so the
+/// instance is threaded in explicitly rather than read from the ambient
+/// environment.
+pub fn save_provider_settings(paths: &tinyharness_lib::Paths, kind: ProviderKind, url: &str) {
     // Load existing settings to preserve unrelated fields (mode, model, etc.)
-    let mut s = tinyharness_lib::config::load_settings();
+    let mut s = load_settings_from(paths);
     s.last_provider = kind;
     s.set_url_for(kind, url.to_string());
-    save_settings(&s);
+    if let Err(e) = save_settings_to(paths, &s) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
 }
 
 /// Resolve the bearer token for the OpenAI-compatible provider using the
@@ -264,13 +129,17 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
 ///
 /// Returns `None` when no key should be sent. Only the `OpenAiCompat`
 /// provider uses this value; Ollama, llama.cpp, vLLM, and Sockudo ignore it.
-pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option<SecretString> {
+pub fn resolve_api_key(
+    paths: &tinyharness_lib::Paths,
+    cli_api_key: Option<&str>,
+    settings: &Settings,
+) -> Option<SecretString> {
     let result = resolve_api_key_pure(cli_api_key, settings);
     // Persist side-effects only when the user actually passed `--api-key` on
     // the command line (cli_api_key is Some). The pure function is used in
     // tests to avoid touching the real settings file.
     if let Some(raw) = cli_api_key {
-        let mut s = load_settings();
+        let mut s = load_settings_from(paths);
         match raw {
             "-" | "" => {
                 // Both the clear sentinel and the explicit-empty opt-out
@@ -281,13 +150,15 @@ pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option
                 s.openai_compat_api_key = Some(SecretString::new(raw));
             }
         }
-        save_settings(&s);
+        if let Err(e) = save_settings_to(paths, &s) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
     }
     result
 }
 
 /// Pure (side-effect-free) API key resolution.  Used by tests so they never
-/// touch the real `~/.config/tinyharness/settings.json`.
+/// touch the real `<config_dir>/settings.json`.
 pub fn resolve_api_key_pure(
     cli_api_key: Option<&str>,
     settings: &Settings,
@@ -307,171 +178,6 @@ pub fn resolve_api_key_pure(
         .openai_compat_api_key
         .clone()
         .filter(|s| !s.is_empty())
-}
-
-/// Persist an API key change based on the user's choice.
-pub fn apply_api_key_choice(choice: ApiKeyChoice) -> bool {
-    let mut s = load_settings();
-    match choice {
-        ApiKeyChoice::Keep => false,
-        ApiKeyChoice::Clear => {
-            s.ollama_api_key = None;
-            save_settings(&s);
-            true
-        }
-        ApiKeyChoice::Set(key) => {
-            s.ollama_api_key = Some(key);
-            save_settings(&s);
-            true
-        }
-    }
-}
-
-/// Prompt the user for Sockudo app credentials (app_id, app_key, app_secret).
-///
-/// Shows the current stored values and allows the user to keep or change each.
-/// Persists the result to settings.
-fn prompt_for_sockudo_credentials(out: &mut Output) -> Result<(), String> {
-    if !std::io::stdin().is_terminal() {
-        return Err(
-            "Interactive Sockudo credential prompt requires a TTY. Set sockudo_app_id, sockudo_app_key, and sockudo_app_secret in settings.json manually.".to_string(),
-        );
-    }
-
-    let s = load_settings();
-
-    let _ = writeln!(
-        out,
-        "\n{BOLD}Sockudo app credentials:{RESET}\n{GRAY}Required for AI Transport authentication (HMAC-SHA256 signed requests).{RESET}"
-    );
-
-    // App ID
-    let current_id = s.sockudo_app_id.as_deref().unwrap_or("(not set)");
-    let _ = write!(
-        out,
-        "\n{BOLD}App ID [{GRAY}{current_id}{RESET}{BOLD}]:{RESET} "
-    );
-    let _ = out.flush();
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(0) | Err(_) => return Err("stdin closed".to_string()),
-        Ok(_) => {}
-    }
-    let app_id = {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            s.sockudo_app_id.clone().unwrap_or_default()
-        } else {
-            trimmed.to_string()
-        }
-    };
-
-    // App Key
-    let current_key = s.sockudo_app_key.as_deref().unwrap_or("(not set)");
-    let _ = write!(
-        out,
-        "\n{BOLD}App Key [{GRAY}{current_key}{RESET}{BOLD}]:{RESET} "
-    );
-    let _ = out.flush();
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(0) | Err(_) => return Err("stdin closed".to_string()),
-        Ok(_) => {}
-    }
-    let app_key = {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            s.sockudo_app_key.clone().unwrap_or_default()
-        } else {
-            trimmed.to_string()
-        }
-    };
-
-    // App Secret
-    let _ = writeln!(
-        out,
-        "\n{ORANGE}Note:{RESET} the secret will be visible while you type."
-    );
-    let current_secret = mask_api_key(s.sockudo_app_secret.as_ref());
-    let _ = write!(
-        out,
-        "{BOLD}App Secret [{GRAY}{current_secret}{RESET}{BOLD}]:{RESET} "
-    );
-    let _ = out.flush();
-    let mut line = String::new();
-    match std::io::stdin().read_line(&mut line) {
-        Ok(0) | Err(_) => return Err("stdin closed".to_string()),
-        Ok(_) => {}
-    }
-    let app_secret = {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            s.sockudo_app_secret.clone().unwrap_or_default()
-        } else {
-            SecretString::new(trimmed)
-        }
-    };
-
-    // Save to settings
-    let mut s = load_settings();
-    s.sockudo_app_id = Some(app_id);
-    s.sockudo_app_key = Some(app_key);
-    s.sockudo_app_secret = Some(app_secret);
-    save_settings(&s);
-
-    let _ = writeln!(
-        out,
-        "{GREEN}✔{RESET} {BOLD}Sockudo credentials saved.{RESET}"
-    );
-    Ok(())
-}
-
-/// Run the full interactive setup flow used by `--config`.
-///
-/// Asks the user for the provider, then the URL, then (if the provider is
-/// Ollama) the API key. Persists the result to settings. The caller is
-/// responsible for the actual health check / provider instantiation after
-/// this returns.
-pub fn interactive_setup(out: &mut Output) -> Result<SetupResult, String> {
-    let kind = prompt_for_provider(out)?;
-    let default = default_url_for(kind);
-    let url = prompt_for_url(out, kind, default)?;
-
-    let _ = writeln!(
-        out,
-        "\n{GREEN}✔{RESET} Selected {BOLD}{kind}{RESET} at {BLUE}{url}{RESET}"
-    );
-
-    save_provider_settings(kind, &url);
-
-    // The Ollama API key is only used by the Ollama provider, so only prompt
-    // for it when that's what the user picked. Other providers ignore it.
-    let mut api_key_changed = false;
-    if matches!(kind, ProviderKind::Ollama) {
-        let choice = prompt_for_api_key(out)?;
-        api_key_changed = apply_api_key_choice(choice);
-        if api_key_changed {
-            let _ = writeln!(out, "{GREEN}✔{RESET} {BOLD}API key updated.{RESET}");
-        } else {
-            let _ = writeln!(out, "{GRAY}API key unchanged.{RESET}");
-        }
-    }
-
-    // Sockudo needs app credentials (app_id, app_key, app_secret).
-    if matches!(kind, ProviderKind::Sockudo) {
-        prompt_for_sockudo_credentials(out)?;
-    }
-
-    let _ = writeln!(
-        out,
-        "\n{GRAY}Saved to settings. Run tinyharness to start.{RESET}"
-    );
-
-    Ok(SetupResult {
-        provider: kind,
-        url,
-        api_key_changed,
-    })
 }
 
 #[cfg(test)]
@@ -605,95 +311,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn setup_result_carries_values() {
-        let r = SetupResult {
-            provider: ProviderKind::Vllm,
-            url: "http://example:8000".to_string(),
-            api_key_changed: false,
-        };
-        assert_eq!(r.provider, ProviderKind::Vllm);
-        assert_eq!(r.url, "http://example:8000");
-        assert!(!r.api_key_changed);
-    }
+    // ── Impure (persisting) variants — isolated root, never the real profile ──
 
     #[test]
-    fn setup_result_marks_api_key_changed() {
-        let r = SetupResult {
-            provider: ProviderKind::Ollama,
-            url: "http://127.0.0.1:11434".to_string(),
-            api_key_changed: true,
-        };
-        assert!(r.api_key_changed);
-    }
-
-    #[test]
-    fn mask_api_key_handles_none() {
-        assert_eq!(mask_api_key(None), "(not set)");
-    }
-
-    #[test]
-    fn mask_api_key_handles_long_keys() {
-        // 12-char key → first 4 + "..." + last 4
+    fn resolve_api_key_persists_to_injected_paths() {
+        let paths = crate::test_helpers::isolated_paths("setup");
+        let key = resolve_api_key(&paths, Some("sk-from-cli"), &Settings::default());
+        assert_eq!(key, Some(SecretString::new("sk-from-cli")));
         assert_eq!(
-            mask_api_key(Some(&SecretString::new("abcdef123456".to_string()))),
-            "abcd...3456"
+            load_settings_from(&paths).openai_compat_api_key,
+            Some(SecretString::new("sk-from-cli")),
+            "the CLI key must land in the injected settings file"
         );
     }
 
     #[test]
-    fn mask_api_key_handles_short_keys() {
-        // 8 chars or fewer → fully masked
-        assert_eq!(
-            mask_api_key(Some(&SecretString::new("abc".to_string()))),
-            "****"
-        );
-        assert_eq!(
-            mask_api_key(Some(&SecretString::new("abcdefgh".to_string()))),
-            "****"
-        );
+    fn resolve_api_key_sentinel_clears_saved_key_in_injected_paths() {
+        let paths = crate::test_helpers::isolated_paths("setup");
+        resolve_api_key(&paths, Some("sk-stored"), &Settings::default());
+        resolve_api_key(&paths, Some("-"), &Settings::default());
+        assert_eq!(load_settings_from(&paths).openai_compat_api_key, None);
     }
 
     #[test]
-    fn mask_api_key_handles_exactly_9_chars() {
-        // 9 chars is the threshold: still show first/last 4
+    fn save_provider_settings_writes_to_injected_paths() {
+        let paths = crate::test_helpers::isolated_paths("setup");
+        save_provider_settings(&paths, ProviderKind::LlamaCpp, "http://saved:8080");
+        let saved = load_settings_from(&paths);
+        assert_eq!(saved.last_provider, ProviderKind::LlamaCpp);
         assert_eq!(
-            mask_api_key(Some(&SecretString::new("abcdefghi".to_string()))),
-            "abcd...fghi"
+            saved.get_url_for(ProviderKind::LlamaCpp),
+            Some("http://saved:8080")
         );
     }
 
-    #[test]
-    fn api_key_choice_equality() {
-        assert_eq!(ApiKeyChoice::Keep, ApiKeyChoice::Keep);
-        assert_ne!(ApiKeyChoice::Keep, ApiKeyChoice::Clear);
-        assert_eq!(
-            ApiKeyChoice::Set(SecretString::new("k")),
-            ApiKeyChoice::Set(SecretString::new("k"))
-        );
-        assert_ne!(
-            ApiKeyChoice::Set(SecretString::new("a")),
-            ApiKeyChoice::Set(SecretString::new("b"))
-        );
-    }
-
-    #[test]
-    fn api_key_choice_debug_redacts_set_value() {
-        // The whole point of `Set(SecretString)` is that `Debug` cannot leak
-        // the freshly-typed key. If a future refactor unwraps the
-        // `SecretString` back to `String`, this test fails loudly.
-        let choice = ApiKeyChoice::Set(SecretString::new("sk-supersecret"));
-        let dbg = format!("{:?}", choice);
-        assert!(dbg.contains("[REDACTED]"), "expected REDACTED in {:?}", dbg);
-        assert!(
-            !dbg.contains("sk-supersecret"),
-            "key leaked via Debug: {:?}",
-            dbg
-        );
-    }
-
-    // Note: prompt_for_provider and prompt_for_url read from stdin and are
-    // not unit-tested here (they'd require process fork/pipe mocking). They
-    // are exercised by manual / integration tests. The non-interactive error
-    // path is verified by the `is_terminal()` guard in the function bodies.
+    // Note: prompt_for_url reads from stdin and is not unit-tested here (it
+    // would require process fork/pipe mocking). It is exercised by manual /
+    // integration tests. The non-interactive error path is verified by the
+    // `is_terminal()` guard in the function body.
 }

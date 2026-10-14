@@ -6,7 +6,7 @@ TinyHarness stores all persistent settings in `~/.config/tinyharness/`. This gui
 
 **Location**: `~/.config/tinyharness/settings.json`
 
-Settings are loaded at startup. On first launch, defaults are used until the user runs `--config` (interactive setup) or manually edits the file.
+Settings are loaded at startup. On first launch, defaults are used until you change a value with a CLI flag or slash command, or edit the file directly.
 
 ### Setting vs. Saving
 
@@ -53,7 +53,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `last_provider` | string | `"ollama"` | Last used provider: `"ollama"`, `"llamacpp"`, `"vllm"`, `"openai-compat"`, or `"sockudo"` |
-| `last_provider_url` | string\|null | `null` | Custom base URL for the provider. Set by `--url` flag or `--config` interactive setup. If `null`, uses the provider's default URL |
+| `last_provider_url` | string\|null | `null` | Custom base URL for the provider. Set by the `--url` flag, or by passing a provider flag (`--ollama`/`--llama-cpp`/`--vllm`/`--sockudo`/`--openai-compat`) without `--url` — that prompts for the URL on a TTY. If `null`, uses the provider's default URL |
 | `last_model` | string\|null | `null` | Last used model name. Set by `/model <name>`. If `null`, the provider auto-selects the first available model |
 
 **Provider default URLs** (used when `last_provider_url` is `null`):
@@ -67,7 +67,7 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>`, `OPENAI_API_KEY` env var, or `--config` interactive setup. Use `--api-key -` to clear the saved key |
+| `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>` or the `OPENAI_API_KEY` env var; use `--api-key -` to clear the saved key |
 | `skip_health_check` | bool | `false` | Skip the provider health check at startup. A failed health check only warns and doesn't block startup; errors surface on the first request. Set via `--skip-health-check` to suppress the warning. OpenAI-compatible providers probe `/health` first and fall back to `/v1/models` when the server has no `/health` endpoint (404) — a non-empty model list counts as healthy |
 
 **API key resolution precedence:**
@@ -89,11 +89,11 @@ The Sockudo provider uses a [Sockudo](https://github.com/sockudo/sockudo) WebSoc
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `sockudo_app_id` | string\|null | `null` | Sockudo app ID. Set via `--config` interactive setup |
-| `sockudo_app_key` | string\|null | `null` | Sockudo app key (used for WebSocket auth) |
-| `sockudo_app_secret` | string\|null | `null` | Sockudo app secret (used for HMAC-SHA256 request signing) |
+| `sockudo_app_id` | string\|null | `null` | Sockudo app ID. **Set by editing this file** — there is no CLI flag or slash command for Sockudo credentials |
+| `sockudo_app_key` | string\|null | `null` | Sockudo app key (used for WebSocket auth). **Set by editing this file** |
+| `sockudo_app_secret` | string\|null | `null` | Sockudo app secret (used for HMAC-SHA256 request signing). **Set by editing this file** |
 
-These credentials must match the Sockudo server's app configuration. For testing, see `tests/sockudo/config/config.toml` and `tests/sockudo/run-test.sh`.
+These credentials must match the Sockudo server's app configuration, and there is no interactive way to enter them — add all three to `settings.json` by hand, then run `tinyharness --sockudo`. For testing, see `tests/sockudo/config/config.toml` and `tests/sockudo/run-test.sh`.
 
 **How it works:**
 1. The provider publishes an `ai-input` event via signed HTTP POST to the Sockudo server.
@@ -272,6 +272,22 @@ To restore a default, delete the file and restart TinyHarness — it will re-see
 
 ## XDG Paths Reference
 
+Locations follow the XDG Base Directory Specification. The config and data
+roots are resolved in this order:
+
+| Root | 1st choice | 2nd choice (`$HOME` fallback) | If neither is set |
+|------|-----------|-------------------------------|-------------------|
+| config | `$XDG_CONFIG_HOME/tinyharness` | `$HOME/.config/tinyharness` | `./.config/tinyharness` |
+| data | `$XDG_DATA_HOME/tinyharness` | `$HOME/.local/share/tinyharness` | `./.local/share/tinyharness` |
+
+`$HOME` may also come from `$USERPROFILE`. An `XDG_*` variable that is empty or
+relative is ignored, per the spec. The `./`-prefixed fallbacks mean a process
+with no home directory still gets a writable, self-consistent tree instead of
+failing.
+
+Below, `~/.config` and `~/.local/share` stand in for whichever roots were
+resolved.
+
 ```
 ~/.config/tinyharness/
 ├── settings.json           Global settings
@@ -318,7 +334,6 @@ All CLI flags override settings:
 | `--api-key <key>` | `openai_compat_api_key = <key>` (only affects `--openai-compat`; use `-` to clear) |
 | `--skip-health-check` | Skips provider health check at startup (a failed health check is otherwise a warning, not fatal) |
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
-| `--config` | Runs interactive setup, saves, exits |
 | `-p`, `--prompt <text>` | Sends initial prompt then enters interactive mode |
 
 ---
@@ -329,4 +344,6 @@ All CLI flags override settings:
 |----------|--------|
 | `TINYHARNESS_MD_FILES` | Comma-separated list of instruction file names, overrides `project_md_files` in settings |
 | `OPENAI_API_KEY` | Bearer token for the `--openai-compat` provider (used when `--api-key` is not passed) |
-| `HOME` | Used to resolve `~/.config/tinyharness/` and `~/.local/share/tinyharness/` |
+| `HOME` / `USERPROFILE` | Fallback used to resolve `~/.config/tinyharness/` and `~/.local/share/tinyharness/` when the matching `XDG_*` var is unset |
+| `XDG_CONFIG_HOME` | Overrides the config root (`settings.json`, `prompts/`, `custom_tools.json`, `skills/`) |
+| `XDG_DATA_HOME` | Overrides the data root (`sessions/`, `history.txt`) |

@@ -1,6 +1,9 @@
 use std::io::Write;
 
-use tinyharness_lib::config::{AutoAcceptMode, load_settings, save_settings, timeout_default_for};
+use tinyharness_lib::Paths;
+use tinyharness_lib::config::{
+    AutoAcceptMode, load_settings_from, save_settings_to, timeout_default_for,
+};
 use tinyharness_lib::provider::Provider;
 use tinyharness_ui::output::Output;
 
@@ -20,7 +23,7 @@ async_command!(
         let provider = ctx.provider.clone();
         async move {
             if arg.is_empty() {
-                let settings = load_settings();
+                let settings = load_settings_from(&ctx.paths);
                 let _ = writeln!(
                     ctx.output,
                     "{BOLD}Current timeout: {BLUE}{}s{RESET} {GRAY}({}){RESET}",
@@ -32,9 +35,11 @@ async_command!(
 
             match arg.parse::<u64>() {
                 Ok(0) => {
-                    let mut settings = load_settings();
+                    let mut settings = load_settings_from(&ctx.paths);
                     settings.request_timeout_secs = None;
-                    save_settings(&settings);
+                    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+                        tracing::warn!("Failed to save settings: {e}");
+                    }
                     let default_secs = timeout_default_for(settings.last_provider);
                     let mut p = provider.lock().await;
                     p.set_timeout(default_secs);
@@ -46,9 +51,11 @@ async_command!(
                     Ok(CommandResult::Ok)
                 }
                 Ok(secs) => {
-                    let mut settings = load_settings();
+                    let mut settings = load_settings_from(&ctx.paths);
                     settings.request_timeout_secs = Some(secs);
-                    save_settings(&settings);
+                    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+                        tracing::warn!("Failed to save settings: {e}");
+                    }
                     let mut p = provider.lock().await;
                     p.set_timeout(secs);
                     let _ = writeln!(ctx.output, "{BOLD}Timeout set to {BLUE}{secs}s.{RESET}",);
@@ -75,7 +82,7 @@ async_command!(
         let provider = ctx.provider.clone();
         async move {
             if arg.is_empty() {
-                let settings = load_settings();
+                let settings = load_settings_from(&ctx.paths);
                 let _ = writeln!(
                     ctx.output,
                     "{BOLD}Current max retries: {BLUE}{}{RESET} {GRAY}({}){RESET}",
@@ -87,9 +94,11 @@ async_command!(
 
             match arg.parse::<u32>() {
                 Ok(count) => {
-                    let mut settings = load_settings();
+                    let mut settings = load_settings_from(&ctx.paths);
                     settings.request_max_retries = Some(count);
-                    save_settings(&settings);
+                    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+                        tracing::warn!("Failed to save settings: {e}");
+                    }
                     let mut p = provider.lock().await;
                     p.set_retries(count);
                     let _ = writeln!(ctx.output, "{BOLD}Max retries set to {BLUE}{count}.{RESET}",);
@@ -107,11 +116,15 @@ async_command!(
 // ── ContextLimit (sync — no provider access needed) ──────────────────────────
 
 /// Execute the /contextlimit command (sync — no provider access needed).
-pub fn execute_context_limit(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute_context_limit(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
-        let settings = load_settings();
+        let settings = load_settings_from(paths);
         match settings.context_limit {
             Some(limit) => {
                 let _ = writeln!(
@@ -130,9 +143,11 @@ pub fn execute_context_limit(out: &mut Output, arg: Option<&str>) -> Result<Comm
     }
 
     if a == "auto" || a == "default" {
-        let mut settings = load_settings();
+        let mut settings = load_settings_from(paths);
         settings.context_limit = None;
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
         let _ = writeln!(
             out,
             "{BOLD}Context limit cleared. Using model default for warnings.{RESET}",
@@ -142,9 +157,11 @@ pub fn execute_context_limit(out: &mut Output, arg: Option<&str>) -> Result<Comm
 
     match a.parse::<u32>() {
         Ok(limit) if limit > 0 => {
-            let mut settings = load_settings();
+            let mut settings = load_settings_from(paths);
             settings.context_limit = Some(limit);
-            save_settings(&settings);
+            if let Err(e) = save_settings_to(paths, &settings) {
+                tracing::warn!("Failed to save settings: {e}");
+            }
             let _ = writeln!(
                 out,
                 "{BOLD}Context limit set to {BLUE}{limit} tokens{RESET} for warning calculations.",
@@ -162,11 +179,15 @@ pub fn execute_context_limit(out: &mut Output, arg: Option<&str>) -> Result<Comm
 // ── AutoAccept (sync — no provider access needed) ─────────────────────────────
 
 /// Execute the /autoaccept command (sync — no provider access needed).
-pub fn execute_autoaccept(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute_autoaccept(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
-        let settings = load_settings();
+        let settings = load_settings_from(paths);
         let (mode, color) = match settings.auto_accept_mode {
             AutoAcceptMode::All => ("all (all tools)", GREEN),
             AutoAcceptMode::Safe => ("safe commands", GREEN),
@@ -187,9 +208,11 @@ pub fn execute_autoaccept(out: &mut Output, arg: Option<&str>) -> Result<Command
         }
     };
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     settings.auto_accept_mode = mode;
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
 
     let (mode_str, color) = match mode {
         AutoAcceptMode::All => ("all tools", GREEN),
@@ -204,11 +227,15 @@ pub fn execute_autoaccept(out: &mut Output, arg: Option<&str>) -> Result<Command
 // ── AutoCompact (sync — no provider access needed) ───────────────────────────
 
 /// Execute the /autocompact command to toggle the auto_compact tool.
-pub fn execute_autocompact(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute_autocompact(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
-        let settings = load_settings();
+        let settings = load_settings_from(paths);
         let (status, color) = if settings.auto_compact_enabled {
             ("on", GREEN)
         } else {
@@ -226,9 +253,11 @@ pub fn execute_autocompact(out: &mut Output, arg: Option<&str>) -> Result<Comman
         }
     };
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     settings.auto_compact_enabled = new_value;
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
 
     let (status, color) = if new_value {
         ("on", GREEN)
@@ -243,11 +272,15 @@ pub fn execute_autocompact(out: &mut Output, arg: Option<&str>) -> Result<Comman
 // ── Questions (sync — no provider access needed) ─────────────────────────────
 
 /// Execute the /questions command to toggle the question tool.
-pub fn execute_questions(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute_questions(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
 
     if a.is_empty() {
-        let settings = load_settings();
+        let settings = load_settings_from(paths);
         let (status, color) = if settings.questions_enabled {
             ("on", GREEN)
         } else {
@@ -265,9 +298,11 @@ pub fn execute_questions(out: &mut Output, arg: Option<&str>) -> Result<CommandR
         }
     };
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     settings.questions_enabled = new_value;
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
 
     let (status, color) = if new_value {
         ("on", GREEN)
@@ -291,7 +326,7 @@ async_command!(
         let provider = ctx.provider.clone();
         async move {
             if arg.is_empty() {
-                let settings = load_settings();
+                let settings = load_settings_from(&ctx.paths);
                 let _ = writeln!(
                     ctx.output,
                     "{BOLD}Current think level: {BLUE}{}{RESET}",
@@ -305,9 +340,11 @@ async_command!(
                 Err(e) => return Err(e),
             };
 
-            let mut settings = load_settings();
+            let mut settings = load_settings_from(&ctx.paths);
             settings.ollama_think_type = think_type;
-            save_settings(&settings);
+            if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+                tracing::warn!("Failed to save settings: {e}");
+            }
 
             let mut p = provider.lock().await;
             p.set_think_type(think_type);
@@ -353,9 +390,11 @@ pub fn execute_showthink(
     };
 
     ctx.show_thinking = new_value;
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(&ctx.paths);
     settings.show_thinking = new_value;
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
 
     let (status, color) = if new_value {
         ("on", GREEN)
@@ -373,12 +412,13 @@ pub fn execute_showthink(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{captured_output, captured_string, strip_ansi};
+    use crate::test_helpers::{captured_output, captured_string, isolated_paths, strip_ansi};
 
     #[test]
     fn context_limit_invalid_value_returns_error() {
         let (mut out, _buf) = captured_output();
-        let result = execute_context_limit(&mut out, Some("abc"));
+        let paths = isolated_paths("config_settings");
+        let result = execute_context_limit(&mut out, &paths, Some("abc"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid context limit"));
     }
@@ -386,7 +426,8 @@ mod tests {
     #[test]
     fn context_limit_zero_returns_error() {
         let (mut out, _buf) = captured_output();
-        let result = execute_context_limit(&mut out, Some("0"));
+        let paths = isolated_paths("config_settings");
+        let result = execute_context_limit(&mut out, &paths, Some("0"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("positive number"));
     }
@@ -394,7 +435,8 @@ mod tests {
     #[test]
     fn autoaccept_invalid_value_returns_error() {
         let (mut out, _buf) = captured_output();
-        let result = execute_autoaccept(&mut out, Some("invalid"));
+        let paths = isolated_paths("config_settings");
+        let result = execute_autoaccept(&mut out, &paths, Some("invalid"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid value"));
     }
@@ -402,7 +444,8 @@ mod tests {
     #[test]
     fn autoaccept_empty_shows_current() {
         let (mut out, buf) = captured_output();
-        let _ = execute_autoaccept(&mut out, None);
+        let paths = isolated_paths("config_settings");
+        let _ = execute_autoaccept(&mut out, &paths, None);
         let plain = strip_ansi(&captured_string(&buf));
         assert!(plain.contains("Auto-accept:"));
     }
@@ -410,7 +453,8 @@ mod tests {
     #[test]
     fn autocompact_invalid_value_returns_error() {
         let (mut out, _buf) = captured_output();
-        let result = execute_autocompact(&mut out, Some("maybe"));
+        let paths = isolated_paths("config_settings");
+        let result = execute_autocompact(&mut out, &paths, Some("maybe"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid value"));
     }
@@ -418,7 +462,8 @@ mod tests {
     #[test]
     fn autocompact_empty_shows_current() {
         let (mut out, buf) = captured_output();
-        let _ = execute_autocompact(&mut out, None);
+        let paths = isolated_paths("config_settings");
+        let _ = execute_autocompact(&mut out, &paths, None);
         let plain = strip_ansi(&captured_string(&buf));
         assert!(plain.contains("Auto-compact:"));
     }
@@ -426,7 +471,8 @@ mod tests {
     #[test]
     fn questions_invalid_value_returns_error() {
         let (mut out, _buf) = captured_output();
-        let result = execute_questions(&mut out, Some("maybe"));
+        let paths = isolated_paths("config_settings");
+        let result = execute_questions(&mut out, &paths, Some("maybe"));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid value"));
     }
@@ -434,7 +480,8 @@ mod tests {
     #[test]
     fn questions_empty_shows_current() {
         let (mut out, buf) = captured_output();
-        let _ = execute_questions(&mut out, None);
+        let paths = isolated_paths("config_settings");
+        let _ = execute_questions(&mut out, &paths, None);
         let plain = strip_ansi(&captured_string(&buf));
         assert!(plain.contains("Questions:"));
     }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -170,16 +170,23 @@ impl ImageAttachment {
 
     /// Load an image from disk with an absolute path.
     /// Convenience wrapper that canonicalises the path.
+    ///
+    /// Relative paths resolve against the process CWD — use
+    /// [`ImageAttachment::load_from_str_in`] to supply an explicit base
+    /// directory (e.g. [`Paths::project_dir`](crate::paths::Paths::project_dir)).
     pub fn load_from_str(path_str: &str) -> Result<Self, ImageError> {
+        let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::load_from_str_in(&base, path_str)
+    }
+
+    /// Load an image, resolving relative paths against `base_dir`.
+    pub fn load_from_str_in(base_dir: &Path, path_str: &str) -> Result<Self, ImageError> {
         let path = PathBuf::from_str(path_str)
             .map_err(|_| ImageError::FileNotFound(PathBuf::from(path_str)))?;
         let abs_path = if path.is_absolute() {
             path
         } else {
-            // Resolve relative to CWD
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(&path)
+            base_dir.join(&path)
         };
         Self::load(abs_path)
     }

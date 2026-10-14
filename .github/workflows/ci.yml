@@ -27,6 +27,24 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # Every binary handler must resolve filesystem locations through the injected
+  # `Paths` (usually `ctx.paths`), never through the no-arg wrappers that
+  # secretly build `Paths::default()` from the ambient environment. A non-empty
+  # match means a wrapper crept back in. See docs/contributing.md →
+  # "Adding a New Slash Command" for the convention.
+  paths-guard:
+    name: Paths injection guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: No ambient-settings wrappers in the binary
+        run: |
+          if grep -rn "load_settings()\|save_settings(\|load_merged_settings()" src/ --include=*.rs; then
+            echo "::error::Binary handlers must use load_settings_from/save_settings_to/load_merged_settings_from with the injected Paths (see docs/contributing.md → 'Adding a New Slash Command')."
+            exit 1
+          fi
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

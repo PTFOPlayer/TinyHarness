@@ -227,6 +227,7 @@ GitHub Actions runs on every push and PR to `master`:
 | Job | Platform | Command | Purpose |
 |-----|----------|---------|---------|
 | Format | Linux | `cargo fmt --all -- --check` | Ensures consistent formatting |
+| Paths injection guard | Linux | `! grep -rn "load_settings()\\|save_settings(\\|load_merged_settings()" src/ --include=*.rs` | Keeps the binary on the injected `Paths` (see "Adding a New Slash Command") |
 | Clippy | Linux | `cargo clippy --workspace -- -D warnings` | Catches common mistakes |
 | Test | Linux | `cargo test --workspace` | Runs full test suite |
 | Build | Linux | `cargo build --workspace` | Confirms compilation |
@@ -273,7 +274,8 @@ Keep the summary line under 72 characters. Use imperative mood ("Add" not "Added
 2. Implement the handler function
 3. Register in `src/commands/mod.rs` → `build_registry()`
 4. If async (needs provider access), use the `async_command!` macro
-5. Add help text to `/help` output
+5. Resolve every filesystem location from the injected `Paths` — see below
+6. Add help text to `/help` output
 
 Example:
 ```rust
@@ -284,6 +286,38 @@ pub fn handle_my_command(ctx: &mut CommandContext, _args: &[&str]) -> CommandRes
     CommandResult::Ok
 }
 ```
+
+**Paths convention.** No handler in `src/commands/` or `src/agent/` may call the
+no-arg wrappers (`load_settings()`, `save_settings()`, `load_merged_settings()`) —
+they resolve `Paths::default()` from the ambient environment, which silently
+diverges from the profile the rest of the session uses. Instead:
+
+- Handler has a `CommandContext` → use `&ctx.paths`. Inside an
+  `async_command!` block `ctx` is moved into the returned future, so `&ctx.paths`
+  still works there.
+- Handler takes only `out: &mut Output` → add a `paths: &Paths` parameter and
+  pass `&ctx.paths` from the registration closure in `src/commands/mod.rs`
+  (precedent: `apikey.rs`, `settings.rs`, `command.rs`, `config_settings.rs`,
+  `project_settings.rs`, `audit.rs`, `sessions.rs`).
+- Code that runs before a `CommandContext` exists (`src/agent/setup.rs`) →
+  thread `&Paths` from `main.rs`, which owns the single startup instance.
+- Helpers that need one settings value (`src/agent/display.rs`) → prefer passing
+  that value (`context_limit: Option<u32>`) over the whole `Paths`.
+
+Swap the calls themselves:
+
+```rust
+let settings = load_settings_from(&ctx.paths);
+// …
+if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+    tracing::warn!("Failed to save settings: {e}");
+}
+```
+
+`save_settings_to` returns `Result` (unlike the swallowing `save_settings`); keep
+the log-and-continue form above so a failed best-effort write does not fail the
+command. Guard: `grep -rn "load_settings()\|save_settings(" src/ --include=*.rs`
+must stay empty.
 
 ### Adding a New Tool
 
@@ -311,6 +345,61 @@ pub fn handle_my_command(ctx: &mut CommandContext, _args: &[&str]) -> CommandRes
 2. Add a default value in `Default::default()` (or derive `#[serde(default)]`)
 3. Consider per-project override support in `ProjectSettings`
 4. Add a slash command to modify it (optional, for user-facing settings)
+
+### Adding a New Filesystem Location
+
+Every path TinyHarness reads or writes resolves through
+`tinyharness_lib::paths::Paths` — the single place allowed to consult `$HOME`,
+`$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, or the process CWD.
+
+1. Add a getter to `Paths` (`settings_file()`, `sessions_dir()`, …) returning a
+   path derived from `config_dir()` / `data_dir()` / `project_dir()`.
+2. Give the consuming subsystem an injectable constructor:
+   `from_paths(&Paths)` for stores, `*_in`/`*_from` free functions for the rest
+   (e.g. `load_settings_from`, `discover_skills_in`, `WorkspaceContext::collect_in`).
+3. Keep the existing no-arg form as a thin wrapper over
+   `Paths::default()` so current callers are unaffected.
+4. Never call `std::env::var("HOME")` or `current_dir()` directly in `tinyharness-lib`.
+   `cargo clippy --workspace --all-targets -- -D warnings` does not enforce this;
+   the `paths_injection` integration test is the guard.
+   Three documented exceptions exist today, all in `tinyharness-lib`:
+   `resolve_project_md_files()` reads the `TINYHARNESS_MD_FILES` override knob
+   (an env var, not a storage location); `ImageAttachment::load_from_str()`
+   resolves relative paths against the process CWD — `load_from_str_in()` is the
+   injectable form; and `tools/web_search.rs` still calls `load_settings()` for
+   the Ollama API key, so a host driving the lib with an isolated `Paths` must
+   know the web tools read the ambient profile. Making that last one injectable
+   requires changing `ToolManager::register_defaults()`'s public signature.
+
+### Using tinyharness-lib Standalone
+
+The library is usable without the CLI: construct a `Paths` pointing at any root
+and pass it to the `*_in` / `*_from` / `from_paths` entry points. Apart from the
+documented exceptions above, nothing else reads the ambient environment, so a
+host application (or a test) can run multiple fully isolated profiles in one
+process.
+
+```rust
+use std::path::PathBuf;
+use tinyharness_lib::{Paths, Settings, SessionStore, load_settings_from, save_settings_to};
+
+let paths = Paths::with_home(PathBuf::from("/srv/agent-profile"));
+// → /srv/agent-profile/.config/tinyharness/settings.json
+// → /srv/agent-profile/.local/share/tinyharness/sessions/
+
+let mut settings = load_settings_from(&paths);
+settings.context_limit = Some(200_000);
+save_settings_to(&paths, &settings)?;
+
+let store = SessionStore::from_paths(&paths);
+store.ensure_dir()?;
+```
+
+For arbitrary layouts (config and data on different volumes, no home directory
+at all), use `Paths::new(config_dir, data_dir, project_dir)` plus the
+`with_config_dir` / `with_data_dir` / `with_project_dir` / `with_legacy_home`
+builders. `Paths::from_env(|key| …)` accepts an injected environment lookup for
+hermetic tests.
 
 ---
 

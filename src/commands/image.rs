@@ -65,18 +65,17 @@ fn attach_image(ctx: &mut CommandContext, path_str: &str) {
         return;
     }
 
-    // Expand tilde
-    let expanded = if path_str.starts_with('~') {
-        if let Ok(home) = std::env::var("HOME") {
-            path_str.replacen('~', &home, 1)
-        } else {
-            path_str.to_string()
+    // Expand tilde against the resolved home directory. Only `~` alone and
+    // `~/…` are expanded — `~otheruser` is not a supported shell form here.
+    let expanded = match (path_str.strip_prefix('~'), ctx.paths.home()) {
+        (Some(""), Some(home)) => home.to_string_lossy().into_owned(),
+        (Some(rest), Some(home)) if rest.starts_with('/') => {
+            home.join(&rest[1..]).to_string_lossy().into_owned()
         }
-    } else {
-        path_str.to_string()
+        _ => path_str.to_string(),
     };
 
-    match ImageAttachment::load_from_str(&expanded) {
+    match ImageAttachment::load_from_str_in(ctx.paths.project_dir(), &expanded) {
         Ok(img) => {
             let name = img.display_name();
             let size = img.size_display();

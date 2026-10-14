@@ -25,13 +25,18 @@ Three crates in a Cargo workspace:
 - `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `OpenAiCompatProvider` (unified llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
 - `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering, `ToolAvailability` (opt-out flags for `auto_compact`/`question`, both default on), `register_custom_tools()` for custom tools
 - `custom_tools/` — Custom-tool system: `CustomToolManager` (load/merge global + project `custom_tools.json`), `CustomToolDefinition`/`CustomToolCategory`, `ShellCommand` (template substitution, shell escaping, timeout, `TH_*` env vars)
+- `paths.rs` — `Paths`: the **only** place that reads `$HOME`/`$XDG_*`/CWD. Config/data/project roots + every derived file (settings, prompts, sessions, custom tools, skills). Built via `default()`, `with_home()`, `from_env()`, or `new()` + `with_*` builders
 - `session.rs` — JSONL persistence, auto-save every 5 messages
 - `context.rs` — Workspace metadata + instruction file discovery (TINYHARNESS.md → .tinyharness.md → AGENTS.md → CLAUDE.md)
-- `skill.rs` — Skill discovery from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`
+- `skill.rs` — Skill discovery from `<config_dir>/skills/`, legacy `~/.tinyharness/skills/`, and `.tinyharness/skills/` (project wins)
 - `mode.rs` — Agent modes with `.md` system prompts
 - `secret.rs` — `SecretString` wrapper for API key redaction (custom `Debug` impl, serde support)
 - `sandbox.rs` — `Sandbox`: canonicalized-root path containment (lexical `..` normalization + symlink resolution), used by `--sandbox`
 - `config/mod.rs` — SettingsStore, ProviderKind (ollama/llamacpp/vllm/openai-compat/sockudo), OllamaThinkType, AutoAcceptMode (off/safe/all), `MergedSettings::tool_availability()`
+
+**Standalone library use**: every subsystem has an injectable entry point taking `&Paths` (`SettingsStore::from_paths`, `SessionStore::from_paths`, `load_settings_from`, `save_settings_to`, `load_merged_settings_from`, `prompts_dir_for`, `ensure_prompts_initialized_in`, `discover_skills_in`, `SkillRegistry::discover_in`, `CustomToolManager::load_from`, `WorkspaceContext::collect_in`, `ImageAttachment::load_from_str_in`, `AgentMode::load_system_prompt(&dir)`). The no-arg forms (`load_settings()`, `SessionStore::default_path()`, `discover_skills()`, `WorkspaceContext::collect()`, …) are thin wrappers over `Paths::default()` and must never be called from code that already holds a `Paths`. New filesystem locations go in `paths.rs`; do not read `std::env` directly in `tinyharness-lib` (documented exceptions: `TINYHARNESS_MD_FILES` in `resolve_project_md_files`, the CWD fallback in `ImageAttachment::load_from_str`, and the still-ambient `load_settings()` call inside `tools/web_search.rs`). See `docs/contributing.md` → "Using tinyharness-lib Standalone".
+
+**Binary handlers never call the no-arg wrappers.** All of `src/commands/` and `src/agent/` resolve settings through the injected instance: `&ctx.paths` where a `CommandContext` exists (including inside `async_command!`, where `ctx` is moved into the future), an explicit `paths: &Paths` parameter passed from the registration closure in `src/commands/mod.rs` otherwise, or `&Paths` threaded from `main.rs` for startup code (`src/agent/setup.rs`) that runs before a `CommandContext` exists. Helpers needing one value take that value instead of the whole `Paths` (e.g. `display.rs` takes `context_limit: Option<u32>`). `save_settings_to` returns `Result` — wrap it in `if let Err(e) = … { tracing::warn!("Failed to save settings: {e}"); }` to preserve the old log-and-continue behaviour. Enforced by the `paths-guard` CI job (`grep -rn "load_settings()\|save_settings(\|load_merged_settings()" src/` must be empty).
 
 ### Binary crate structure
 
@@ -86,14 +91,14 @@ Three crates in a Cargo workspace:
 - **Compaction**: `/compact` uses single-pass for ≤200 intermediate messages, cascading (chunk+merge) for larger sessions.
 - **Optional tools**: `auto_compact` and `question` can each be hidden from the model via `ToolAvailability` (settings `auto_compact_enabled` / `questions_enabled`, both default `true`; global via `/autocompact` & `/questions`, or per-project via `.tinyharness/config.json`). Filtering happens in `ToolManager::tools_for_mode`, so disabled tools never reach the provider — the agent loop does not re-check at execution time.
 - **Context warnings**: Load warnings at 70%/90% thresholds based on last known token count (estimation).
-- **Session files**: JSONL (metadata line first, then message lines); malformed lines silently skipped on load; stored in `~/.local/share/tinyharness/sessions/`.
+- **Session files**: JSONL (metadata line first, then message lines); malformed lines silently skipped on load; stored in `<data_dir>/sessions/` (`$XDG_DATA_HOME/tinyharness/sessions/`, else `~/.local/share/tinyharness/sessions/`).
 - **Web tools**: `web_search` and `web_fetch` use `https://ollama.com/api/web_search` and require an Ollama API key set via `/apikey`.
 - **Ctrl+C**: Interrupts current LLM generation; second Ctrl+C exits immediately.
-- **Configuration**: Set via `--config` (interactive setup), stored as JSON in `~/.config/tinyharness/settings.json`. Persistent prompts are seeded from embedded defaults into `~/.config/tinyharness/prompts/`.
+- **Configuration**: Stored as JSON in `<config_dir>/settings.json` (`$XDG_CONFIG_HOME/tinyharness/`, else `~/.config/tinyharness/`). Changed via CLI flags (`--url`, `--api-key`), slash commands (`/model`, `/apikey`, `/timeout`, `/retries`, `/contextlimit`, `/autoaccept`, `/settings`, …), or by editing the file. There is no interactive setup wizard; Sockudo credentials are settings-file-only. Persistent prompts are seeded from embedded defaults into `<config_dir>/prompts/`. All locations resolve through `paths::Paths`.
 - **Image attachments**: Base64 data URIs, used by multimodal models; set via `/image`.
 - **`async_command!` macro**: Registers commands that need `provider.lock().await`.
 - **`CommandResult` variants**: `SwitchSession`, `RenameSession`, `Init`, `SkillUse`, `SkillUnload` carry data back to the agent loop.
-- **`CommandContext`** holds shared mutable state: provider, mode, file context, session ID, skill registry, active skills, pending images, thinking toggle, compaction token usage, workspace context, prompts dir, output writer, exit flag.
+- **`CommandContext`** holds shared mutable state: provider, mode, file context, session ID, skill registry, active skills, pending images, thinking toggle, compaction token usage, workspace context, `paths` (all filesystem locations; `prompts_dir()` derives from it), output writer, exit flag.
 - **`extract_args!` macro** exported at `tinyharness_lib` root, not in `tools`.
 - **Custom tools**: Configured in `~/.config/tinyharness/custom_tools.json` (global) + `.tinyharness/custom_tools.json` (project, extends global), managed by `CustomToolManager`. Custom tools are shell commands with `{param}` substitution (shell-escaped) and `TH_*` env vars. Custom tool names colliding with built-ins are skipped.
 

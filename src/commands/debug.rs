@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use serde_json::{Value, json};
-use tinyharness_lib::config::{load_settings, save_settings};
+use tinyharness_lib::config::{load_settings_from, save_settings_to};
 use tinyharness_lib::provider::{Message, Role};
 use tinyharness_ui::style::*;
 
@@ -55,8 +55,7 @@ pub fn execute(
         Some(p) if !p.is_empty() => p.clone(),
         _ => {
             // Default: save next to the session data directory
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let dir = std::path::PathBuf::from(home).join(".local/share/tinyharness");
+            let dir = ctx.paths.data_dir().to_path_buf();
             let timestamp = chrono_now_or_fallback();
             let ext = if args.json { "json" } else { "log" };
             dir.join(format!("debug-{}.{}", timestamp, ext))
@@ -88,10 +87,12 @@ pub fn execute(
     }
 
     // Persist the current show_thinking state so it survives restarts.
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(&ctx.paths);
     if settings.show_thinking != ctx.show_thinking {
         settings.show_thinking = ctx.show_thinking;
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
     }
 
     let _ = writeln!(
@@ -135,13 +136,13 @@ fn write_text_dump(file: &mut std::fs::File, ctx: &CommandContext, messages: &[M
     // ── Session metadata ───────────────────────────────────────────────────
     if let Some(session_id) = &ctx.session_id {
         writeln!(file, "=== Session Metadata ===").unwrap();
-        dump_session_metadata(file, session_id);
+        dump_session_metadata(file, &ctx.paths, session_id);
         writeln!(file).unwrap();
     }
 
     // ── Configuration snapshot ─────────────────────────────────────────────
     writeln!(file, "=== Configuration Snapshot ===").unwrap();
-    dump_configuration_snapshot(file);
+    dump_configuration_snapshot(file, &ctx.paths);
     writeln!(file).unwrap();
 
     // ── Pending images ─────────────────────────────────────────────────────
@@ -151,13 +152,13 @@ fn write_text_dump(file: &mut std::fs::File, ctx: &CommandContext, messages: &[M
 
     // ── Command lists ──────────────────────────────────────────────────────
     writeln!(file, "=== Command Auto-Accept Lists ===").unwrap();
-    dump_command_lists(file);
+    dump_command_lists(file, &ctx.paths);
     writeln!(file).unwrap();
 
     // ── System prompt source ───────────────────────────────────────────────
     writeln!(file, "=== System Prompt Source ===").unwrap();
     let mode = ctx.current_mode;
-    let prompts_dir = &ctx.prompts_dir;
+    let prompts_dir = ctx.prompts_dir();
 
     // Check header source
     if mode.uses_header() {
@@ -366,7 +367,7 @@ fn write_text_dump(file: &mut std::fs::File, ctx: &CommandContext, messages: &[M
 /// message object, giving unambiguous separation between reasoning and
 /// response without the need for text markers.
 fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
-    let settings = load_settings();
+    let settings = load_settings_from(&ctx.paths);
 
     // ── Session info ───────────────────────────────────────────────────────
     let session_info = json!({
@@ -393,7 +394,7 @@ fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
     let session_metadata = ctx
         .session_id
         .as_ref()
-        .and_then(|id| build_json_session_metadata(id));
+        .and_then(|id| build_json_session_metadata(&ctx.paths, id));
 
     // ── Configuration snapshot ─────────────────────────────────────────────
     let configuration = serde_json::to_value(&settings).unwrap_or(Value::Null);
@@ -430,7 +431,7 @@ fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
 
     // ── System prompt source ──────────────────────────────────────────────
     let mode = ctx.current_mode;
-    let prompts_dir = &ctx.prompts_dir;
+    let prompts_dir = ctx.prompts_dir();
 
     let header_source = if mode.uses_header() {
         let header_path = prompts_dir.join("header.md");
@@ -606,7 +607,7 @@ fn build_json_token_usage(ctx: &CommandContext, messages: &[Message]) -> Value {
 
     let (cumulative_tool_calls, cumulative_total_tokens) = if let Some(session_id) = &ctx.session_id
     {
-        let store = tinyharness_lib::session::SessionStore::default_path();
+        let store = tinyharness_lib::session::SessionStore::from_paths(&ctx.paths);
         store
             .load(session_id)
             .map(|(session, _)| {
@@ -630,10 +631,10 @@ fn build_json_token_usage(ctx: &CommandContext, messages: &[Message]) -> Value {
     })
 }
 
-fn build_json_session_metadata(session_id: &str) -> Option<Value> {
+fn build_json_session_metadata(paths: &tinyharness_lib::Paths, session_id: &str) -> Option<Value> {
     use tinyharness_lib::session::SessionStore;
 
-    let store = SessionStore::default_path();
+    let store = SessionStore::from_paths(paths);
     match store.load(session_id) {
         Ok((session, _)) => {
             let meta = session.meta();
@@ -664,8 +665,8 @@ fn build_json_session_metadata(session_id: &str) -> Option<Value> {
 
 // ── Diagnostic helpers ───────────────────────────────────────────────────────
 
-fn dump_provider_diagnostics(file: &mut std::fs::File, _ctx: &CommandContext) {
-    let settings = load_settings();
+fn dump_provider_diagnostics(file: &mut std::fs::File, ctx: &CommandContext) {
+    let settings = load_settings_from(&ctx.paths);
 
     writeln!(file, "Provider kind: {}", settings.last_provider).unwrap();
 
@@ -709,7 +710,7 @@ fn dump_token_usage(file: &mut std::fs::File, ctx: &CommandContext, messages: &[
     }
 
     // Cumulative session stats from session metadata.
-    let store = tinyharness_lib::session::SessionStore::default_path();
+    let store = tinyharness_lib::session::SessionStore::from_paths(&ctx.paths);
     if let Some(session_id) = &ctx.session_id
         && let Ok((session, _)) = store.load(session_id)
     {
@@ -738,10 +739,14 @@ fn dump_token_usage(file: &mut std::fs::File, ctx: &CommandContext, messages: &[
     }
 }
 
-fn dump_session_metadata(file: &mut std::fs::File, session_id: &str) {
+fn dump_session_metadata(
+    file: &mut std::fs::File,
+    paths: &tinyharness_lib::Paths,
+    session_id: &str,
+) {
     use tinyharness_lib::session::SessionStore;
 
-    let store = SessionStore::default_path();
+    let store = SessionStore::from_paths(paths);
     match store.load(session_id) {
         Ok((session, _messages)) => {
             let meta = session.meta();
@@ -783,11 +788,11 @@ fn dump_session_metadata(file: &mut std::fs::File, session_id: &str) {
     }
 }
 
-fn dump_configuration_snapshot(file: &mut std::fs::File) {
+fn dump_configuration_snapshot(file: &mut std::fs::File, paths: &tinyharness_lib::Paths) {
     use tinyharness_lib::config::SettingsStore;
 
-    let settings = load_settings();
-    let store = SettingsStore::default_path();
+    let settings = load_settings_from(paths);
+    let store = SettingsStore::from_paths(paths);
     writeln!(file, "Settings file: {}", store.path().display()).unwrap();
 
     // Dump settings as pretty-printed JSON for diagnostics.
@@ -822,10 +827,10 @@ fn dump_pending_images(file: &mut std::fs::File, ctx: &CommandContext) {
     }
 }
 
-fn dump_command_lists(file: &mut std::fs::File) {
+fn dump_command_lists(file: &mut std::fs::File, paths: &tinyharness_lib::Paths) {
     use tinyharness_lib::config::get_default_safe_commands;
 
-    let settings = load_settings();
+    let settings = load_settings_from(paths);
 
     let safe: Vec<String> = settings
         .safe_command_prefixes
@@ -922,7 +927,7 @@ mod tests {
                 .expect("valid test Ollama URL"),
             )),
             tinyharness_lib::context::WorkspaceContext::collect(),
-            std::path::PathBuf::from("/tmp/tinyharness-prompts-test"),
+            crate::test_helpers::isolated_paths("debug-ctx"),
         )
     }
 

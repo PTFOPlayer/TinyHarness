@@ -22,7 +22,9 @@ pub mod skill;
 use std::io::Write;
 use std::sync::Arc;
 
-use tinyharness_lib::{config::load_settings, context::WorkspaceContext, provider::AnyProvider};
+use tinyharness_lib::{
+    config::load_settings_from, context::WorkspaceContext, provider::AnyProvider,
+};
 
 use tokio::sync::Mutex;
 
@@ -100,7 +102,7 @@ pub fn build_registry() -> CommandRegistry {
         "/settings",
         "Show current settings. Use 'all' to list all safe commands.",
         "/settings [all]",
-        |arg, ctx, _msg| crate::commands::settings::execute(&mut ctx.output, arg),
+        |arg, ctx, _msg| crate::commands::settings::execute(&mut ctx.output, &ctx.paths, arg),
     );
 
     reg.register_sync_with_usage(
@@ -110,11 +112,11 @@ pub fn build_registry() -> CommandRegistry {
         |arg, ctx, _msg| {
             let a = arg.unwrap_or("");
             if a.is_empty() {
-                crate::commands::apikey::execute_show(&mut ctx.output);
+                crate::commands::apikey::execute_show(&mut ctx.output, &ctx.paths);
             } else if a == "clear" {
-                crate::commands::apikey::execute_clear(&mut ctx.output);
+                crate::commands::apikey::execute_clear(&mut ctx.output, &ctx.paths);
             } else {
-                crate::commands::apikey::execute_set(&mut ctx.output, a);
+                crate::commands::apikey::execute_set(&mut ctx.output, &ctx.paths, a);
             }
             Ok(CommandResult::Ok)
         },
@@ -125,7 +127,11 @@ pub fn build_registry() -> CommandRegistry {
         "Show or set the context limit for warning calculations (default: model default)",
         "/contextlimit [tokens]",
         |arg, ctx, _msg| {
-            crate::commands::config_settings::execute_context_limit(&mut ctx.output, arg)
+            crate::commands::config_settings::execute_context_limit(
+                &mut ctx.output,
+                &ctx.paths,
+                arg,
+            )
         },
     );
 
@@ -133,7 +139,9 @@ pub fn build_registry() -> CommandRegistry {
         "/autoaccept",
         "Show or toggle auto-accept mode: 'all' (all tools), 'safe' (read-only), or 'off'",
         "/autoaccept [all|safe|off]",
-        |arg, ctx, _msg| crate::commands::config_settings::execute_autoaccept(&mut ctx.output, arg),
+        |arg, ctx, _msg| {
+            crate::commands::config_settings::execute_autoaccept(&mut ctx.output, &ctx.paths, arg)
+        },
     );
 
     reg.register_sync_with_usage(
@@ -141,7 +149,11 @@ pub fn build_registry() -> CommandRegistry {
         "Show or toggle the auto_compact tool (on/off). When off, the model cannot request conversation compaction.",
         "/autocompact [on|off]",
         |arg, ctx, _msg| {
-            crate::commands::config_settings::execute_autocompact(&mut ctx.output, arg)
+            crate::commands::config_settings::execute_autocompact(
+                &mut ctx.output,
+                &ctx.paths,
+                arg,
+            )
         },
     );
 
@@ -150,7 +162,11 @@ pub fn build_registry() -> CommandRegistry {
         "Show or toggle the question tool (on/off). When off, the model cannot ask the user questions.",
         "/questions [on|off]",
         |arg, ctx, _msg| {
-            crate::commands::config_settings::execute_questions(&mut ctx.output, arg)
+            crate::commands::config_settings::execute_questions(
+                &mut ctx.output,
+                &ctx.paths,
+                arg,
+            )
         },
     );
 
@@ -160,7 +176,9 @@ pub fn build_registry() -> CommandRegistry {
         "/project-settings",
         "Show or initialize per-project settings (.tinyharness/config.json)",
         "/project-settings [init]",
-        |arg, ctx, _msg| crate::commands::project_settings::execute(&mut ctx.output, arg),
+        |arg, ctx, _msg| {
+            crate::commands::project_settings::execute(&mut ctx.output, &ctx.paths, arg)
+        },
     );
 
     reg.register_sync_with_usage(
@@ -176,7 +194,9 @@ pub fn build_registry() -> CommandRegistry {
         "/command",
         "Manage auto-accepted and denied commands",
         "/command [list|add|rm|deny|undeny|reset|resetdeny|help]",
-        |arg, ctx, _msg| crate::commands::command::execute(&mut ctx.output, arg.unwrap_or("")),
+        |arg, ctx, _msg| {
+            crate::commands::command::execute(&mut ctx.output, &ctx.paths, arg.unwrap_or(""))
+        },
     );
 
     // ── Debug ────────────────────────────────────────────────────────────
@@ -195,7 +215,7 @@ pub fn build_registry() -> CommandRegistry {
         "View command execution audit log",
         "/audit [last|session|clear]",
         |arg, ctx, _msg| {
-            crate::commands::audit::execute(&mut ctx.output, arg.unwrap_or(""));
+            crate::commands::audit::execute(&mut ctx.output, &ctx.paths, arg.unwrap_or(""));
             Ok(CommandResult::Ok)
         },
     );
@@ -203,7 +223,11 @@ pub fn build_registry() -> CommandRegistry {
     // ── Sessions ──────────────────────────────────────────────────────────
 
     reg.register_sync("/sessions", "List all saved sessions", |_arg, ctx, _msg| {
-        crate::commands::sessions::execute_list(&mut ctx.output, ctx.session_id.as_deref());
+        crate::commands::sessions::execute_list(
+            &mut ctx.output,
+            &ctx.paths,
+            ctx.session_id.as_deref(),
+        );
         Ok(CommandResult::Ok)
     });
 
@@ -224,6 +248,7 @@ pub fn build_registry() -> CommandRegistry {
                 )?;
                 crate::commands::sessions::execute_delete(
                     &mut ctx.output,
+                    &ctx.paths,
                     id,
                     ctx.session_id.as_deref(),
                 );
@@ -475,10 +500,10 @@ pub fn build_registry() -> CommandRegistry {
 pub fn create_context(
     provider: Arc<Mutex<AnyProvider>>,
     workspace_ctx: WorkspaceContext,
-    prompts_dir: std::path::PathBuf,
+    paths: tinyharness_lib::Paths,
 ) -> CommandContext {
-    let settings = load_settings();
-    let mut ctx = CommandContext::new(provider, workspace_ctx, prompts_dir);
+    let settings = load_settings_from(&paths);
+    let mut ctx = CommandContext::new(provider, workspace_ctx, paths);
     ctx.show_thinking = settings.show_thinking;
     ctx
 }

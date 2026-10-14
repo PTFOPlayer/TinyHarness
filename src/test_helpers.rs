@@ -88,11 +88,28 @@ pub fn make_context() -> (CommandContext, Arc<Mutex<MockProvider>>) {
         additional_project_mds: vec![],
     };
 
-    let prompts_dir = std::env::temp_dir().join("tinyharness-test-prompts");
-    std::fs::create_dir_all(&prompts_dir).ok();
-
-    let ctx = CommandContext::new(provider, workspace_ctx, prompts_dir);
+    let paths = isolated_paths("ctx");
+    let ctx = CommandContext::new(provider, workspace_ctx, paths);
     (ctx, mock)
+}
+
+/// A [`Paths`] rooted in a disposable temp directory, so tests never read or
+/// write the real user profile (settings, sessions, prompts, skills).
+///
+/// The root is unique per call (`tag` + PID + a process-wide counter) to keep
+/// parallel tests from interfering, and is intentionally *not* auto-deleted —
+/// the returned `Paths` outlives the call, and a missing directory simply makes
+/// the loaders fall back to their embedded defaults.
+pub fn isolated_paths(tag: &str) -> tinyharness_lib::Paths {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "tinyharness-test-{tag}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let paths = tinyharness_lib::Paths::with_home(&root);
+    std::fs::create_dir_all(paths.prompts_dir()).ok();
+    paths
 }
 
 use tinyharness_lib::context::WorkspaceContext;

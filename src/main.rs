@@ -11,8 +11,10 @@ use std::{
 };
 
 use tinyharness_lib::{
-    SecretString,
-    config::{ProviderKind, Settings, ensure_prompts_initialized, load_settings, save_settings},
+    Paths, SecretString,
+    config::{
+        ProviderKind, Settings, ensure_prompts_initialized_in, load_settings_from, save_settings_to,
+    },
     context::WorkspaceContext,
     custom_tools::CustomToolManager,
     mode::AgentMode,
@@ -83,11 +85,6 @@ struct Args {
     #[arg(short, long)]
     r#continue: bool,
 
-    /// Run interactive provider setup: pick a provider, enter a URL, save to
-    /// settings. Exits when done.
-    #[arg(long)]
-    config: bool,
-
     /// Start the conversation with this prompt instead of waiting for input.
     /// Use `-p` for short flags. The agent then drops into the normal
     /// interactive loop for follow-up turns.
@@ -141,7 +138,7 @@ async fn create_provider(
             err_out,
             "{BOLD}Error:{RESET} --openai-compat requires an API key. \
              Pass {CYAN}--api-key <KEY>{RESET}, set the {CYAN}OPENAI_API_KEY{RESET} \
-             env var, or configure it via {CYAN}--config{RESET}. \
+             env var, or use {CYAN}/apikey <KEY>{RESET} once you are in. \
              To use the gateway without auth, pass {CYAN}--api-key \"\"{RESET}.",
         );
         std::process::exit(1);
@@ -253,13 +250,17 @@ fn create_initial_session(
     provider_str: &str,
     current_model: Option<String>,
     workspace_ctx: &WorkspaceContext,
-    prompts_dir: &std::path::Path,
+    paths: &Paths,
 ) -> (Session, Vec<Message>) {
-    let sess =
-        SessionStore::default_path().create(working_dir, initial_mode, provider_str, current_model);
+    let sess = SessionStore::from_paths(paths).create(
+        working_dir,
+        initial_mode,
+        provider_str,
+        current_model,
+    );
     let system_prompt = format!(
         "{}\n\n---\n{}",
-        initial_mode.load_system_prompt(prompts_dir),
+        initial_mode.load_system_prompt(&paths.prompts_dir()),
         workspace_ctx.format()
     );
     let msgs = vec![Message {
@@ -312,22 +313,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
-    // -- Handle --config: interactive provider setup, then exit ───────────────
-    if args.config {
-        let mut out = Output::stdout();
-        let result = agent_setup::interactive_setup(&mut out);
-        match result {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                let mut err_out = Output::stderr();
-                let _ = writeln!(err_out, "{BOLD}Error:{RESET} {e}");
-                std::process::exit(1);
-            }
-        }
-    }
+    // ── Filesystem layout ──────────────────────────────────────────────────
+    // Single source of truth for every location the session touches
+    // (settings, prompts, sessions, custom tools, skills). Resolved from
+    // `$XDG_CONFIG_HOME`/`$XDG_DATA_HOME` with `$HOME` fallbacks.
+    let paths = Paths::default();
 
     // Load saved settings (will be used as defaults when no CLI flags are given)
-    let settings = load_settings();
+    let settings = load_settings_from(&paths);
 
     // Determine which provider to use: CLI flags override saved settings
     let provider_kind = resolve_provider_kind(&args, &settings);
@@ -350,7 +343,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     std::process::exit(1);
                 }
             };
-            agent_setup::save_provider_settings(provider_kind, &url);
+            agent_setup::save_provider_settings(&paths, provider_kind, &url);
             url
         } else {
             agent_setup::resolve_url(provider_kind, &args.url, &settings)
@@ -359,10 +352,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.url.clone()
     };
 
-    let api_key = agent_setup::resolve_api_key(args.api_key.as_deref(), &settings);
+    let api_key = agent_setup::resolve_api_key(&paths, args.api_key.as_deref(), &settings);
 
     // Reload settings to include any API key persisted by resolve_api_key
-    let settings = load_settings();
+    let settings = load_settings_from(&paths);
 
     let skip_hc = args.skip_health_check || settings.skip_health_check;
     let skip_hc_source = if args.skip_health_check {
@@ -436,25 +429,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
             settings.last_provider = provider_kind;
         }
         settings.set_url_for(provider_kind, url.clone());
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(&paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
     } else if !explicit_provider && !args.url.is_empty() {
         // User gave --url only (provider resolved from saved settings).
         settings.set_url_for(provider_kind, url.clone());
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(&paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
     }
     // else: no CLI override — leave settings as they are.
 
     // ── Collect workspace context ──────────────────────────────────────────
-    let workspace_ctx = WorkspaceContext::collect();
+    let workspace_ctx = WorkspaceContext::collect_in(&paths);
 
     // ── Ensure prompt files exist (seeded from hardcoded defaults on first launch)
-    let prompts_dir = ensure_prompts_initialized();
+    ensure_prompts_initialized_in(&paths.prompts_dir());
 
     let mut tool_manager = ToolManager::new();
     tool_manager.register_defaults();
 
     // Load custom tools (shell-command tools configured via custom_tools.json)
-    let custom_tool_manager = CustomToolManager::load();
+    let custom_tool_manager = CustomToolManager::load_from(&paths);
     tool_manager.register_custom_tools(custom_tool_manager.custom_tools());
 
     // ── Sandbox mode: confine path-based tools to the workspace root ──────
@@ -465,7 +462,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     #[cfg(target_os = "linux")]
     let sandbox_active = if args.sandbox {
-        match tinyharness_lib::sandbox::Sandbox::new(std::env::current_dir().unwrap_or_default()) {
+        match tinyharness_lib::sandbox::Sandbox::new(paths.project_dir()) {
             Ok(sandbox) => {
                 let mut err_out = Output::stderr();
                 let _ = writeln!(
@@ -504,13 +501,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // ── Session persistence ───────────────────────────────────────────────
-    let working_dir = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .to_string_lossy()
-        .to_string();
+    let working_dir = paths.project_dir().to_string_lossy().to_string();
 
     let (mut session, mut messages) = if args.r#continue {
-        let store = SessionStore::default_path();
+        let store = SessionStore::from_paths(&paths);
         match store.find_latest_for_dir(&working_dir) {
             Some(session_id) => match store.load(&session_id) {
                 Ok((sess, loaded_msgs)) => {
@@ -554,11 +548,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &provider_str,
             current_model.clone(),
             &workspace_ctx,
-            &prompts_dir,
+            &paths,
         )
     });
 
-    let mut ctx = CommandContext::new(Arc::clone(&provider), workspace_ctx, prompts_dir);
+    let mut ctx = CommandContext::new(Arc::clone(&provider), workspace_ctx, paths);
     ctx.current_mode = initial_mode;
     ctx.show_thinking = settings.show_thinking;
     ctx.session_id = Some(session.id().to_string());

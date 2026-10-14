@@ -36,7 +36,7 @@ pub fn apply_switch_session(
     messages: &mut Vec<Message>,
     session: &mut Session,
 ) -> CommandResultInfo {
-    let store = tinyharness_lib::session::SessionStore::default_path();
+    let store = tinyharness_lib::session::SessionStore::from_paths(&ctx.paths);
     match store.find_by_prefix(id_prefix) {
         Ok(full_id) => {
             session.flush();

@@ -102,6 +102,7 @@ pub fn audit_info_for_tool(
 
 /// Log a tool call to the audit log.
 pub fn log_tool_audit(
+    paths: &tinyharness_lib::Paths,
     session_id: &str,
     call: &tinyharness_lib::provider::ToolCall,
     auto_accepted: bool,
@@ -112,6 +113,7 @@ pub fn log_tool_audit(
     if let Some(tool_name) = audit_tool_name {
         let exit_code = if is_error { -1 } else { 0 };
         crate::commands::audit::log_command(
+            paths,
             session_id,
             &tool_name,
             audit_detail.as_deref().unwrap_or(""),

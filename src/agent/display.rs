@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use tinyharness_lib::{
-    config::load_settings,
     provider::{Message, Role},
     token::{ContextWindowSize, check_context_warning, format_token_count},
 };
@@ -14,18 +13,22 @@ use tinyharness_ui::ui::tool_result::{ToolStatus, tool_subject};
 /// When token usage from the provider is available, uses that for precise
 /// context window threshold checks. Otherwise, only warns on excessive
 /// message counts.
+///
+/// `context_limit` is the user's configured limit in tokens (`None` = auto,
+/// i.e. the model default). Callers resolve it from settings via the
+/// injected [`Paths`](tinyharness_lib::Paths) — this function never reads the
+/// ambient environment.
 pub fn print_context_load_warning<W: Write>(
     messages: &[Message],
     known_tokens: Option<u32>,
+    context_limit: Option<u32>,
     stdout: &mut W,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if messages.len() <= 1 {
         return Ok(());
     }
 
-    let settings = load_settings();
-    let context_size = settings
-        .context_limit
+    let context_size = context_limit
         .map(ContextWindowSize::Custom)
         .unwrap_or_else(ContextWindowSize::default_size);
 
@@ -269,17 +272,20 @@ pub fn format_context_status(
 /// Shows a compact dim line with message count,
 /// token usage from the provider, context percentage, and pinned file count.
 /// Also emits a warning if the context window is nearing capacity.
+///
+/// `context_limit` is the user's configured limit in tokens (`None` = auto);
+/// see [`print_context_load_warning`] for why it is passed in rather than
+/// loaded here.
 pub fn display_context_status<W: Write>(
     messages: &[Message],
     pinned_count: usize,
     token_usage: Option<&tinyharness_lib::provider::TokenUsage>,
+    context_limit: Option<u32>,
     stdout: &mut W,
     tool_call_count: u64,
     total_tokens_used: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let settings = load_settings();
-    let context_size = settings
-        .context_limit
+    let context_size = context_limit
         .map(ContextWindowSize::Custom)
         .unwrap_or_else(ContextWindowSize::default_size);
 

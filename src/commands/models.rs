@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use tinyharness_lib::config::{load_settings, save_settings};
+use tinyharness_lib::config::{load_settings_from, save_settings_to};
 use tinyharness_lib::provider::{AnyProvider, Provider, model_variants::is_variant_available};
 use tinyharness_ui::output::Output;
 
@@ -32,10 +32,12 @@ async_command!(
             let mut p = provider.lock().await;
             execute_select(&mut ctx.output, &mut p, &name).await?;
 
-            let mut settings = load_settings();
+            let mut settings = load_settings_from(&ctx.paths);
             if let Some(model) = p.current_model() {
                 settings.set_model_for(settings.last_provider, model);
-                save_settings(&settings);
+                if let Err(e) = save_settings_to(&ctx.paths, &settings) {
+                    tracing::warn!("Failed to save settings: {e}");
+                }
             }
 
             Ok(CommandResult::Ok)

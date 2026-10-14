@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
@@ -130,7 +130,10 @@ pub struct ProjectSettings {
     pub questions_enabled: Option<bool>,
 }
 
-/// Discover and load `.tinyharness/config.json` by walking up from CWD.
+/// Discover and load `.tinyharness/config.json` by walking up from `start_dir`.
+///
+/// Pass [`crate::paths::Paths::project_dir`] to honour an injected project
+/// root instead of the process CWD.
 ///
 /// Returns `None` if no config file is found. Returns `Some(Err(...))` if
 /// a file is found but cannot be parsed.
@@ -210,16 +213,38 @@ pub struct MergedSettings {
     pub questions_enabled_source: SettingSource,
 }
 
+/// Load and merge global + project settings for an injected set of paths.
+///
+/// Global settings come from `paths.settings_file()`; project settings are
+/// discovered by walking up from `paths.project_dir()`.
+pub fn load_merged_settings_from(
+    paths: &crate::paths::Paths,
+) -> (Settings, Option<ProjectSettings>, MergedSettings) {
+    let global = load_settings_from(paths);
+    let project = project_settings_or_none(paths);
+    let merged = merge_settings(&global, project.as_ref());
+    (global, project, merged)
+}
+
 /// Load and merge global + project settings.
 ///
 /// Layering: project overrides global where specified, otherwise falls back
 /// to global. For safe commands, project *extends* the global list rather
 /// than replacing it.
+///
+/// Resolves all locations from the ambient environment — use
+/// [`load_merged_settings_from`] when the caller has a
+/// [`Paths`](crate::paths::Paths).
 pub fn load_merged_settings() -> (Settings, Option<ProjectSettings>, MergedSettings) {
-    let global = load_settings();
+    load_merged_settings_from(&crate::paths::Paths::default())
+}
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let project = match discover_project_settings(&cwd) {
+/// Discover project settings for `paths`, logging and swallowing parse errors.
+///
+/// Shared by the context and custom-tool loaders so the warning text and
+/// fallback behaviour stay identical.
+pub(crate) fn project_settings_or_none(paths: &crate::paths::Paths) -> Option<ProjectSettings> {
+    match discover_project_settings(paths.project_dir()) {
         Some(Ok(ps)) => Some(ps),
         Some(Err(e)) => {
             tracing::warn!(
@@ -228,10 +253,7 @@ pub fn load_merged_settings() -> (Settings, Option<ProjectSettings>, MergedSetti
             None
         }
         None => None,
-    };
-
-    let merged = merge_settings(&global, project.as_ref());
-    (global, project, merged)
+    }
 }
 
 /// Merge global settings with optional project overrides.
@@ -762,10 +784,19 @@ pub struct SettingsStore {
 impl SettingsStore {
     /// Create a store that reads/writes from the default path
     /// (`~/.config/tinyharness/settings.json`).
+    ///
+    /// Prefer [`SettingsStore::from_paths`] when the caller has a
+    /// [`Paths`](crate::paths::Paths) instance — this form resolves from the
+    /// ambient process environment.
     pub fn default_path() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let path = std::path::PathBuf::from(home).join(".config/tinyharness/settings.json");
-        SettingsStore { path }
+        Self::from_paths(&crate::paths::Paths::default())
+    }
+
+    /// Create a store that reads/writes from `paths.settings_file()`.
+    pub fn from_paths(paths: &crate::paths::Paths) -> Self {
+        SettingsStore {
+            path: paths.settings_file(),
+        }
     }
 
     /// Create a store that reads/writes from a custom path.
@@ -969,22 +1000,39 @@ impl SettingsStore {
 
 // ── Free convenience functions ─────────────────────────────────────────────
 
+/// Load settings for a specific set of paths, returning defaults on any error.
+///
+/// This is the injectable core behind [`load_settings`]; use it whenever the
+/// caller has a [`Paths`](crate::paths::Paths) (e.g. an embedded consumer or a
+/// test with a temporary home directory).
+pub fn load_settings_from(paths: &crate::paths::Paths) -> Settings {
+    SettingsStore::from_paths(paths).load_or_default()
+}
+
 /// Load settings from the default path, returning defaults on any error.
 ///
 /// This is a convenience wrapper around
 /// [`SettingsStore::default_path`] followed by [`SettingsStore::load_or_default`].
 pub fn load_settings() -> Settings {
-    SettingsStore::default_path().load_or_default()
+    load_settings_from(&crate::paths::Paths::default())
+}
+
+/// Save settings for a specific set of paths atomically, propagating errors.
+pub fn save_settings_to(
+    paths: &crate::paths::Paths,
+    settings: &Settings,
+) -> Result<(), SettingsError> {
+    SettingsStore::from_paths(paths).save(settings)
 }
 
 /// Save settings to the default path atomically.
 ///
 /// This is a convenience wrapper around
 /// [`SettingsStore::default_path`] followed by [`SettingsStore::save`].
-/// On error, prints a warning to stderr (matching the original behaviour).
+/// On error, logs a warning (matching the original behaviour) — use
+/// [`save_settings_to`] when the failure needs to be handled.
 pub fn save_settings(settings: &Settings) {
-    let store = SettingsStore::default_path();
-    if let Err(e) = store.save(settings) {
+    if let Err(e) = save_settings_to(&crate::paths::Paths::default(), settings) {
         tracing::warn!("Failed to save settings: {e}");
     }
 }
@@ -1028,26 +1076,30 @@ pub fn resolve_project_md_files(settings: Option<&Settings>) -> Vec<String> {
 /// Returns the directory where per-mode prompt `.md` files are stored.
 ///
 /// Default: `~/.config/tinyharness/prompts/`
+///
+/// Prefer [`prompts_dir_for`] when the caller has a
+/// [`Paths`](crate::paths::Paths) instance.
 pub fn prompts_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".config")
-        .join("tinyharness")
-        .join("prompts")
+    prompts_dir_for(&crate::paths::Paths::default())
 }
 
-/// Ensure the prompts directory exists and is seeded with `.md` files
-/// containing the hardcoded defaults for each mode, plus the shared header.
+/// Returns the prompt directory for a specific set of paths.
+pub fn prompts_dir_for(paths: &crate::paths::Paths) -> PathBuf {
+    paths.prompts_dir()
+}
+
+/// Ensure `dir` exists and is seeded with `.md` files containing the hardcoded
+/// defaults for each mode, plus the shared header.
 ///
-/// On first launch, this creates `~/.config/tinyharness/prompts/` and writes
-/// `header.md`, `casual.md`, `planning.md`, `agent.md`, and `research.md`.
-/// Existing files are **never** overwritten — users can safely customize them.
+/// Writes `header.md`, `casual.md`, `planning.md`, `agent.md`, and
+/// `research.md`. Existing files are **never** overwritten — users can safely
+/// customize them.
 ///
-/// Returns the prompts directory path.
-pub fn ensure_prompts_initialized() -> PathBuf {
-    let dir = prompts_dir();
+/// Returns `dir`, so callers can chain it into
+/// [`AgentMode::load_system_prompt`](crate::mode::AgentMode::load_system_prompt).
+pub fn ensure_prompts_initialized_in(dir: &Path) -> PathBuf {
     if !dir.exists() {
-        std::fs::create_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir).ok();
     }
 
     // Write shared header (new in 0.2 — always writes if missing)
@@ -1085,7 +1137,24 @@ pub fn ensure_prompts_initialized() -> PathBuf {
         }
     }
 
-    dir
+    dir.to_path_buf()
+}
+
+/// Ensure the prompts directory exists and is seeded with `.md` files
+/// containing the hardcoded defaults for each mode, plus the shared header.
+///
+/// On first launch, this creates `~/.config/tinyharness/prompts/` and writes
+/// `header.md`, `casual.md`, `planning.md`, `agent.md`, and `research.md`.
+/// Existing files are **never** overwritten — users can safely customize them.
+///
+/// Returns the prompts directory path.
+pub fn ensure_prompts_initialized() -> PathBuf {
+    ensure_prompts_initialized_for(&crate::paths::Paths::default())
+}
+
+/// Same as [`ensure_prompts_initialized`], for an injected set of paths.
+pub fn ensure_prompts_initialized_for(paths: &crate::paths::Paths) -> PathBuf {
+    ensure_prompts_initialized_in(&paths.prompts_dir())
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

@@ -11,7 +11,8 @@ const SKILL_MAX_CHARS: usize = 10_000;
 ///
 /// Skills are reusable instruction sets that can be invoked by the user
 /// (via `/skill <name>`) or automatically by the model (via the `invoke_skill`
-/// signal tool). They live in `~/.tinyharness/skills/<name>/SKILL.md` (personal)
+/// signal tool). They live in `<config_dir>/skills/<name>/SKILL.md` (personal,
+/// e.g. `~/.config/tinyharness/skills/`), the legacy `~/.tinyharness/skills/`,
 /// or `.tinyharness/skills/<name>/SKILL.md` (project-local).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
@@ -42,6 +43,7 @@ pub struct Skill {
 /// Where a skill was discovered from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SkillSource {
+    /// `<config_dir>/skills/<name>/SKILL.md` (personal), or the legacy
     /// `~/.tinyharness/skills/<name>/SKILL.md`
     Personal,
     /// `.tinyharness/skills/<name>/SKILL.md` (in project directory)
@@ -263,36 +265,71 @@ fn truncate_skill_content(content: &str, name: &str) -> String {
     )
 }
 
-/// Personal skills directory: `~/.tinyharness/skills/`
+/// Personal skills directory: `<config_dir>/skills` (e.g.
+/// `~/.config/tinyharness/skills`).
+///
+/// Returns the *primary* location. The legacy `~/.tinyharness/skills` is also
+/// searched by [`discover_skills`] — use [`personal_skills_dirs`] to see the
+/// full ordered list.
 pub fn personal_skills_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".tinyharness/skills")
+    crate::paths::Paths::default()
+        .personal_skills_dirs()
+        .into_iter()
+        .next()
+        .expect("personal_skills_dirs is never empty")
+}
+
+/// All personal skill directories, in decreasing precedence order.
+///
+/// Resolved from the ambient environment — see
+/// [`Paths::personal_skills_dirs`](crate::paths::Paths::personal_skills_dirs)
+/// for the injectable form.
+pub fn personal_skills_dirs() -> Vec<PathBuf> {
+    crate::paths::Paths::default().personal_skills_dirs()
 }
 
 /// Project-local skills directory: `.tinyharness/skills/` (relative to CWD)
 pub fn project_skills_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".tinyharness/skills")
+    crate::paths::Paths::default().project_skills_dir()
 }
 
-/// Discover all skills from both personal and project directories.
+/// Discover all skills from the personal and project directories.
 ///
-/// Scans `<dir>/*/SKILL.md` where `*` is the skill name.
-/// Project skills take precedence over personal skills with the same name.
+/// Resolved from the ambient environment and process CWD — use
+/// [`discover_skills_in`] when the caller has a
+/// [`Paths`](crate::paths::Paths).
 pub fn discover_skills() -> Vec<Skill> {
+    discover_skills_in(&crate::paths::Paths::default())
+}
+
+/// Discover all skills for an injected set of paths.
+///
+/// Scans `<dir>/*/SKILL.md` in each personal directory returned by
+/// [`Paths::personal_skills_dirs`](crate::paths::Paths::personal_skills_dirs),
+/// then the project directory. Precedence,
+/// highest last (a later source overrides an earlier one on name collision):
+///
+/// 1. `<config_dir>/skills` (documented XDG location)
+/// 2. `~/.tinyharness/skills` (legacy location, still supported)
+/// 3. `<project_dir>/.tinyharness/skills`
+pub fn discover_skills_in(paths: &crate::paths::Paths) -> Vec<Skill> {
     let mut skills = Vec::new();
 
-    // Discover personal skills
-    let personal_dir = personal_skills_dir();
-    if let Ok(entries) = discover_skills_from_dir(&personal_dir, SkillSource::Personal) {
-        skills.extend(entries);
+    // Personal skills: earlier directories win, so the XDG location takes
+    // precedence over the legacy dot-directory.
+    for personal_dir in paths.personal_skills_dirs() {
+        if let Ok(entries) = discover_skills_from_dir(&personal_dir, SkillSource::Personal) {
+            for skill in entries {
+                if !skills.iter().any(|s: &Skill| s.name == skill.name) {
+                    skills.push(skill);
+                }
+            }
+        }
     }
 
-    // Discover project skills (these override personal skills with the same name)
-    let project_dir = project_skills_dir();
+    // Project skills override personal skills with the same name.
+    let project_dir = paths.project_skills_dir();
     if let Ok(entries) = discover_skills_from_dir(&project_dir, SkillSource::Project) {
-        // Merge: project skills override personal skills with the same name
         for skill in entries {
             if let Some(pos) = skills.iter().position(|s| s.name == skill.name) {
                 skills[pos] = skill;
@@ -356,9 +393,17 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     /// Discover and build a registry of all available skills.
+    ///
+    /// Resolved from the ambient environment — use [`SkillRegistry::discover_in`]
+    /// when the caller has a [`Paths`](crate::paths::Paths).
     pub fn discover() -> Self {
+        Self::discover_in(&crate::paths::Paths::default())
+    }
+
+    /// Discover and build a registry for an injected set of paths.
+    pub fn discover_in(paths: &crate::paths::Paths) -> Self {
         SkillRegistry {
-            skills: discover_skills(),
+            skills: discover_skills_in(paths),
         }
     }
 

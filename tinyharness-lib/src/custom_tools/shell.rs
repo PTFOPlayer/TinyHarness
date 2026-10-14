@@ -618,8 +618,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_shell_tool_empty_output() {
+        // `exit 0` succeeds and prints nothing on both sh and cmd. A POSIX
+        // `true` would not be recognised by cmd on Windows and would exit 1,
+        // turning the "no output" case into an error case.
         let cmd = ShellCommand {
-            command: "true".to_string(),
+            command: "exit 0".to_string(),
             timeout_secs: 5,
             cwd: None,
         };

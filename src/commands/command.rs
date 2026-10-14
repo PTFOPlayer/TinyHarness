@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use tinyharness_lib::config::{get_default_safe_commands, load_settings, save_settings};
+use tinyharness_lib::Paths;
+use tinyharness_lib::config::{get_default_safe_commands, load_settings_from, save_settings_to};
 use tinyharness_ui::output::Output;
 
 use crate::commands::registry::CommandResult;
@@ -22,11 +23,11 @@ fn matches_safe_prefix(cmd: &str, safe_commands: &[String]) -> bool {
     false
 }
 
-pub fn execute(out: &mut Output, args: &str) -> Result<CommandResult, String> {
+pub fn execute(out: &mut Output, paths: &Paths, args: &str) -> Result<CommandResult, String> {
     let args = args.trim();
 
     if args.is_empty() {
-        execute_list(out);
+        execute_list(out, paths);
         return Ok(CommandResult::Ok);
     }
 
@@ -42,21 +43,21 @@ pub fn execute(out: &mut Output, args: &str) -> Result<CommandResult, String> {
         .to_string();
 
     match sub.as_str() {
-        "add" => execute_add(out, &cmd_arg),
-        "rm" | "remove" => execute_remove(out, &cmd_arg),
-        "deny" => execute_deny(out, &cmd_arg),
-        "undeny" | "allow" => execute_undeny(out, &cmd_arg),
-        "list" | "ls" => execute_list(out),
-        "reset" => execute_reset(out),
-        "resetdeny" => execute_reset_deny(out),
+        "add" => execute_add(out, paths, &cmd_arg),
+        "rm" | "remove" => execute_remove(out, paths, &cmd_arg),
+        "deny" => execute_deny(out, paths, &cmd_arg),
+        "undeny" | "allow" => execute_undeny(out, paths, &cmd_arg),
+        "list" | "ls" => execute_list(out, paths),
+        "reset" => execute_reset(out, paths),
+        "resetdeny" => execute_reset_deny(out, paths),
         "help" => execute_help(out),
-        _ => execute_list(out),
+        _ => execute_list(out, paths),
     }
 
     Ok(CommandResult::Ok)
 }
 
-pub fn execute_add(out: &mut Output, cmd: &str) {
+pub fn execute_add(out: &mut Output, paths: &Paths, cmd: &str) {
     if cmd.is_empty() {
         let _ = writeln!(
             out,
@@ -65,7 +66,7 @@ pub fn execute_add(out: &mut Output, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     let mut commands = settings.get_safe_commands();
 
     if commands.contains(&cmd.to_string()) {
@@ -87,14 +88,16 @@ pub fn execute_add(out: &mut Output, cmd: &str) {
 
     commands.push(cmd.to_string());
     settings.safe_command_prefixes = Some(commands);
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
     let _ = writeln!(
         out,
         "{GREEN}Added '{cmd}' to auto-accepted commands.{RESET}",
     );
 }
 
-pub fn execute_remove(out: &mut Output, cmd: &str) {
+pub fn execute_remove(out: &mut Output, paths: &Paths, cmd: &str) {
     if cmd.is_empty() {
         let _ = writeln!(
             out,
@@ -103,7 +106,7 @@ pub fn execute_remove(out: &mut Output, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     let mut commands = settings.get_safe_commands();
     let initial_len = commands.len();
 
@@ -115,7 +118,9 @@ pub fn execute_remove(out: &mut Output, cmd: &str) {
         } else {
             Some(commands)
         };
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
         let _ = writeln!(
             out,
             "{GREEN}Removed '{cmd}' from auto-accepted commands.{RESET}",
@@ -128,7 +133,7 @@ pub fn execute_remove(out: &mut Output, cmd: &str) {
     }
 }
 
-pub fn execute_deny(out: &mut Output, cmd: &str) {
+pub fn execute_deny(out: &mut Output, paths: &Paths, cmd: &str) {
     if cmd.is_empty() {
         let _ = writeln!(
             out,
@@ -137,7 +142,7 @@ pub fn execute_deny(out: &mut Output, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     let denied = settings.get_denied_commands();
 
     if denied.contains(&cmd.to_string()) {
@@ -166,14 +171,16 @@ pub fn execute_deny(out: &mut Output, cmd: &str) {
     let mut denied = denied; // move out of &settings
     denied.push(cmd.to_string());
     settings.denied_command_prefixes = Some(denied);
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
     let _ = writeln!(
         out,
         "{RED}Denied '{cmd}' — it will always require confirmation.{RESET}",
     );
 }
 
-pub fn execute_undeny(out: &mut Output, cmd: &str) {
+pub fn execute_undeny(out: &mut Output, paths: &Paths, cmd: &str) {
     if cmd.is_empty() {
         let _ = writeln!(
             out,
@@ -182,7 +189,7 @@ pub fn execute_undeny(out: &mut Output, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings();
+    let mut settings = load_settings_from(paths);
     let mut denied = settings.get_denied_commands();
     let initial_len = denied.len();
 
@@ -194,7 +201,9 @@ pub fn execute_undeny(out: &mut Output, cmd: &str) {
         } else {
             Some(denied)
         };
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
         let _ = writeln!(out, "{GREEN}Removed '{cmd}' from the deny list.{RESET}",);
     } else {
         let _ = writeln!(
@@ -245,8 +254,8 @@ pub fn format_denied_command_rows(cmds: &[&str]) -> Vec<String> {
     rows
 }
 
-pub fn execute_list(out: &mut Output) {
-    let settings = load_settings();
+pub fn execute_list(out: &mut Output, paths: &Paths) {
+    let settings = load_settings_from(paths);
     let safe_commands = settings.get_safe_commands();
     let denied = settings.get_denied_commands();
     let using_defaults = settings.safe_command_prefixes.is_none();
@@ -390,27 +399,31 @@ pub fn execute_help(out: &mut Output) {
     let _ = writeln!(out);
 }
 
-pub fn execute_reset(out: &mut Output) {
-    let mut settings = load_settings();
+pub fn execute_reset(out: &mut Output, paths: &Paths) {
+    let mut settings = load_settings_from(paths);
     let defaults = get_default_safe_commands();
     let count = defaults.len();
     settings.safe_command_prefixes = None;
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
     let _ = writeln!(
         out,
         "{GREEN}Reset auto-accepted commands to defaults ({count} commands).{RESET}",
     );
 }
 
-pub fn execute_reset_deny(out: &mut Output) {
-    let mut settings = load_settings();
+pub fn execute_reset_deny(out: &mut Output, paths: &Paths) {
+    let mut settings = load_settings_from(paths);
     if settings.get_denied_commands().is_empty() {
         let _ = writeln!(out, "{ORANGE}Deny list is already empty.{RESET}");
         return;
     }
     let count = settings.get_denied_commands().len();
     settings.denied_command_prefixes = None;
-    save_settings(&settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
     let _ = writeln!(
         out,
         "{GREEN}Cleared deny list (removed {count} command{}).{RESET}",
@@ -421,7 +434,7 @@ pub fn execute_reset_deny(out: &mut Output) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{captured_output, captured_string, strip_ansi};
+    use crate::test_helpers::{captured_output, captured_string, isolated_paths, strip_ansi};
 
     #[test]
     fn format_command_rows_basic() {
@@ -481,7 +494,8 @@ mod tests {
     #[test]
     fn execute_list_shows_commands() {
         let (mut out, buf) = captured_output();
-        execute_list(&mut out);
+        let paths = isolated_paths("command");
+        execute_list(&mut out, &paths);
         let plain = strip_ansi(&captured_string(&buf));
         // Should contain the box header
         assert!(plain.contains("Auto-Accepted Commands"));

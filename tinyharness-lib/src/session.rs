@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{self, BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -114,10 +114,19 @@ pub struct SessionStore {
 impl SessionStore {
     /// Create a store that uses the default session directory
     /// (`~/.local/share/tinyharness/sessions/`).
+    ///
+    /// Prefer [`SessionStore::from_paths`] when the caller has a
+    /// [`Paths`](crate::paths::Paths) instance — this form resolves from the
+    /// ambient process environment.
     pub fn default_path() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let dir = PathBuf::from(home).join(".local/share/tinyharness/sessions");
-        SessionStore { dir }
+        Self::from_paths(&crate::paths::Paths::default())
+    }
+
+    /// Create a store that uses `paths.sessions_dir()`.
+    pub fn from_paths(paths: &crate::paths::Paths) -> Self {
+        SessionStore {
+            dir: paths.sessions_dir(),
+        }
     }
 
     /// Create a store that uses a custom directory.
@@ -489,6 +498,11 @@ impl Session {
 
     pub fn id(&self) -> &str {
         &self.meta.id
+    }
+
+    /// Full path to the session's JSONL file.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn meta(&self) -> &SessionMeta {

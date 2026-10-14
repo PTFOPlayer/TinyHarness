@@ -56,7 +56,9 @@
 
 ## Files and Directories
 
-TinyHarness stores data in standard XDG paths:
+TinyHarness stores data in standard XDG paths, resolved from
+`$XDG_CONFIG_HOME` / `$XDG_DATA_HOME` with `$HOME` fallbacks (see the
+[Configuration Guide](configuration.md#xdg-paths-reference)):
 
 ```
 ~/.config/tinyharness/

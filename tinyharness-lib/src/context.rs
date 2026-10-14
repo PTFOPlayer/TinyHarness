@@ -51,8 +51,20 @@ pub struct WorkspaceContext {
 
 impl WorkspaceContext {
     /// Collect workspace context from the current working directory.
+    ///
+    /// Resolved from the ambient environment — use [`WorkspaceContext::collect_in`]
+    /// when the caller has a [`Paths`](crate::paths::Paths).
     pub fn collect() -> Self {
-        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::collect_in(&crate::paths::Paths::default())
+    }
+
+    /// Collect workspace context for an injected set of paths.
+    ///
+    /// The workspace root is `paths.project_dir()`; global settings are read
+    /// from `paths.settings_file()` and project settings are discovered by
+    /// walking up from the root.
+    pub fn collect_in(paths: &crate::paths::Paths) -> Self {
+        let root = paths.project_dir().to_path_buf();
         let project_type = detect_project_type(&root);
         let project_name = detect_project_name(&root, &project_type);
         let structure = list_top_level(&root);
@@ -60,17 +72,14 @@ impl WorkspaceContext {
         let (build_command, test_command) = detect_commands(&project_type, &root);
 
         // Resolve the project MD discovery list (env var > settings > defaults)
-        let settings = crate::config::load_settings();
+        let settings = crate::config::load_settings_from(paths);
         let md_files = crate::config::resolve_project_md_files(Some(&settings));
         let project_md = discover_project_md(&root, &md_files);
 
         // Load additional MD files from per-project .tinyharness/config.json
-        let additional_project_mds =
-            if let Some(Ok(proj)) = crate::config::discover_project_settings(&root) {
-                load_additional_md_files(&root, proj.project_md_files.as_deref())
-            } else {
-                Vec::new()
-            };
+        let additional_project_mds = crate::config::project_settings_or_none(paths)
+            .map(|proj| load_additional_md_files(&root, proj.project_md_files.as_deref()))
+            .unwrap_or_default();
 
         WorkspaceContext {
             root,
