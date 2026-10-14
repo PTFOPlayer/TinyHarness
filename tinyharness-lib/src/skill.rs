@@ -282,7 +282,8 @@ pub fn personal_skills_dir() -> PathBuf {
 /// All personal skill directories, in decreasing precedence order.
 ///
 /// Resolved from the ambient environment — see
-/// [`Paths::personal_skills_dirs`] for the injectable form.
+/// [`Paths::personal_skills_dirs`](crate::paths::Paths::personal_skills_dirs)
+/// for the injectable form.
 pub fn personal_skills_dirs() -> Vec<PathBuf> {
     crate::paths::Paths::default().personal_skills_dirs()
 }
@@ -304,7 +305,8 @@ pub fn discover_skills() -> Vec<Skill> {
 /// Discover all skills for an injected set of paths.
 ///
 /// Scans `<dir>/*/SKILL.md` in each personal directory returned by
-/// [`Paths::personal_skills_dirs`], then the project directory. Precedence,
+/// [`Paths::personal_skills_dirs`](crate::paths::Paths::personal_skills_dirs),
+/// then the project directory. Precedence,
 /// highest last (a later source overrides an earlier one on name collision):
 ///
 /// 1. `<config_dir>/skills` (documented XDG location)
