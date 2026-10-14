@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use tinyharness_lib::config::{load_settings, save_settings};
-use tinyharness_lib::provider::{AnyProvider, Provider};
+use tinyharness_lib::provider::{AnyProvider, Provider, model_variants::is_variant_available};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
@@ -63,7 +63,7 @@ pub async fn execute_select(
     name: &str,
 ) -> Result<(), String> {
     let models = provider.list_models().await;
-    if models.iter().any(|m| m == name) {
+    if is_variant_available(name, &models) {
         provider.select_model(name.to_string());
         let _ = writeln!(out, "{BOLD}Switched to model: {BLUE}{name}{RESET}");
         Ok(())
@@ -150,6 +150,86 @@ mod tests {
         assert_eq!(
             ctx.provider.lock().await.current_model(),
             Some("nonexistent-model".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn select_variant_suffix_matches_base_model() {
+        let (mut ctx, mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        // The mock lists "mock-model"; a `:free` variant of it is the same model.
+        mock.lock()
+            .unwrap()
+            .set_models(vec!["mock-model".to_string()]);
+
+        let cmd = ModelCommand;
+        let mut messages = vec![];
+        cmd.execute(Some("mock-model:free"), &mut ctx, &mut messages)
+            .await
+            .unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(
+            plain.contains("Switched to model:"),
+            "suffixed variant of a listed base model should count as known: {plain}"
+        );
+        assert_eq!(
+            ctx.provider.lock().await.current_model(),
+            Some("mock-model:free".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn select_variant_suffix_unknown_base_still_sets() {
+        let (mut ctx, mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        mock.lock()
+            .unwrap()
+            .set_models(vec!["mock-model".to_string()]);
+
+        let cmd = ModelCommand;
+        let mut messages = vec![];
+        cmd.execute(Some("unknown-model:free"), &mut ctx, &mut messages)
+            .await
+            .unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(
+            plain.contains("Set model to:"),
+            "variant of an unknown base should still be selectable: {plain}"
+        );
+        assert_eq!(
+            ctx.provider.lock().await.current_model(),
+            Some("unknown-model:free".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn select_ollama_style_tag_stays_unknown() {
+        let (mut ctx, mock) = make_context();
+        let (output, buf) = captured_output();
+        ctx.output = output;
+
+        // Ollama-style tags ("qwen2.5:7b") are not OpenRouter variants — the
+        // listed base "mock-model" must not swallow "mock-model:7b".
+        mock.lock()
+            .unwrap()
+            .set_models(vec!["mock-model".to_string()]);
+
+        let cmd = ModelCommand;
+        let mut messages = vec![];
+        cmd.execute(Some("mock-model:7b"), &mut ctx, &mut messages)
+            .await
+            .unwrap();
+
+        let plain = strip_ansi(&captured_string(&buf));
+        assert!(
+            plain.contains("Set model to:"),
+            "non-variant colon tag should not match the base id: {plain}"
         );
     }
 }

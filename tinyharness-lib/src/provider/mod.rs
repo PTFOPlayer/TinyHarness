@@ -1,5 +1,6 @@
 #[cfg(feature = "test-util")]
 pub mod mock;
+pub mod model_variants;
 pub mod ollama;
 pub mod openai_compat;
 pub mod openai_compat_provider;
