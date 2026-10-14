@@ -1,34 +1,39 @@
 //! `/project-settings` — view and init per-project settings.
 //!
 //! Per-project settings live in `.tinyharness/config.json` (discovered by walking
-//! up from CWD) and override/merge with the global `~/.config/tinyharness/settings.json`.
+//! up from the project root) and override/merge with the global
+//! `<config_dir>/settings.json`.
 
 use std::io::Write;
 
+use tinyharness_lib::Paths;
 use tinyharness_lib::config::{
-    AutoAcceptMode, SettingSource, discover_project_settings, load_merged_settings, load_settings,
+    AutoAcceptMode, SettingSource, discover_project_settings, load_merged_settings_from,
 };
 use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
 
 use crate::commands::registry::CommandResult;
 
-pub fn execute(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+) -> Result<CommandResult, String> {
     match arg {
-        Some("init") => execute_init(out),
-        _ => execute_show(out),
+        Some("init") => execute_init(out, paths),
+        _ => execute_show(out, paths),
     }
     Ok(CommandResult::Ok)
 }
 
 /// Show merged effective settings with source annotations.
-fn execute_show(out: &mut Output) {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let project_config = discover_project_settings(&cwd);
+fn execute_show(out: &mut Output, paths: &Paths) {
+    let project_config = discover_project_settings(paths.project_dir());
 
     let has_project = matches!(&project_config, Some(Ok(_)));
 
-    let (_, _, merged) = load_merged_settings();
+    let (_, _, merged) = load_merged_settings_from(paths);
 
     let _ = writeln!(out);
     if has_project {
@@ -128,12 +133,12 @@ fn execute_show(out: &mut Output) {
     // ── Legend ──
     let _ = writeln!(
         out,
-        "\n{GRAY}Legend: {GREEN}(project){GRAY} = from .tinyharness/config.json, {CYAN}(global){GRAY} = from ~/.config/tinyharness/settings.json, {ORANGE}(default){GRAY} = hardcoded default{RESET}",
+        "\n{GRAY}Legend: {GREEN}(project){GRAY} = from .tinyharness/config.json, {CYAN}(global){GRAY} = from <config_dir>/settings.json, {ORANGE}(default){GRAY} = hardcoded default{RESET}",
     );
 
     // ── Show project config path if found ──
     if let Some(Ok(_)) = &project_config {
-        let mut dir = cwd;
+        let mut dir = paths.project_dir().to_path_buf();
         loop {
             let candidate = dir.join(".tinyharness").join("config.json");
             if candidate.is_file() {
@@ -159,9 +164,8 @@ fn execute_show(out: &mut Output) {
 }
 
 /// Generate a `.tinyharness/config.json` template from current settings.
-fn execute_init(out: &mut Output) {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let dir = cwd.join(".tinyharness");
+fn execute_init(out: &mut Output, paths: &Paths) {
+    let dir = paths.project_config_root();
 
     // Check if config already exists
     let config_path = dir.join("config.json");
@@ -185,9 +189,6 @@ fn execute_init(out: &mut Output) {
         let _ = writeln!(out, "{RED}Failed to create directory: {e}{RESET}");
         return;
     }
-
-    // Generate template from current settings
-    let _settings = load_settings();
 
     // Write the template (with empty project_md_files as an example)
     let json = r#"{

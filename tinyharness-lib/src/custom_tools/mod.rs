@@ -51,12 +51,6 @@ impl From<serde_json::Error> for CustomToolError {
     }
 }
 
-/// Default path for the global custom-tools config file.
-fn global_custom_tools_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config/tinyharness/custom_tools.json")
-}
-
 /// Discover `.tinyharness/custom_tools.json` by walking up from the given directory.
 /// Returns `None` if no file is found.
 fn discover_project_custom_tools(start_dir: &std::path::Path) -> Option<PathBuf> {
@@ -95,16 +89,22 @@ impl CustomToolManager {
     /// Project config is loaded from `.tinyharness/custom_tools.json` (walking up
     /// from CWD). Project tools are **appended** to the global list (both run;
     /// global first, then project).
+    ///
+    /// Resolved from the ambient environment — use [`CustomToolManager::load_from`]
+    /// when the caller has a [`Paths`](crate::paths::Paths).
     pub fn load() -> Self {
-        Self::load_from_cwd(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        Self::load_from(&crate::paths::Paths::default())
     }
 
-    /// Load from a specific directory (for testing).
-    pub fn load_from_cwd(cwd: &std::path::Path) -> Self {
+    /// Load and merge configs for an injected set of paths.
+    ///
+    /// Global comes from `paths.custom_tools_file()`, project from the
+    /// `.tinyharness/custom_tools.json` walk-up starting at `paths.project_dir()`.
+    pub fn load_from(paths: &crate::paths::Paths) -> Self {
         let mut combined = CustomToolConfig::default();
 
         // Global config
-        let global_path = global_custom_tools_path();
+        let global_path = paths.custom_tools_file();
         match load_config_file(&global_path) {
             Ok(Some(cfg)) => combined = cfg,
             Ok(None) => {}
@@ -117,7 +117,7 @@ impl CustomToolManager {
         }
 
         // Project config (extends global)
-        if let Some(project_path) = discover_project_custom_tools(cwd) {
+        if let Some(project_path) = discover_project_custom_tools(paths.project_dir()) {
             match load_config_file(&project_path) {
                 Ok(Some(cfg)) => {
                     combined.custom_tools.extend(cfg.custom_tools);

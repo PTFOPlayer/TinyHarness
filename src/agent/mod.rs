@@ -89,9 +89,9 @@ pub async fn run_agent_loop(
             .collect(),
         registry.subcommands(),
     );
-    let history_dir = std::env::var("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".local/share/tinyharness"))
-        .unwrap_or_else(|_| std::path::PathBuf::from(".tinyharness_history"));
+    // History lives in the data dir (`~/.local/share/tinyharness`), resolved
+    // through the session's Paths rather than reading $HOME directly.
+    let history_dir = ctx.paths.history_dir();
     std::fs::create_dir_all(&history_dir).ok();
     let history_path = history_dir.join("history.txt");
     let mut rl = Editor::new()?;

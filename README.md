@@ -138,12 +138,6 @@ tinyharness --prompt "Explain the architecture"
 ```
 Sends an initial prompt and then drops into the interactive loop for follow-up turns.
 
-**Interactive setup**:
-```bash
-tinyharness --config
-```
-Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when done.
-
 ### CLI Arguments
 
 | Flag | Description |
@@ -157,7 +151,6 @@ Runs a guided setup: pick a provider, enter a URL, save to settings. Exits when 
 | `--api-key <key>` | Bearer token for `--openai-compat` (use `-` to clear saved key) |
 | `--skip-health-check` | Skip provider health check at startup (a failure is otherwise just a warning) |
 | `-c`, `--continue` | Continue the most recent session in the current directory |
-| `--config` | Run interactive provider setup, then exit |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
 | `--sandbox` | Restrict path-based tools to the current directory; `run` always requires confirmation (Linux only) |
 
@@ -429,7 +422,7 @@ src/
 │   ├── mod.rs            Main interaction loop, streaming response display, spinner, thinking chain
 │   ├── tools.rs          Tool call dispatch, confirmation, generic execution, signal handlers
 │   ├── safety.rs         Shell command safety checker (prefix + deny list + redirection stripping)
-│   ├── setup.rs          Interactive provider setup (--config), URL prompting
+│   ├── setup.rs          Provider/URL resolution, URL prompting
 │   ├── display.rs        Context status formatting, args summaries, listing result summaries
 │   ├── input.rs          Multi-line input reading with continuation prompt
 │   ├── confirm.rs        Confirmation prompt rendering for tool calls

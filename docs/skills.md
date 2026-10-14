@@ -4,7 +4,7 @@ Skills are pluggable instruction modules that give the AI specialized knowledge 
 
 ## How Skills Work
 
-1. **Discovery** — On startup, TinyHarness scans `~/.config/tinyharness/skills/` and `.tinyharness/skills/` for directories containing `SKILL.md` files.
+1. **Discovery** — On startup, TinyHarness scans `~/.config/tinyharness/skills/`, the legacy `~/.tinyharness/skills/`, and `.tinyharness/skills/` for directories containing `SKILL.md` files.
 2. **Injection** — When activated (by user or AI), the skill's content is injected into the system prompt, giving the AI specialized context.
 3. **Deactivation** — Skills stay active until explicitly unloaded with `/unload <name>`.
 
@@ -100,6 +100,14 @@ vim .tinyharness/skills/backend-conventions/SKILL.md
 ```
 
 **Precedence**: Project skills override personal skills with the same name. If both `~/.config/tinyharness/skills/review/SKILL.md` and `.tinyharness/skills/review/SKILL.md` exist, the project version wins.
+
+The complete precedence order, highest first:
+
+1. `<project>/.tinyharness/skills/`
+2. `$XDG_CONFIG_HOME/tinyharness/skills/` (or `~/.config/tinyharness/skills/`)
+3. `~/.tinyharness/skills/` — legacy location, still scanned so pre-existing installs keep working. Prefer the XDG path for new skills.
+
+See [Configuration → XDG Paths Reference](configuration.md#xdg-paths-reference) for how the roots are resolved.
 
 ## Invoking Skills
 

@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use tinyharness_lib::Paths;
 use tinyharness_lib::session::{SessionMeta, SessionStore, format_age};
 use tinyharness_ui::output::Output;
 
@@ -58,8 +59,8 @@ fn format_session_list(sessions: &[SessionMeta], current_id: Option<&str>) -> St
 
 /// Delete empty sessions (0 messages) automatically.
 /// Returns the number of sessions deleted.
-pub fn cleanup_empty_sessions() -> usize {
-    let store = SessionStore::default_path();
+pub fn cleanup_empty_sessions(paths: &Paths) -> usize {
+    let store = SessionStore::from_paths(paths);
     let sessions = store.list_all();
     let mut deleted = 0;
 
@@ -81,11 +82,11 @@ pub fn cleanup_empty_sessions() -> usize {
     deleted
 }
 
-pub fn execute_list(out: &mut Output, current_session_id: Option<&str>) {
-    let store = SessionStore::default_path();
+pub fn execute_list(out: &mut Output, paths: &Paths, current_session_id: Option<&str>) {
+    let store = SessionStore::from_paths(paths);
 
     // Auto-delete empty sessions before listing
-    let deleted = cleanup_empty_sessions();
+    let deleted = cleanup_empty_sessions(paths);
     if deleted > 0 {
         let _ = writeln!(out, "{GRAY}ℹ Cleaned up {deleted} empty session(s){RESET}");
     }
@@ -96,8 +97,13 @@ pub fn execute_list(out: &mut Output, current_session_id: Option<&str>) {
 }
 
 /// Delete a session by ID or name.
-pub fn execute_delete(out: &mut Output, session_id: &str, current_session_id: Option<&str>) {
-    let store = SessionStore::default_path();
+pub fn execute_delete(
+    out: &mut Output,
+    paths: &Paths,
+    session_id: &str,
+    current_session_id: Option<&str>,
+) {
+    let store = SessionStore::from_paths(paths);
 
     // Find the session
     let meta = store

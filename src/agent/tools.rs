@@ -189,6 +189,7 @@ pub async fn handle_tool_calls<W: Write>(
 
         // Log to audit if this was an auditable tool (run/write/edit)
         log_tool_audit(
+            &ctx.paths,
             session.id(),
             &call,
             auto_accepted,

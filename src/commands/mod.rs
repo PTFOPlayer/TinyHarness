@@ -22,7 +22,9 @@ pub mod skill;
 use std::io::Write;
 use std::sync::Arc;
 
-use tinyharness_lib::{config::load_settings, context::WorkspaceContext, provider::AnyProvider};
+use tinyharness_lib::{
+    config::load_settings_from, context::WorkspaceContext, provider::AnyProvider,
+};
 
 use tokio::sync::Mutex;
 
@@ -160,7 +162,9 @@ pub fn build_registry() -> CommandRegistry {
         "/project-settings",
         "Show or initialize per-project settings (.tinyharness/config.json)",
         "/project-settings [init]",
-        |arg, ctx, _msg| crate::commands::project_settings::execute(&mut ctx.output, arg),
+        |arg, ctx, _msg| {
+            crate::commands::project_settings::execute(&mut ctx.output, &ctx.paths, arg)
+        },
     );
 
     reg.register_sync_with_usage(
@@ -195,7 +199,7 @@ pub fn build_registry() -> CommandRegistry {
         "View command execution audit log",
         "/audit [last|session|clear]",
         |arg, ctx, _msg| {
-            crate::commands::audit::execute(&mut ctx.output, arg.unwrap_or(""));
+            crate::commands::audit::execute(&mut ctx.output, &ctx.paths, arg.unwrap_or(""));
             Ok(CommandResult::Ok)
         },
     );
@@ -203,7 +207,11 @@ pub fn build_registry() -> CommandRegistry {
     // ── Sessions ──────────────────────────────────────────────────────────
 
     reg.register_sync("/sessions", "List all saved sessions", |_arg, ctx, _msg| {
-        crate::commands::sessions::execute_list(&mut ctx.output, ctx.session_id.as_deref());
+        crate::commands::sessions::execute_list(
+            &mut ctx.output,
+            &ctx.paths,
+            ctx.session_id.as_deref(),
+        );
         Ok(CommandResult::Ok)
     });
 
@@ -224,6 +232,7 @@ pub fn build_registry() -> CommandRegistry {
                 )?;
                 crate::commands::sessions::execute_delete(
                     &mut ctx.output,
+                    &ctx.paths,
                     id,
                     ctx.session_id.as_deref(),
                 );
@@ -475,10 +484,10 @@ pub fn build_registry() -> CommandRegistry {
 pub fn create_context(
     provider: Arc<Mutex<AnyProvider>>,
     workspace_ctx: WorkspaceContext,
-    prompts_dir: std::path::PathBuf,
+    paths: tinyharness_lib::Paths,
 ) -> CommandContext {
-    let settings = load_settings();
-    let mut ctx = CommandContext::new(provider, workspace_ctx, prompts_dir);
+    let settings = load_settings_from(&paths);
+    let mut ctx = CommandContext::new(provider, workspace_ctx, paths);
     ctx.show_thinking = settings.show_thinking;
     ctx
 }

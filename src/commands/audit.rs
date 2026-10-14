@@ -6,6 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use tinyharness_lib::Paths;
 use tinyharness_ui::output::Output;
 
 use tinyharness_ui::style::*;
@@ -38,15 +39,15 @@ fn default_tool_name() -> String {
 
 // ── Audit log path ──────────────────────────────────────────────────────────
 
-/// Get the default audit log path: ~/.local/share/tinyharness/audit.jsonl
-pub fn audit_log_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".local/share/tinyharness/audit.jsonl")
+/// Resolve the audit log path for a set of paths: `<data_dir>/audit.jsonl`
+/// (e.g. `~/.local/share/tinyharness/audit.jsonl`).
+pub fn audit_log_path(paths: &Paths) -> PathBuf {
+    paths.audit_log_file()
 }
 
 /// Ensure the audit log directory exists.
-pub fn ensure_audit_dir() -> std::io::Result<()> {
-    let path = audit_log_path();
+pub fn ensure_audit_dir(paths: &Paths) -> std::io::Result<()> {
+    let path = audit_log_path(paths);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -57,6 +58,7 @@ pub fn ensure_audit_dir() -> std::io::Result<()> {
 
 /// Append a command execution to the audit log.
 pub fn log_command(
+    paths: &Paths,
     session_id: &str,
     tool_name: &str,
     command: &str,
@@ -64,7 +66,7 @@ pub fn log_command(
     auto_accepted: bool,
     duration_ms: u64,
 ) {
-    let _ = ensure_audit_dir();
+    let _ = ensure_audit_dir(paths);
 
     let entry = AuditEntry {
         timestamp: now_timestamp(),
@@ -84,7 +86,7 @@ pub fn log_command(
     if let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(audit_log_path())
+        .open(audit_log_path(paths))
     {
         let _ = writeln!(file, "{line}");
     }
@@ -93,8 +95,8 @@ pub fn log_command(
 // ── Read audit log ──────────────────────────────────────────────────────────
 
 /// Read the last N entries from the audit log.
-pub fn read_last(n: usize) -> Vec<AuditEntry> {
-    let path = audit_log_path();
+pub fn read_last(paths: &Paths, n: usize) -> Vec<AuditEntry> {
+    let path = audit_log_path(paths);
     if !path.exists() {
         return Vec::new();
     }
@@ -118,16 +120,16 @@ pub fn read_last(n: usize) -> Vec<AuditEntry> {
 }
 
 /// Read entries for a specific session.
-pub fn read_session(session_id: &str) -> Vec<AuditEntry> {
-    let all = read_last(1000); // Load recent entries
+pub fn read_session(paths: &Paths, session_id: &str) -> Vec<AuditEntry> {
+    let all = read_last(paths, 1000); // Load recent entries
     all.into_iter()
         .filter(|e| e.session_id.starts_with(session_id))
         .collect()
 }
 
 /// Clear the audit log.
-pub fn clear() -> std::io::Result<()> {
-    let path = audit_log_path();
+pub fn clear(paths: &Paths) -> std::io::Result<()> {
+    let path = audit_log_path(paths);
     if path.exists() {
         fs::remove_file(&path)?;
     }
@@ -148,8 +150,8 @@ fn format_timestamp(ts: u64) -> String {
 }
 
 /// Display the last N audit entries in a table.
-pub fn show_last(out: &mut Output, n: usize) {
-    let entries = read_last(n);
+pub fn show_last(out: &mut Output, paths: &Paths, n: usize) {
+    let entries = read_last(paths, n);
 
     if entries.is_empty() {
         let _ = writeln!(out, "{ORANGE}No audit entries found.{RESET}");
@@ -216,8 +218,8 @@ pub fn show_last(out: &mut Output, n: usize) {
 }
 
 /// Display audit entries for a specific session.
-pub fn show_session(out: &mut Output, session_id: &str) {
-    let entries = read_session(session_id);
+pub fn show_session(out: &mut Output, paths: &Paths, session_id: &str) {
+    let entries = read_session(paths, session_id);
 
     if entries.is_empty() {
         let _ = writeln!(
@@ -287,12 +289,12 @@ pub fn show_session(out: &mut Output, session_id: &str) {
 }
 
 /// Execute the /audit command.
-pub fn execute(out: &mut Output, args: &str) {
+pub fn execute(out: &mut Output, paths: &Paths, args: &str) {
     let args = args.trim();
 
     if args.is_empty() {
         // Default: show last 20
-        show_last(out, 20);
+        show_last(out, paths, 20);
         return;
     }
 
@@ -303,7 +305,7 @@ pub fn execute(out: &mut Output, args: &str) {
                 .get(1)
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(20);
-            show_last(out, n);
+            show_last(out, paths, n);
         }
         "session" => {
             let session_id = parts.get(1).unwrap_or(&"");
@@ -311,7 +313,7 @@ pub fn execute(out: &mut Output, args: &str) {
                 let _ = writeln!(out, "{ORANGE}Usage: /audit session <id>{RESET}");
                 return;
             }
-            show_session(out, session_id);
+            show_session(out, paths, session_id);
         }
         "clear" => {
             let _ = writeln!(
@@ -323,7 +325,7 @@ pub fn execute(out: &mut Output, args: &str) {
 
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() && input.trim().to_lowercase() == "yes" {
-                match clear() {
+                match clear(paths) {
                     Ok(()) => {
                         let _ = writeln!(out, "{GREEN}✓ Audit log cleared.{RESET}");
                     }

@@ -4,7 +4,8 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::Mutex;
 
 use tinyharness_lib::{
-    config::{load_settings, save_settings},
+    Paths,
+    config::{load_settings_from, save_settings_to},
     context::WorkspaceContext,
     image::ImageAttachment,
     mode::AgentMode,
@@ -52,7 +53,10 @@ pub struct CommandContext {
     /// Cleared after each message is sent.
     pub pending_images: Vec<ImageAttachment>,
     /// Directory containing per-mode prompt `.md` files.
-    pub prompts_dir: PathBuf,
+    ///
+    /// All TinyHarness filesystem locations resolve through this — see
+    /// [`Paths`]. Use [`CommandContext::prompts_dir`] for the prompt directory.
+    pub paths: Paths,
     /// Set by the compaction command after a successful summarization
     /// to let the agent loop update the token-usage display and session metadata.
     pub compaction_token_usage: Option<TokenUsage>,
@@ -68,7 +72,7 @@ impl CommandContext {
     pub fn new(
         provider: Arc<Mutex<AnyProvider>>,
         workspace_ctx: WorkspaceContext,
-        prompts_dir: PathBuf,
+        paths: Paths,
     ) -> Self {
         CommandContext {
             provider,
@@ -77,15 +81,20 @@ impl CommandContext {
             workspace_ctx,
             file_context: FileContext::new(),
             session_id: None,
-            skill_registry: SkillRegistry::discover(),
+            skill_registry: SkillRegistry::discover_in(&paths),
             active_skills: Vec::new(),
             pending_images: Vec::new(),
-            prompts_dir,
+            paths,
             compaction_token_usage: None,
             show_thinking: false,
             output: tinyharness_ui::output::Output::stdout(),
             sandbox_active: false,
         }
+    }
+
+    /// Directory containing per-mode prompt `.md` files.
+    pub fn prompts_dir(&self) -> PathBuf {
+        self.paths.prompts_dir()
     }
 
     /// Update the system prompt message in the conversation to reflect the current
@@ -113,9 +122,11 @@ impl CommandContext {
         self.refresh_system_prompt(messages);
 
         // Auto-save mode
-        let mut settings = load_settings();
+        let mut settings = load_settings_from(&self.paths);
         settings.preferred_mode = self.current_mode;
-        save_settings(&settings);
+        if let Err(e) = save_settings_to(&self.paths, &settings) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
 
         Ok(())
     }
@@ -125,7 +136,7 @@ impl CommandContext {
     pub fn build_system_prompt(&self) -> String {
         let mut prompt = format!(
             "{}\n\n---\n{}",
-            self.current_mode.load_system_prompt(&self.prompts_dir),
+            self.current_mode.load_system_prompt(&self.prompts_dir()),
             self.workspace_ctx.format()
         );
 
