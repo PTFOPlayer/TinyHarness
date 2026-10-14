@@ -1,22 +1,27 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use tinyharness_lib::config::{AutoAcceptMode, load_settings};
+use tinyharness_lib::Paths;
+use tinyharness_lib::config::{AutoAcceptMode, load_settings_from};
 use tinyharness_ui::output::Output;
 
 use crate::commands::registry::CommandResult;
 use tinyharness_ui::style::*;
 
-pub fn execute(out: &mut Output, arg: Option<&str>) -> Result<CommandResult, String> {
+pub fn execute(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+) -> Result<CommandResult, String> {
     match arg {
-        Some(sub) if sub.to_lowercase() == "all" => execute_all(out, &load_settings()),
+        Some(sub) if sub.to_lowercase() == "all" => execute_all(out, &load_settings_from(paths)),
         Some(other) => {
             let _ = writeln!(
                 out,
                 "{ORANGE}Unknown argument '{other}'.{RESET} Use {BOLD}/settings{RESET} to show settings or {BOLD}/settings all{RESET} to list all safe commands.",
             );
         }
-        None => execute_summary(out, &load_settings()),
+        None => execute_summary(out, &load_settings_from(paths)),
     }
     Ok(CommandResult::Ok)
 }

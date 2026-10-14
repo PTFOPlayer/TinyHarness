@@ -21,8 +21,8 @@ use rustyline::Editor;
 use tokio::sync::Mutex;
 
 use tinyharness_lib::{
-    config::load_merged_settings,
-    config::load_settings,
+    config::load_merged_settings_from,
+    config::load_settings_from,
     mode::AgentMode,
     provider::{AnyProvider, Message, Provider, Role},
     session::Session,
@@ -73,11 +73,19 @@ pub async fn run_agent_loop(
         print_conversation_history(messages, &mut stdout)?;
     }
 
+    // Settings are resolved through the injected `Paths` so every handler in
+    // this process reads the same tree as the session it belongs to.
+    let context_limit = load_settings_from(&ctx.paths).context_limit;
+    let context_size = context_limit
+        .map(ContextWindowSize::Custom)
+        .unwrap_or_else(ContextWindowSize::default_size);
+
     // Warn if near/over the context window limit, using last known
     // provider token count from the session (or None for fresh sessions).
     print_context_load_warning(
         messages,
         session.meta().token_usage.as_ref().map(|u| u.total_tokens),
+        context_limit,
         &mut stdout,
     )?;
 
@@ -106,12 +114,6 @@ pub async fn run_agent_loop(
         rustyline::KeyEvent(rustyline::KeyCode::Char('j'), rustyline::Modifiers::CTRL),
         rustyline::EventHandler::Simple(rustyline::Cmd::Newline),
     );
-
-    let settings = load_settings();
-    let context_size = settings
-        .context_limit
-        .map(ContextWindowSize::Custom)
-        .unwrap_or_else(ContextWindowSize::default_size);
 
     // Track the last known token count from the LLM provider.
     // Providers report total_tokens (prompt + completion) on every call
@@ -245,9 +247,15 @@ pub async fn run_agent_loop(
                         tool_call_count = session.meta().total_tool_calls;
                         total_tokens_used = session.meta().total_tokens_used;
                         print_conversation_history(messages, &mut stdout)?;
+                        // Re-read the limit: a `/contextlimit` in the previous
+                        // session or an external edit must take effect here,
+                        // exactly as it did when this helper loaded settings
+                        // itself.
+                        let context_limit = load_settings_from(&ctx.paths).context_limit;
                         print_context_load_warning(
                             messages,
                             session.meta().token_usage.as_ref().map(|u| u.total_tokens),
+                            context_limit,
                             &mut stdout,
                         )?;
                     }
@@ -309,7 +317,7 @@ pub async fn run_agent_loop(
 
         loop {
             // Filter tools based on current mode and settings
-            let (_, _, merged) = load_merged_settings();
+            let (_, _, merged) = load_merged_settings_from(&ctx.paths);
             let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.tool_availability());
 
             // Call the provider — it returns a receiver for streaming chunks

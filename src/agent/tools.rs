@@ -3,7 +3,7 @@ use std::io::Write;
 use tokio::sync::Mutex;
 
 use tinyharness_lib::{
-    config::load_settings,
+    config::load_settings_from,
     image::ImageAttachment,
     provider::{AnyProvider, Message, Role, ToolCall},
     session::Session,
@@ -120,7 +120,7 @@ pub async fn handle_tool_calls<W: Write>(
         let needs_confirmation = tool_manager.needs_approval(&call.function.name);
 
         // Load settings to check auto_accept_mode preference and safe/denied commands
-        let settings = load_settings();
+        let settings = load_settings_from(&ctx.paths);
         let auto_accept_mode = settings.auto_accept_mode;
         let safe_commands = settings.get_safe_commands();
         let denied_commands = settings.get_denied_commands();

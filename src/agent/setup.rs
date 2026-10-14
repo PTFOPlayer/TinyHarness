@@ -17,7 +17,7 @@
 use std::io::{IsTerminal, Write};
 
 use tinyharness_lib::SecretString;
-use tinyharness_lib::config::{ProviderKind, Settings, load_settings, save_settings};
+use tinyharness_lib::config::{ProviderKind, Settings, load_settings_from, save_settings_to};
 use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
 
@@ -94,12 +94,19 @@ pub fn default_url_for(kind: ProviderKind) -> &'static str {
 }
 
 /// Persist the provider + URL pair to settings.
-pub fn save_provider_settings(kind: ProviderKind, url: &str) {
+///
+/// `paths` is the process-wide [`Paths`](tinyharness_lib::Paths) built at
+/// startup — `main.rs` calls this before a `CommandContext` exists, so the
+/// instance is threaded in explicitly rather than read from the ambient
+/// environment.
+pub fn save_provider_settings(paths: &tinyharness_lib::Paths, kind: ProviderKind, url: &str) {
     // Load existing settings to preserve unrelated fields (mode, model, etc.)
-    let mut s = tinyharness_lib::config::load_settings();
+    let mut s = load_settings_from(paths);
     s.last_provider = kind;
     s.set_url_for(kind, url.to_string());
-    save_settings(&s);
+    if let Err(e) = save_settings_to(paths, &s) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
 }
 
 /// Resolve the bearer token for the OpenAI-compatible provider using the
@@ -122,13 +129,17 @@ pub fn save_provider_settings(kind: ProviderKind, url: &str) {
 ///
 /// Returns `None` when no key should be sent. Only the `OpenAiCompat`
 /// provider uses this value; Ollama, llama.cpp, vLLM, and Sockudo ignore it.
-pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option<SecretString> {
+pub fn resolve_api_key(
+    paths: &tinyharness_lib::Paths,
+    cli_api_key: Option<&str>,
+    settings: &Settings,
+) -> Option<SecretString> {
     let result = resolve_api_key_pure(cli_api_key, settings);
     // Persist side-effects only when the user actually passed `--api-key` on
     // the command line (cli_api_key is Some). The pure function is used in
     // tests to avoid touching the real settings file.
     if let Some(raw) = cli_api_key {
-        let mut s = load_settings();
+        let mut s = load_settings_from(paths);
         match raw {
             "-" | "" => {
                 // Both the clear sentinel and the explicit-empty opt-out
@@ -139,7 +150,9 @@ pub fn resolve_api_key(cli_api_key: Option<&str>, settings: &Settings) -> Option
                 s.openai_compat_api_key = Some(SecretString::new(raw));
             }
         }
-        save_settings(&s);
+        if let Err(e) = save_settings_to(paths, &s) {
+            tracing::warn!("Failed to save settings: {e}");
+        }
     }
     result
 }
@@ -295,6 +308,40 @@ mod tests {
         assert_eq!(
             resolve_api_key_pure(Some(""), &s),
             Some(SecretString::default())
+        );
+    }
+
+    // ── Impure (persisting) variants — isolated root, never the real profile ──
+
+    #[test]
+    fn resolve_api_key_persists_to_injected_paths() {
+        let paths = crate::test_helpers::isolated_paths("setup");
+        let key = resolve_api_key(&paths, Some("sk-from-cli"), &Settings::default());
+        assert_eq!(key, Some(SecretString::new("sk-from-cli")));
+        assert_eq!(
+            load_settings_from(&paths).openai_compat_api_key,
+            Some(SecretString::new("sk-from-cli")),
+            "the CLI key must land in the injected settings file"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_sentinel_clears_saved_key_in_injected_paths() {
+        let paths = crate::test_helpers::isolated_paths("setup");
+        resolve_api_key(&paths, Some("sk-stored"), &Settings::default());
+        resolve_api_key(&paths, Some("-"), &Settings::default());
+        assert_eq!(load_settings_from(&paths).openai_compat_api_key, None);
+    }
+
+    #[test]
+    fn save_provider_settings_writes_to_injected_paths() {
+        let paths = crate::test_helpers::isolated_paths("setup");
+        save_provider_settings(&paths, ProviderKind::LlamaCpp, "http://saved:8080");
+        let saved = load_settings_from(&paths);
+        assert_eq!(saved.last_provider, ProviderKind::LlamaCpp);
+        assert_eq!(
+            saved.get_url_for(ProviderKind::LlamaCpp),
+            Some("http://saved:8080")
         );
     }
 

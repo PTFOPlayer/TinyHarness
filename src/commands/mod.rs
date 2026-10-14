@@ -102,7 +102,7 @@ pub fn build_registry() -> CommandRegistry {
         "/settings",
         "Show current settings. Use 'all' to list all safe commands.",
         "/settings [all]",
-        |arg, ctx, _msg| crate::commands::settings::execute(&mut ctx.output, arg),
+        |arg, ctx, _msg| crate::commands::settings::execute(&mut ctx.output, &ctx.paths, arg),
     );
 
     reg.register_sync_with_usage(
@@ -112,11 +112,11 @@ pub fn build_registry() -> CommandRegistry {
         |arg, ctx, _msg| {
             let a = arg.unwrap_or("");
             if a.is_empty() {
-                crate::commands::apikey::execute_show(&mut ctx.output);
+                crate::commands::apikey::execute_show(&mut ctx.output, &ctx.paths);
             } else if a == "clear" {
-                crate::commands::apikey::execute_clear(&mut ctx.output);
+                crate::commands::apikey::execute_clear(&mut ctx.output, &ctx.paths);
             } else {
-                crate::commands::apikey::execute_set(&mut ctx.output, a);
+                crate::commands::apikey::execute_set(&mut ctx.output, &ctx.paths, a);
             }
             Ok(CommandResult::Ok)
         },
@@ -127,7 +127,11 @@ pub fn build_registry() -> CommandRegistry {
         "Show or set the context limit for warning calculations (default: model default)",
         "/contextlimit [tokens]",
         |arg, ctx, _msg| {
-            crate::commands::config_settings::execute_context_limit(&mut ctx.output, arg)
+            crate::commands::config_settings::execute_context_limit(
+                &mut ctx.output,
+                &ctx.paths,
+                arg,
+            )
         },
     );
 
@@ -135,7 +139,9 @@ pub fn build_registry() -> CommandRegistry {
         "/autoaccept",
         "Show or toggle auto-accept mode: 'all' (all tools), 'safe' (read-only), or 'off'",
         "/autoaccept [all|safe|off]",
-        |arg, ctx, _msg| crate::commands::config_settings::execute_autoaccept(&mut ctx.output, arg),
+        |arg, ctx, _msg| {
+            crate::commands::config_settings::execute_autoaccept(&mut ctx.output, &ctx.paths, arg)
+        },
     );
 
     reg.register_sync_with_usage(
@@ -143,7 +149,11 @@ pub fn build_registry() -> CommandRegistry {
         "Show or toggle the auto_compact tool (on/off). When off, the model cannot request conversation compaction.",
         "/autocompact [on|off]",
         |arg, ctx, _msg| {
-            crate::commands::config_settings::execute_autocompact(&mut ctx.output, arg)
+            crate::commands::config_settings::execute_autocompact(
+                &mut ctx.output,
+                &ctx.paths,
+                arg,
+            )
         },
     );
 
@@ -152,7 +162,11 @@ pub fn build_registry() -> CommandRegistry {
         "Show or toggle the question tool (on/off). When off, the model cannot ask the user questions.",
         "/questions [on|off]",
         |arg, ctx, _msg| {
-            crate::commands::config_settings::execute_questions(&mut ctx.output, arg)
+            crate::commands::config_settings::execute_questions(
+                &mut ctx.output,
+                &ctx.paths,
+                arg,
+            )
         },
     );
 
@@ -180,7 +194,9 @@ pub fn build_registry() -> CommandRegistry {
         "/command",
         "Manage auto-accepted and denied commands",
         "/command [list|add|rm|deny|undeny|reset|resetdeny|help]",
-        |arg, ctx, _msg| crate::commands::command::execute(&mut ctx.output, arg.unwrap_or("")),
+        |arg, ctx, _msg| {
+            crate::commands::command::execute(&mut ctx.output, &ctx.paths, arg.unwrap_or(""))
+        },
     );
 
     // ── Debug ────────────────────────────────────────────────────────────

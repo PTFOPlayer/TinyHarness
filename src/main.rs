@@ -343,7 +343,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     std::process::exit(1);
                 }
             };
-            agent_setup::save_provider_settings(provider_kind, &url);
+            agent_setup::save_provider_settings(&paths, provider_kind, &url);
             url
         } else {
             agent_setup::resolve_url(provider_kind, &args.url, &settings)
@@ -352,7 +352,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.url.clone()
     };
 
-    let api_key = agent_setup::resolve_api_key(args.api_key.as_deref(), &settings);
+    let api_key = agent_setup::resolve_api_key(&paths, args.api_key.as_deref(), &settings);
 
     // Reload settings to include any API key persisted by resolve_api_key
     let settings = load_settings_from(&paths);
