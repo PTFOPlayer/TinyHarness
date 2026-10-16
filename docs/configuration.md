@@ -76,6 +76,9 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 3. `openai_compat_api_key` in settings.json
 4. None (provider startup fails with an error)
 
+For a hosted gateway setup using these existing options, see the
+[A2Agent configuration example](examples/a2agent/README.md).
+
 ### Sockudo Provider (Experimental)
 
 > ⚠️ **The Sockudo AI Transport provider is highly experimental.** It is not recommended for production use and may have stability issues, incomplete features, or breaking changes without notice.
