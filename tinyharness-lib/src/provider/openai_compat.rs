@@ -387,6 +387,80 @@ pub struct Delta {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<OpenAIToolCall>>,
+    /// Reasoning text — OpenRouter / DeepSeek spelling.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// Reasoning text — vLLM / Qwen `--reasoning-parser` spelling.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    /// Structured reasoning parts (OpenRouter): the portable representation
+    /// used for providers whose reasoning is signed or encrypted.
+    #[serde(default)]
+    pub reasoning_details: Option<Vec<ReasoningDetail>>,
+}
+
+/// One item of an OpenAI-compatible `delta.reasoning_details` array.
+///
+/// Only the displayable shapes are modelled: `text` / `reasoning_text` items
+/// carry their content in `text`, Anthropic-style `summary` items carry an
+/// array of `{ "text": … }` parts. `encrypted` / `redacted_reasoning` items
+/// have no readable payload, so they contribute nothing to the display.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReasoningDetail {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub summary: Option<serde_json::Value>,
+}
+
+impl ReasoningDetail {
+    /// The human-readable text carried by this reasoning part (may be empty).
+    fn display_text(&self) -> String {
+        let mut out = String::new();
+        if let Some(text) = &self.text {
+            out.push_str(text);
+        }
+        if let Some(summary) = &self.summary {
+            match summary {
+                serde_json::Value::String(s) => out.push_str(s),
+                serde_json::Value::Array(parts) => {
+                    for part in parts {
+                        if let Some(s) = part.get("text").and_then(|t| t.as_str()) {
+                            out.push_str(s);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// Extract the displayable reasoning chain from a streaming delta.
+///
+/// Servers disagree on how reasoning is spelled (`reasoning`,
+/// `reasoning_content`, or the structured `reasoning_details` array), so all
+/// shapes collapse into a single string. The plain fields win when present —
+/// OpenRouter emits both the text and its structured form, and concatenating
+/// them would duplicate the chain. Returns `None` when the delta carries no
+/// reasoning at all.
+fn delta_reasoning(delta: &Delta) -> Option<String> {
+    let mut out = String::new();
+    for text in [&delta.reasoning, &delta.reasoning_content]
+        .into_iter()
+        .flatten()
+    {
+        out.push_str(text);
+    }
+    if out.is_empty()
+        && let Some(details) = &delta.reasoning_details
+    {
+        for detail in details {
+            out.push_str(&detail.display_text());
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 #[derive(Deserialize)]
@@ -606,6 +680,7 @@ async fn stream_chat_completions(
 
     let mut acc_tool_calls: HashMap<usize, OpenAIToolCall> = HashMap::new();
     let mut response_content = String::new();
+    let mut response_thinking = String::new();
     let mut token_usage: Option<crate::provider::TokenUsage> = None;
 
     while let Some(chunk_result) = stream.next().await {
@@ -649,6 +724,14 @@ async fn stream_chat_completions(
                                 response_content.push_str(content);
                             }
 
+                            // Reasoning deltas arrive before (and sometimes
+                            // interleaved with) the visible content; keep them
+                            // in their own buffer so the UI can render the
+                            // `[thinking]` stream separately.
+                            if let Some(reasoning) = delta_reasoning(&choice.delta) {
+                                response_thinking.push_str(&reasoning);
+                            }
+
                             if let Some(tool_calls) = &choice.delta.tool_calls {
                                 for tc in tool_calls {
                                     let entry =
@@ -674,6 +757,28 @@ async fn stream_chat_completions(
             }
         }
 
+        // Flush whichever buffer has data — a chunk may carry only reasoning
+        // (models that think before they answer) or only content.
+        if !response_thinking.is_empty() {
+            let thinking = std::mem::take(&mut response_thinking);
+            if send
+                .send(ChatMessageResponse {
+                    message: ChatMessage {
+                        content: String::new(),
+                        tool_calls: vec![],
+                        thinking: Some(thinking),
+                    },
+                    done: false,
+                    is_error: false,
+                    usage: None,
+                })
+                .await
+                .is_err()
+            {
+                return AttemptOutcome::Final(token_usage);
+            }
+        }
+
         if !response_content.is_empty() {
             // If the receiver is gone (user interrupt, shutdown), stop
             // reading the HTTP stream instead of draining the rest of it.
@@ -694,6 +799,28 @@ async fn stream_chat_completions(
                 return AttemptOutcome::Final(token_usage);
             }
             response_content.clear();
+        }
+    }
+
+    // Reasoning can still be buffered when the server closes the stream
+    // without another content/usage chunk — flush it so the tail is not lost.
+    if !response_thinking.is_empty() {
+        let thinking = std::mem::take(&mut response_thinking);
+        if send
+            .send(ChatMessageResponse {
+                message: ChatMessage {
+                    content: String::new(),
+                    tool_calls: vec![],
+                    thinking: Some(thinking),
+                },
+                done: false,
+                is_error: false,
+                usage: None,
+            })
+            .await
+            .is_err()
+        {
+            return AttemptOutcome::Final(token_usage);
         }
     }
 
@@ -993,5 +1120,168 @@ mod tests {
             inner.fetch_model_list().await,
             vec!["chosen-model".to_string()]
         );
+    }
+
+    // ── reasoning / thinking extraction ──
+
+    /// Parse a single SSE `data:` payload into a `StreamChunk`.
+    fn parse_chunk(json: &str) -> StreamChunk {
+        serde_json::from_str(json).unwrap_or_else(|e| panic!("invalid chunk {json}: {e}"))
+    }
+
+    /// Pull the reasoning out of the first choice of a chunk.
+    fn reasoning_of(json: &str) -> Option<String> {
+        let chunk = parse_chunk(json);
+        chunk
+            .choices
+            .first()
+            .and_then(|c| delta_reasoning(&c.delta))
+    }
+
+    /// OpenRouter / DeepSeek spell the field `reasoning`.
+    #[test]
+    fn delta_reasoning_reads_openrouter_field() {
+        assert_eq!(
+            reasoning_of(r#"{"choices":[{"delta":{"reasoning":"hmm"}}]}"#).as_deref(),
+            Some("hmm")
+        );
+    }
+
+    /// vLLM / Qwen reasoning parsers emit `reasoning_content`.
+    #[test]
+    fn delta_reasoning_reads_vllm_field() {
+        assert_eq!(
+            reasoning_of(r#"{"choices":[{"delta":{"reasoning_content":"hmm"}}]}"#).as_deref(),
+            Some("hmm")
+        );
+    }
+
+    /// OpenRouter's structured `reasoning_details` array is the fallback when
+    /// no plain-text field is present.
+    #[test]
+    fn delta_reasoning_reads_structured_details() {
+        assert_eq!(
+            reasoning_of(
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}}]}"#
+            )
+            .as_deref(),
+            Some("ab")
+        );
+    }
+
+    /// Anthropic-style summary parts nest their text in a `summary` array.
+    #[test]
+    fn delta_reasoning_reads_summary_parts() {
+        assert_eq!(
+            reasoning_of(
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"summary_text","summary":[{"text":"x"}]}]}}]}"#
+            )
+            .as_deref(),
+            Some("x")
+        );
+    }
+
+    /// Encrypted / redacted reasoning has no readable payload — it must not
+    /// produce an empty `Some("")` that would trip the UI into printing a
+    /// bare `[thinking]` header.
+    #[test]
+    fn delta_reasoning_ignores_opaque_details() {
+        assert_eq!(
+            reasoning_of(
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"gAAAAA"}]}}]}"#
+            ),
+            None
+        );
+    }
+
+    /// When both spellings are present (OpenRouter does this), the plain
+    /// field wins so the chain is not duplicated.
+    #[test]
+    fn delta_reasoning_does_not_duplicate_plain_and_structured() {
+        assert_eq!(
+            reasoning_of(
+                r#"{"choices":[{"delta":{"reasoning":"same","reasoning_details":[{"type":"text","text":"same"}]}}]}"#
+            )
+            .as_deref(),
+            Some("same")
+        );
+    }
+
+    /// A content-only delta carries no reasoning.
+    #[test]
+    fn delta_reasoning_is_none_without_reasoning_fields() {
+        assert_eq!(
+            reasoning_of(r#"{"choices":[{"delta":{"content":"hello"}}]}"#),
+            None
+        );
+    }
+
+    /// SSE body serving a reasoning stream: thinking deltas, then content,
+    /// then a usage-only final chunk.
+    const REASONING_SSE: &str = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think \"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"more\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    /// End-to-end: reasoning deltas reach the consumer through
+    /// `ChatMessage::thinking`, and content is not mixed in with them.
+    #[tokio::test]
+    async fn stream_forwards_reasoning_as_thinking_chunks() {
+        let (base, _log, _server) =
+            spawn_mock_server(vec![("/v1/chat/completions", 200, REASONING_SSE)]).await;
+        let mut inner = OpenAiCompatInner::new(base);
+        inner.select_model("test-model".to_string());
+
+        let mut recv = inner
+            .chat(vec![Message::simple(Role::User, "hi")], vec![])
+            .await
+            .expect("chat started");
+
+        let mut thinking = String::new();
+        let mut content = String::new();
+        let mut done = false;
+        while let Some(resp) = recv.recv().await {
+            if let Some(t) = &resp.message.thinking {
+                thinking.push_str(t);
+            }
+            content.push_str(&resp.message.content);
+            if resp.done {
+                done = true;
+                break;
+            }
+        }
+        assert!(done, "stream should terminate with a done chunk");
+        assert_eq!(thinking, "think more");
+        assert_eq!(content, "Hello");
+    }
+
+    /// A server that never emits reasoning keeps `thinking` unset, so the UI
+    /// skips the `[thinking]` block entirely.
+    #[tokio::test]
+    async fn stream_without_reasoning_leaves_thinking_unset() {
+        let (base, _log, _server) = spawn_mock_server(vec![(
+            "/v1/chat/completions",
+            200,
+            "data: {\"choices\":[{\"delta\":{\"content\":\"plain\"}}]}\n\ndata: [DONE]\n\n",
+        )])
+        .await;
+        let mut inner = OpenAiCompatInner::new(base);
+        inner.select_model("test-model".to_string());
+
+        let mut recv = inner
+            .chat(vec![Message::simple(Role::User, "hi")], vec![])
+            .await
+            .expect("chat started");
+
+        while let Some(resp) = recv.recv().await {
+            assert!(resp.message.thinking.is_none());
+            if resp.done {
+                break;
+            }
+        }
     }
 }

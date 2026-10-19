@@ -5,6 +5,7 @@ pub mod ollama;
 pub mod openai_compat;
 pub mod openai_compat_provider;
 pub mod sockudo;
+pub mod tool_pairs;
 
 use std::fmt::Display;
 use std::future::Future;
@@ -63,8 +64,11 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
-    /// Thinking/reasoning content from the model (Ollama's `thinking` field).
-    /// Only populated when the model supports reasoning (e.g. qwen2.5 variants).
+    /// Thinking/reasoning content from the model, as a **delta** during
+    /// streaming. Ollama fills this from its `thinking` field; OpenAI-compatible
+    /// servers (OpenRouter, vLLM with a reasoning parser, DeepSeek) from
+    /// `delta.reasoning` / `delta.reasoning_content` / `delta.reasoning_details`.
+    /// Only populated when the model actually reasons.
     #[serde(default)]
     pub thinking: Option<String>,
 }

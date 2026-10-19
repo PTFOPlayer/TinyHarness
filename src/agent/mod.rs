@@ -24,6 +24,7 @@ use tinyharness_lib::{
     config::load_merged_settings_from,
     config::load_settings_from,
     mode::AgentMode,
+    provider::tool_pairs::repair_tool_pairs,
     provider::{AnyProvider, Message, Provider, Role},
     session::Session,
     token::ContextWindowSize,
@@ -297,6 +298,9 @@ pub async fn run_agent_loop(
         }
 
         let pending_images = std::mem::take(&mut ctx.pending_images);
+        // Length of the history before this user turn, used to rewind a turn
+        // that produced nothing.
+        let turn_start = messages.len();
         messages.push(Message {
             role: Role::User,
             content: user_input.clone(),
@@ -320,6 +324,26 @@ pub async fn run_agent_loop(
             let (_, _, merged) = load_merged_settings_from(&ctx.paths);
             let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.tool_availability());
 
+            // Repair the assistant ↔ tool-call pairing before the history leaves
+            // this process. Strict providers (Azure/OpenAI behind OpenRouter)
+            // reject the whole request with HTTP 400 "No tool output found for
+            // function call <id>" if a declared call has no result, so an
+            // interrupted tool batch, a `/compact` that cut a pair, or a session
+            // resumed mid-turn would otherwise wedge the conversation permanently
+            // — every later turn replays the same broken history.
+            let fixes = repair_tool_pairs(messages);
+            if fixes.changed() {
+                tracing::debug!(
+                    "tool-pair repair: {} unanswered call(s) stubbed, {} orphan/duplicate result(s) dropped",
+                    fixes.stubbed,
+                    fixes.dropped
+                );
+            }
+
+            // Snapshot the history as this attempt starts it, so a retry can
+            // roll back to exactly this point.
+            let attempt_base = messages.len();
+
             // Call the provider — it returns a receiver for streaming chunks
             let mut recv = {
                 let mut provider = provider.lock().await;
@@ -332,8 +356,11 @@ pub async fn run_agent_loop(
                             "\n{}⚠ Failed to start request: {}{}\n",
                             RED, e, RESET
                         )?;
-                        // Remove the user message we just added
-                        messages.pop();
+                        // Abandon the turn. `pop()` only removed the user
+                        // message on the first iteration; from a later tool
+                        // iteration it would drop a tool result instead and
+                        // leave its call unanswered.
+                        messages.truncate(turn_start);
                         break; // Back to input prompt
                     }
                 }
@@ -540,8 +567,11 @@ pub async fn run_agent_loop(
                     });
                     session.append_message(messages.last().expect("just pushed a message"));
                 } else {
-                    // No content — remove the user message
-                    messages.pop();
+                    // Nothing was generated — rewind to before this turn began.
+                    // Popping a single message would be wrong from the second
+                    // tool iteration onwards: it would eat a tool result and
+                    // leave its call unanswered.
+                    messages.truncate(turn_start);
                 }
                 break; // Back to input prompt
             }
@@ -583,9 +613,18 @@ pub async fn run_agent_loop(
                 }
 
                 if should_retry {
+                    // Rewind to where this attempt started. Retrying without
+                    // discarding the failed attempt's partial state is what made
+                    // the retry loop spin forever on the same HTTP 400: the
+                    // broken history was simply replayed byte for byte.
+                    messages.truncate(attempt_base);
                     continue;
                 } else {
-                    messages.pop();
+                    // Abandon the whole turn. Popping one message was wrong from
+                    // the second tool iteration onwards — it removed a tool
+                    // result and left its call unanswered, poisoning the history
+                    // for every subsequent turn.
+                    messages.truncate(turn_start);
                     break;
                 }
             }
