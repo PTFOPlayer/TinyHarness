@@ -8,6 +8,9 @@ extend-ignore-re = [
     '"hel"',
     '"Hello Worl"',
     'b"fo"',
+    # Same, spelled inside an escaped JSON string in an SSE test fixture
+    # (the file text is `\"Hel\"`, so the backslashes must be matched too)
+    '\\"Hel\\"',
 ]
 
 [default.extend-words]
