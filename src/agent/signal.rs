@@ -219,6 +219,24 @@ pub async fn handle_signal_event(
                         }
                     } else {
                         ctx.active_skills.push(name.clone());
+                        // Answer the tool call first. Strict providers reject the
+                        // next request outright ("No tool output found for
+                        // function call <id>") if a declared call is left without
+                        // a matching `tool` result, so the `/use` injection alone
+                        // cannot stand in for the answer.
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: format!(
+                                "Skill '{}' activated. Its instructions are now in effect for this \
+                                 conversation.",
+                                name
+                            ),
+                            tool_calls: vec![],
+                            tool_call_id: Some(tool_call_id.to_string()),
+                            images: vec![],
+                            thinking: None,
+                        });
+                        session.append_message(messages.last().expect("just pushed a message"));
                         messages.push(Message {
                             role: Role::User,
                             content: format!("/use {}", skill_name),

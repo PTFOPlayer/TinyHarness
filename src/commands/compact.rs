@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use std::collections::HashSet;
+
 use tinyharness_lib::provider::{AnyProvider, Message, Provider, Role, TokenUsage};
 use tinyharness_ui::output::Output;
 
@@ -176,6 +178,60 @@ struct CompactContext {
     original_count: usize,
 }
 
+/// Move a compaction cut-point back so it never splits an assistant tool call
+/// from its results.
+///
+/// `/compact` keeps the last `KEEP_RECENT` messages verbatim and summarizes the
+/// rest. If the cut lands between an assistant message carrying `tool_calls`
+/// and the `tool` results that answer them, the kept window starts with
+/// orphaned results — and strict providers (Azure/OpenAI behind OpenRouter)
+/// reject the next request with HTTP 400 `“No tool output found for function
+/// call <id>”`. Pulling the cut back to the message that *declared* those calls
+/// reunites each pair inside the kept window.
+///
+/// Results whose call is nowhere in the history are left alone — the
+/// request-time tool-pair sanitizer drops those. `aligned` never drops below 1,
+/// so the system prompt always stays at index 0.
+fn align_keep_window(messages: &[Message], candidate: usize) -> usize {
+    let mut aligned = candidate.min(messages.len()).max(1);
+
+    loop {
+        // Ids declared by assistant messages *inside* the kept window.
+        let declared: HashSet<&str> = messages[aligned..]
+            .iter()
+            .flat_map(|message| message.tool_calls.iter())
+            .filter_map(|call| call.id.as_deref())
+            .filter(|id| !id.is_empty())
+            .collect();
+
+        // First kept result whose call was declared before the window.
+        let Some(offset) = messages[aligned..].iter().position(|message| {
+            message.role == Role::Tool
+                && message
+                    .tool_call_id
+                    .as_deref()
+                    .is_some_and(|id| !declared.contains(id))
+        }) else {
+            return aligned;
+        };
+        let orphan_index = aligned + offset;
+        let orphan = &messages[orphan_index];
+        let owner = messages[..orphan_index].iter().rposition(|message| {
+            message.role == Role::Assistant
+                && message
+                    .tool_calls
+                    .iter()
+                    .any(|call| call.id.as_deref() == orphan.tool_call_id.as_deref())
+        });
+        match owner {
+            Some(owner) if owner >= 1 => aligned = owner,
+            // Call not in this history at all, or owned by the system slot:
+            // nothing to pull back to.
+            _ => return aligned,
+        }
+    }
+}
+
 /// Compact the conversation history by summarizing older messages.
 ///
 /// For short conversations, this uses a single LLM call (single-pass compaction).
@@ -208,7 +264,7 @@ pub async fn execute_compact(
 
     // Keep the last 4 messages intact (recent context).
     const KEEP_RECENT: usize = 4;
-    let keep_from = messages.len().saturating_sub(KEEP_RECENT).max(1);
+    let keep_from = align_keep_window(messages, messages.len().saturating_sub(KEEP_RECENT).max(1));
 
     // Messages to summarize: everything between system prompt and keep_from.
     // We clone these so we can release the borrow on `messages` before
@@ -616,5 +672,127 @@ mod tests {
         assert!(messages[0].content.contains("This is a summary."));
         assert_eq!(messages[1].content, "recent1");
         assert_eq!(messages[4].content, "recent4");
+    }
+
+    // ── align_keep_window ────────────────────────────────────────────────
+
+    fn assistant_with(call_id: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: vec![tinyharness_lib::provider::ToolCall {
+                id: Some(call_id.to_string()),
+                function: tinyharness_lib::provider::ToolCallFunction {
+                    name: "read".to_string(),
+                    arguments: serde_json::json!({}),
+                    thought_signature: None,
+                },
+            }],
+            tool_call_id: None,
+            images: vec![],
+            thinking: None,
+        }
+    }
+
+    fn result_for(call_id: &str) -> Message {
+        Message {
+            role: Role::Tool,
+            content: "output".to_string(),
+            tool_calls: vec![],
+            tool_call_id: Some(call_id.to_string()),
+            images: vec![],
+            thinking: None,
+        }
+    }
+
+    fn plain(role: Role, content: &str) -> Message {
+        Message::simple(role, content)
+    }
+
+    #[test]
+    fn keep_window_moves_back_off_an_orphaned_result() {
+        // cut = 7 - 4 = 3 lands on the *result*, separating it from its call.
+        let messages = vec![
+            plain(Role::System, "sys"),
+            plain(Role::User, "u1"),
+            assistant_with("call_a"),
+            result_for("call_a"),
+            plain(Role::User, "u2"),
+            plain(Role::User, "u3"),
+            plain(Role::User, "u4"),
+        ];
+
+        assert_eq!(align_keep_window(&messages, 3), 2);
+    }
+
+    #[test]
+    fn keep_window_stays_when_pairs_are_intact() {
+        let messages = vec![
+            plain(Role::System, "sys"),
+            assistant_with("call_a"),
+            result_for("call_a"),
+            plain(Role::User, "u2"),
+            plain(Role::User, "u3"),
+            plain(Role::User, "u4"),
+            plain(Role::User, "u5"),
+        ];
+
+        assert_eq!(align_keep_window(&messages, 3), 3);
+    }
+
+    #[test]
+    fn keep_window_walks_back_over_several_split_pairs() {
+        // cut = 5 orphaned result_b; pulling back to its owner (3) exposes a
+        // second orphan, result_a, whose owner is at 1 — so the walk repeats.
+        let messages = vec![
+            plain(Role::System, "sys"),
+            assistant_with("call_a"),
+            plain(Role::User, "u1"),
+            assistant_with("call_b"),
+            plain(Role::User, "u2"),
+            result_for("call_b"),
+            result_for("call_a"),
+            plain(Role::User, "u3"),
+        ];
+
+        assert_eq!(align_keep_window(&messages, 5), 1);
+    }
+
+    #[test]
+    fn keep_window_leaves_results_whose_call_is_absent() {
+        // Nothing declares `call_ghost`; the request-time sanitizer drops it.
+        let messages = vec![
+            plain(Role::System, "sys"),
+            plain(Role::User, "u1"),
+            plain(Role::User, "u2"),
+            result_for("call_ghost"),
+            plain(Role::User, "u4"),
+            plain(Role::User, "u5"),
+        ];
+
+        assert_eq!(align_keep_window(&messages, 2), 2);
+    }
+
+    #[test]
+    fn keep_window_never_swallows_the_system_slot() {
+        let mut system = plain(Role::System, "sys");
+        system.tool_calls = assistant_with("call_a").tool_calls;
+        let messages = vec![
+            system,
+            result_for("call_a"),
+            plain(Role::User, "u2"),
+            plain(Role::User, "u3"),
+            plain(Role::User, "u4"),
+        ];
+
+        assert_eq!(align_keep_window(&messages, 1), 1);
+    }
+
+    #[test]
+    fn keep_window_clamps_out_of_range_candidates() {
+        let messages = vec![plain(Role::System, "sys"), plain(Role::User, "u1")];
+
+        assert_eq!(align_keep_window(&messages, 99), 2);
+        assert_eq!(align_keep_window(&messages, 0), 1);
     }
 }

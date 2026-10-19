@@ -5,6 +5,7 @@ pub mod ollama;
 pub mod openai_compat;
 pub mod openai_compat_provider;
 pub mod sockudo;
+pub mod tool_pairs;
 
 use std::fmt::Display;
 use std::future::Future;
