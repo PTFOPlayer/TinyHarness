@@ -170,7 +170,7 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 | Tool | Category | Description |
 |------|----------|-------------|
 | `ls` | ReadOnly | List directory contents |
-| `read` | ReadOnly | Read file content (also loads images for multimodal models) |
+| `read` | ReadOnly | Read file content (loads images for multimodal models; renders `.ipynb` with base64 outputs stripped) |
 | `grep` | ReadOnly | Search with regex across files |
 | `glob` | ReadOnly | Find files by glob pattern |
 | `web_search` | ReadOnly | Search the web (requires Ollama API key) |

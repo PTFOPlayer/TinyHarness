@@ -47,6 +47,8 @@ Lists the contents of a single directory. Returns newline-separated file and dir
 
 Reads file content with optional line ranges. For image files (png, jpg, webp, gif, bmp), returns a description and the image data is automatically loaded for the model to view.
 
+Jupyter notebooks (`.ipynb`) are rendered as JSON with embedded binary outputs (every `image/*` and `application/pdf` payload) replaced by a `[stripped … base64 chars]` placeholder, and remaining output values longer than 4,000 characters truncated. Cell sources, stream text, `text/plain` results and execution counts are preserved. A single notebook cell can otherwise embed several hundred KB of base64 on one line and push the request past the provider's input limit. If the file is not valid JSON, oversized lines are truncated instead. `from`/`to` index the **rendered** text, not the file on disk, so line numbers stay stable across reads.
+
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `path` | Yes | The absolute path to the file |
