@@ -94,6 +94,91 @@ impl fmt::Display for AutoAcceptMode {
     }
 }
 
+// ── Sandbox ────────────────────────────────────────────────────────────────
+
+/// OS-level sandbox configuration for shell-executing tools.
+///
+/// Serializes as the `sandbox` object in `settings.json` /
+/// `.tinyharness/config.json`:
+///
+/// ```json
+/// {
+///   "sandbox": {
+///     "backend": "bwrap",
+///     "writable_paths": ["/tmp/build-cache"]
+///   }
+/// }
+/// ```
+///
+/// The default is [`SandboxConfig::disabled`] — no sandbox — so existing
+/// setups are unaffected until the user opts in via `sandbox.backend` or the
+/// `--sandbox` flag.
+///
+/// `backend` is **required** whenever the `sandbox` object is present, and
+/// accepts `auto` (use whatever is installed, bwrap preferred), `bwrap`,
+/// `firejail`, or `off`. See
+/// [`SandboxBackend`](crate::sandbox::SandboxBackend). Requiring it is
+/// deliberate: a block like `{"sandbox": {"writable_paths": ["/tmp/x"]}}`
+/// states an intention to be sandboxed without naming a backend, and silently
+/// defaulting that to `off` would leave the user unprotected while believing
+/// otherwise. Omit the whole `sandbox` key to stay unsandboxed.
+///
+/// There is deliberately **no network setting**: sandboxed commands always
+/// have the network. A coding agent runs `git fetch`, `curl`, and `cargo add`
+/// constantly, so a knob that would break those is not worth exposing.
+///
+/// Extra *readable* directories come from the top-level `allowed_paths`
+/// setting, which also drives the built-in file tools' path guard; only
+/// write access is configured here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Backend selector: `off` | `auto` | `bwrap` | `firejail`. Required
+    /// whenever a `sandbox` block is present.
+    pub backend: String,
+    /// Extra host directories sandboxed commands may **write**.
+    ///
+    /// Deliberately separate from `allowed_paths`: that setting also feeds the
+    /// path guard confining the built-in file tools, and those tools run
+    /// in-process, so granting it write access would widen their reach too.
+    /// Anything here is reachable *only* by sandboxed shell commands.
+    #[serde(default)]
+    pub writable_paths: Vec<String>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
+impl SandboxConfig {
+    /// No sandbox (the default).
+    pub fn disabled() -> Self {
+        SandboxConfig {
+            backend: "off".to_string(),
+            writable_paths: Vec::new(),
+        }
+    }
+
+    /// Auto-detect the best installed backend.
+    pub fn auto() -> Self {
+        SandboxConfig {
+            backend: "auto".to_string(),
+            ..Self::disabled()
+        }
+    }
+
+    /// `true` when no sandboxing is requested.
+    pub fn is_disabled(&self) -> bool {
+        crate::sandbox::SandboxBackend::is_off(&self.backend)
+    }
+
+    /// `true` when a sandbox (auto-detected or explicit) is requested.
+    pub fn is_enabled(&self) -> bool {
+        !self.is_disabled()
+    }
+}
+
 // ── Project Settings ────────────────────────────────────────────────────────
 
 /// Per-project override settings discovered from `.tinyharness/config.json`.
@@ -128,6 +213,15 @@ pub struct ProjectSettings {
     /// Override whether the model may ask questions for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions_enabled: Option<bool>,
+    /// Override the OS-level sandbox configuration for this project.
+    ///
+    /// Replaces (not extends) the global `sandbox` block, since a partial
+    /// override would be ambiguous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxConfig>,
+    /// Override the path-guard allow list for this project (replaces global).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_paths: Option<Vec<String>>,
 }
 
 /// Discover and load `.tinyharness/config.json` by walking up from `start_dir`.
@@ -211,6 +305,15 @@ pub struct MergedSettings {
     pub auto_compact_enabled_source: SettingSource,
     pub questions_enabled: bool,
     pub questions_enabled_source: SettingSource,
+    /// Effective sandbox configuration (project replaces global, or `off`).
+    pub sandbox: SandboxConfig,
+    pub sandbox_source: SettingSource,
+    /// Effective extra readable paths for the file tools.
+    ///
+    /// Project entries *extend* the global list (like safe commands) — adding
+    /// a path in a project config should not silently revoke a global one.
+    pub allowed_paths: Vec<String>,
+    pub allowed_paths_source: SettingSource,
 }
 
 /// Load and merge global + project settings for an injected set of paths.
@@ -279,6 +382,10 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
             auto_compact_enabled_source: SettingSource::Default,
             questions_enabled: global.questions_enabled,
             questions_enabled_source: SettingSource::Default,
+            sandbox: global.sandbox.clone(),
+            sandbox_source: SettingSource::Default,
+            allowed_paths: global.allowed_paths.clone().unwrap_or_default(),
+            allowed_paths_source: SettingSource::Default,
         },
         Some(p) => {
             // Safe commands: project extends global
@@ -338,6 +445,35 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 .map(|v| (v, SettingSource::Project))
                 .unwrap_or((global.questions_enabled, SettingSource::Default));
 
+            // Sandbox: project replaces global wholesale. A partial override
+            // would leave `backend` from one file and `writable_paths` from
+            // another, which is exactly the kind of silent mixing a security
+            // setting shouldn't allow.
+            let (sandbox, sandbox_source) = p
+                .sandbox
+                .clone()
+                .map(|v| (v, SettingSource::Project))
+                .unwrap_or((global.sandbox.clone(), SettingSource::Default));
+
+            // Allowed paths: project extends global.
+            let allowed_paths = match &p.allowed_paths {
+                Some(proj) => {
+                    let mut combined = global.allowed_paths.clone().unwrap_or_default();
+                    for path in proj {
+                        if !combined.contains(path) {
+                            combined.push(path.clone());
+                        }
+                    }
+                    combined
+                }
+                None => global.allowed_paths.clone().unwrap_or_default(),
+            };
+            let allowed_paths_source = if p.allowed_paths.is_some() {
+                SettingSource::Project
+            } else {
+                SettingSource::Default
+            };
+
             MergedSettings {
                 safe_commands,
                 safe_commands_source: safe_source,
@@ -355,6 +491,10 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 auto_compact_enabled_source: ac_source,
                 questions_enabled,
                 questions_enabled_source: q_source,
+                sandbox,
+                sandbox_source,
+                allowed_paths,
+                allowed_paths_source,
             }
         }
     }
@@ -383,6 +523,13 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
         preferred_mode: Some(settings.preferred_mode),
         auto_compact_enabled: Some(settings.auto_compact_enabled),
         questions_enabled: Some(settings.questions_enabled),
+        // Deliberately not templated: the sandbox and the path allow list are
+        // machine-local security decisions (which backend is installed, which
+        // absolute paths exist on this host). Writing them into a committed
+        // `.tinyharness/config.json` would leak local layout and override the
+        // developer's own settings.
+        sandbox: None,
+        allowed_paths: None,
     }
 }
 
@@ -571,6 +718,27 @@ pub struct Settings {
     /// question. Toggle with `/questions`.
     #[serde(default = "default_true")]
     pub questions_enabled: bool,
+    /// OS-level sandbox for shell-executing tools (`run`, custom tools).
+    ///
+    /// Defaults to disabled; set `sandbox.backend` to `auto`, `bwrap`, or
+    /// `firejail` to enable, or pass `--sandbox` on the command line (which
+    /// overrides the stored value for one session).
+    #[serde(default, skip_serializing_if = "SandboxConfig::is_disabled")]
+    pub sandbox: SandboxConfig,
+    /// Extra host directories the built-in file tools may read, beyond the
+    /// workspace root.
+    ///
+    /// Entries may be absolute, `~`-prefixed, or relative to the workspace
+    /// root. The workspace root itself is always allowed and is exempt from
+    /// the blocked-prefix list. System paths (`/etc`, `/usr`, `/proc`, …) can
+    /// never be allowed this way — see
+    /// [`DEFAULT_BLOCKED_PREFIXES`](crate::path_guard::DEFAULT_BLOCKED_PREFIXES).
+    ///
+    /// Under bwrap these are also bound read-only into the sandbox, so
+    /// `run` sees the same view as `read`. Grant write access via
+    /// [`SandboxConfig::writable_paths`] instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_paths: Option<Vec<String>>,
 }
 
 fn default_true() -> bool {
@@ -611,6 +779,8 @@ impl Default for Settings {
             project_md_files: None,
             auto_compact_enabled: true,
             questions_enabled: true,
+            sandbox: SandboxConfig::default(),
+            allowed_paths: None,
         }
     }
 }

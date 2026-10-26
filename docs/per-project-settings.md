@@ -127,6 +127,52 @@ Controls whether the model may request conversation compaction. Defaults to `tru
 }
 ```
 
+### `allowed_paths`
+
+Extends the global list of extra roots the built-in file tools may read beyond
+the workspace root. Entries may be absolute, `~`-prefixed, or relative to the
+project directory. There is no way to *narrow* the global list from a project
+config — only to add to it.
+
+```json
+{
+  "allowed_paths": ["../shared-schemas", "~/.local/share/mydata"]
+}
+```
+
+System prefixes (`/etc`, `/usr`, `/proc`, `/dev`, `/boot`, `/sys`, `/run`,
+`/var/log`, `/root`) are always rejected, so a broad entry like `"/"` cannot be
+used to reach system configuration. The workspace root itself is exempt from
+that block list. Under bwrap these paths are also bound read-only into the
+process sandbox, so `run` sees the same view as `read`.
+
+### `sandbox`
+
+Replaces the global `sandbox` block **wholesale** — a partial override would
+mix `backend` from one file with `writable_paths` from another, which is exactly
+what a security setting should not do.
+
+```json
+{
+  "sandbox": {
+    "backend": "bwrap",
+    "writable_paths": ["/tmp/project-build-cache"]
+  }
+}
+```
+
+`backend` is `off` (default), `auto`, `bwrap`, or `firejail`; `writable_paths`
+lists extra roots **only** sandboxed shell commands may write (never the file
+tools). There is no `network` key — sandboxed commands always have the network.
+
+A project config that pins a backend the machine does not have is a warning,
+not a startup failure — TinyHarness continues unsandboxed, so a shared
+`.tinyharness/config.json` stays usable on a machine without bubblewrap.
+
+Neither `sandbox` nor `allowed_paths` is written by `/project-settings init`:
+both are machine-local, and committing them would leak local layout while
+overriding every teammate's own settings.
+
 ## Viewing Merged Settings
 
 ```

@@ -64,8 +64,24 @@ pub struct CommandContext {
     pub show_thinking: bool,
     /// Structured output writer — all terminal I/O goes through this.
     pub output: tinyharness_ui::output::Output,
-    /// Whether `--sandbox` is active: `run` always requires confirmation.
-    pub sandbox_active: bool,
+    /// Whether `--sandbox` is active: shell commands run inside an OS-level
+    /// sandbox (bwrap/firejail). `None` when unsandboxed.
+    ///
+    /// Note this describes the *process* sandbox only. The built-in file tools
+    /// are confined by the always-on path guard, which is deliberately not
+    /// mentioned in the system prompt — a violation there is self-explanatory
+    /// from the tool error.
+    pub sandbox: Option<SandboxStatus>,
+}
+
+/// Summary of the active OS-level sandbox, for the system prompt and status
+/// display.
+#[derive(Debug, Clone)]
+pub struct SandboxStatus {
+    /// Backend name (`bwrap` / `firejail`).
+    pub backend: String,
+    /// Extra host directories bound into the sandbox (read-only), if any.
+    pub extra_paths: Vec<std::path::PathBuf>,
 }
 
 impl CommandContext {
@@ -88,7 +104,7 @@ impl CommandContext {
             compaction_token_usage: None,
             show_thinking: false,
             output: tinyharness_ui::output::Output::stdout(),
-            sandbox_active: false,
+            sandbox: None,
         }
     }
 
@@ -160,17 +176,38 @@ impl CommandContext {
             }
         }
 
-        // Inform the model about the sandbox restriction so it doesn't
-        // waste attempts on paths outside the workspace.
-        if self.sandbox_active {
+        // Inform the model about the process sandbox so it doesn't waste turns
+        // retrying operations the sandbox can never perform. Only emitted when
+        // a sandbox is actually active — the always-on path guard is left to
+        // speak for itself through its tool errors.
+        if let Some(sb) = &self.sandbox {
+            let mut view = format!(
+                "the filesystem outside the workspace ({})",
+                self.workspace_ctx.root.display()
+            );
+            if !sb.extra_paths.is_empty() {
+                let extras: Vec<String> = sb
+                    .extra_paths
+                    .iter()
+                    .map(|p| format!("`{}`", p.display()))
+                    .collect();
+                view.push_str(&format!(", apart from {}", extras.join(", ")));
+            }
+            view.push_str(" does not exist — it is not merely denied");
+
             prompt.push_str("\n\n");
             prompt.push_str(&format!(
-                "# Sandbox Mode\n\n\
-                 File access is restricted to the workspace root: {}\n\
-                 Any attempt to read, write, or list paths outside this directory will fail \
-                 with a sandbox violation error. The `run` tool always requires user \
-                 confirmation in this mode.",
-                self.workspace_ctx.root.display()
+                "# Sandboxed commands\n\n\
+                 The `run` tool and custom tools execute inside a `{}` sandbox:\n\
+                 - {view}\n\
+                 - the environment is cleared: no API keys or other inherited \
+                 credentials reach a sandboxed command, so token auth that relies \
+                 on environment variables will not work\n\
+                 - the network is available — `git`, `curl`, and `cargo` work normally\n\
+                 - a private PID namespace: host processes are not visible\n\n\
+                 Normal auto-accept rules still apply; the sandbox confines what \
+                 an approved command can reach.",
+                sb.backend
             ));
         }
 

@@ -79,7 +79,12 @@ impl ToolAvailability {
 #[derive(Default)]
 pub struct ToolManager {
     tools: Vec<Tool>,
-    /// When set, path-based tools are confined to this sandbox root.
+    /// Confines the built-in file tools to the workspace (see
+    /// [`PathGuard`]). Always set by the binary; `None` means no containment,
+    /// which is only sensible in tests.
+    path_guard: Option<crate::path_guard::PathGuard>,
+    /// OS-level sandbox for shell-executing tools. Cloned into each shell
+    /// tool's handler at registration time.
     sandbox: Option<Sandbox>,
 }
 
@@ -88,35 +93,57 @@ impl ToolManager {
         Self::default()
     }
 
-    /// Enable sandboxing: all path-based tools (`ls`, `read`, `write`,
-    /// `edit`, `grep`, `glob`) are confined to the sandbox root, and the
-    /// `run` tool's explicit `cwd` is checked against it.
+    /// Confine the built-in file tools (`ls`, `read`, `write`, `edit`,
+    /// `grep`, `glob`) to the paths the guard allows.
+    ///
+    /// Unlike the process sandbox this can be set at any time — it is checked
+    /// in [`ToolManager::execute_tool_call`], not baked into handlers.
+    pub fn set_path_guard(&mut self, guard: crate::path_guard::PathGuard) {
+        self.path_guard = Some(guard);
+    }
+
+    /// The active path guard, if any.
+    pub fn path_guard(&self) -> Option<&crate::path_guard::PathGuard> {
+        self.path_guard.as_ref()
+    }
+
+    /// Enable the OS-level sandbox for `run` and custom tools.
+    ///
+    /// **Must be called before** [`register_defaults`] and
+    /// [`register_custom_tools`]: tool handlers are opaque closures, so the
+    /// sandbox is cloned into them at construction. Setting it afterwards
+    /// leaves the already-registered tools unsandboxed.
+    ///
+    /// [`register_defaults`]: ToolManager::register_defaults
+    /// [`register_custom_tools`]: ToolManager::register_custom_tools
     pub fn set_sandbox(&mut self, sandbox: Sandbox) {
         self.sandbox = Some(sandbox);
     }
 
-    /// The active sandbox, if any.
+    /// The active process sandbox, if any.
     pub fn sandbox(&self) -> Option<&Sandbox> {
         self.sandbox.as_ref()
     }
 
-    /// If a sandbox is active and this tool call would access a path outside
-    /// it, return the violation error message. Returns `None` if the call is
-    /// allowed (or no sandbox is active).
-    pub fn sandbox_check(&self, tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
-        let sandbox = self.sandbox.as_ref()?;
-        check_tool_args_sandboxed(sandbox, tool_name, arguments)
+    /// If a path guard is active and this tool call would access a path
+    /// outside it, return the violation error message. Returns `None` if the
+    /// call is allowed (or no guard is active).
+    pub fn path_check(&self, tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
+        let guard = self.path_guard.as_ref()?;
+        check_tool_args_guarded(guard, tool_name, arguments)
     }
 
     /// Register all built-in tools.
     pub fn register_defaults(&mut self) {
+        let sandbox = self.sandbox.clone();
         self.register_tool(crate::tools::auto_compact::auto_compact_tool_entry());
         self.register_tool(crate::tools::ls::ls_tool_entry());
         self.register_tool(crate::tools::read::read_tool_entry());
         self.register_tool(crate::tools::write::write_tool_entry());
         self.register_tool(crate::tools::edit::edit_tool_entry());
         self.register_tool(crate::tools::grep::grep_tool_entry());
-        self.register_tool(crate::tools::run::run_tool_entry());
+        self.register_tool(crate::tools::run::run_tool_entry(sandbox));
+        self.register_tool(crate::tools::glob::glob_tool_entry());
         self.register_tool(crate::tools::glob::glob_tool_entry());
         self.register_tool(crate::tools::web_search::web_search_tool_entry());
         self.register_tool(crate::tools::web_search::web_fetch_tool_entry());
@@ -135,6 +162,7 @@ impl ToolManager {
     pub fn register_custom_tools(&mut self, tools: &[crate::custom_tools::CustomToolDefinition]) {
         let existing: std::collections::HashSet<String> =
             self.tools.iter().map(|t| t.name.clone()).collect();
+        let sandbox = self.sandbox.clone();
         for def in tools {
             if existing.contains(&def.name) {
                 tracing::warn!(
@@ -143,7 +171,7 @@ impl ToolManager {
                 );
                 continue;
             }
-            match def.build_tool() {
+            match def.build_tool_with_sandbox(sandbox.clone()) {
                 Ok(tool) => self.register_tool(tool),
                 Err(e) => tracing::warn!("Failed to register custom tool '{}': {}", def.name, e),
             }
@@ -290,10 +318,10 @@ impl ToolManager {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> String {
-        // Sandbox enforcement: reject any tool call that would touch a path
-        // outside the sandbox root. This happens before the tool handler runs,
-        // so it applies regardless of auto-accept mode.
-        if let Some(error) = self.sandbox_check(tool_name, arguments) {
+        // Path containment: reject any tool call that would touch a path
+        // outside the allowed roots. This happens before the tool handler
+        // runs, so it applies regardless of auto-accept mode.
+        if let Some(error) = self.path_check(tool_name, arguments) {
             return error;
         }
 
@@ -305,17 +333,18 @@ impl ToolManager {
     }
 }
 
-/// Enforce sandbox containment for a tool call's arguments.
+/// Enforce path containment for a tool call's arguments.
 ///
 /// Path-bearing tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`) have
-/// their path/pattern arguments checked against the sandbox root. The `run`
-/// tool's explicit `cwd` (if any) is also checked; arbitrary command content
-/// cannot be statically sandboxed, but shell commands inherit the sandboxed
-/// process's CWD for relative paths, and the confirmation layer still applies.
+/// their path/pattern arguments checked against the guard. The `run` tool's
+/// explicit `cwd` is also checked — not because a sandboxed shell could
+/// escape (it couldn't; the directory simply would not exist in the mount
+/// tree), but so the model gets a clear containment error instead of a
+/// confusing `No such file or directory`.
 ///
 /// Returns `Some(error)` to block the call, or `None` to allow it.
-fn check_tool_args_sandboxed(
-    sandbox: &Sandbox,
+fn check_tool_args_guarded(
+    guard: &crate::path_guard::PathGuard,
     tool_name: &str,
     arguments: &serde_json::Value,
 ) -> Option<String> {
@@ -330,21 +359,21 @@ fn check_tool_args_sandboxed(
         // Tools with a required "path" argument
         "ls" | "read" | "write" | "edit" => {
             let path = arg_str("path").unwrap_or_default();
-            sandbox.resolve_contained(&path).err()
+            guard.resolve_contained(&path).err()
         }
         // grep: optional "path" directory argument (defaults to ".")
         "grep" => {
             let path = arg_str("path").unwrap_or_else(|| ".".to_string());
-            sandbox.resolve_contained(&path).err()
+            guard.resolve_contained(&path).err()
         }
-        // glob: the static prefix of the pattern must be inside the sandbox
+        // glob: the static prefix of the pattern must be inside an allowed root
         "glob" => {
             let pattern = arg_str("pattern").unwrap_or_default();
-            sandbox.check_glob_pattern(&pattern).err()
+            guard.check_glob_pattern(&pattern).err()
         }
         // run: only the explicit "cwd" can be checked statically
         "run" => match arg_str("cwd") {
-            Some(cwd) if !cwd.trim().is_empty() => sandbox.resolve_contained(&cwd).err(),
+            Some(cwd) if !cwd.trim().is_empty() => guard.resolve_contained(&cwd).err(),
             _ => None,
         },
         // All other tools (web_search, web_fetch, signal tools, custom tools
@@ -353,35 +382,35 @@ fn check_tool_args_sandboxed(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::sandbox::Sandbox;
+    use crate::path_guard::PathGuard;
 
-    fn sandboxed_manager(root: &std::path::Path) -> ToolManager {
+    /// Manager with a path guard rooted at `root` and no process sandbox —
+    /// the shape the binary uses on platforms without bwrap/firejail.
+    fn guarded_manager(root: &std::path::Path) -> ToolManager {
         let mut manager = ToolManager::new();
+        manager.set_path_guard(PathGuard::new(root).unwrap());
         manager.register_defaults();
-        manager.set_sandbox(Sandbox::new(root).unwrap());
         manager
     }
 
     #[tokio::test]
-    async fn sandbox_blocks_read_outside_root() {
+    async fn guard_blocks_read_outside_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("read", &serde_json::json!({"path": "/etc/passwd"}))
             .await;
-        assert!(
-            result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
+        assert!(result.contains("/etc/passwd"), "result was: {result}");
     }
 
     #[tokio::test]
-    async fn sandbox_blocks_write_outside_root() {
+    async fn guard_blocks_write_outside_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let target = tmp.path().join("../escape.txt");
         let result = manager
             .execute_tool_call(
@@ -389,18 +418,15 @@ mod tests {
                 &serde_json::json!({"path": target.to_str().unwrap(), "content": "x"}),
             )
             .await;
-        assert!(
-            result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
         // Verify the file was NOT created
-        assert!(!target.canonicalize().map(|p| p.exists()).unwrap_or(false));
+        assert!(!target.exists());
     }
 
     #[tokio::test]
-    async fn sandbox_allows_write_inside_root() {
+    async fn guard_allows_write_inside_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let target = tmp.path().join("ok.txt");
         let result = manager
             .execute_tool_call(
@@ -413,49 +439,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_blocks_ls_outside_root() {
+    async fn guard_blocks_ls_outside_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("ls", &serde_json::json!({"path": "/"}))
             .await;
-        assert!(
-            result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
     }
 
     #[tokio::test]
-    async fn sandbox_blocks_grep_outside_root() {
+    async fn guard_blocks_grep_outside_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("grep", &serde_json::json!({"pattern": "x", "path": "/tmp"}))
             .await;
-        assert!(
-            result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
     }
 
     #[tokio::test]
-    async fn sandbox_blocks_glob_outside_root() {
+    async fn guard_blocks_glob_outside_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("glob", &serde_json::json!({"pattern": "/etc/**/*"}))
             .await;
-        assert!(
-            result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
     }
 
     #[tokio::test]
-    async fn sandbox_allows_relative_glob() {
+    async fn guard_allows_relative_glob() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.rs"), "fn main() {}").unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("glob", &serde_json::json!({"pattern": "**/*.rs"}))
             .await;
@@ -463,22 +480,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_blocks_run_with_outside_cwd() {
+    async fn guard_blocks_run_with_outside_cwd() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("run", &serde_json::json!({"command": "pwd", "cwd": "/"}))
             .await;
-        assert!(
-            result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
     }
 
     #[tokio::test]
-    async fn sandbox_allows_run_without_cwd() {
+    async fn guard_allows_run_without_cwd() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         let result = manager
             .execute_tool_call("run", &serde_json::json!({"command": "echo hi"}))
             .await;
@@ -486,34 +500,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_does_not_affect_non_path_tools() {
+    async fn guard_does_not_affect_non_path_tools() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = sandboxed_manager(tmp.path());
+        let manager = guarded_manager(tmp.path());
         // screenshot tool has no path arg — should not be blocked
         let result = manager
             .execute_tool_call("screenshot", &serde_json::json!({"description": "test"}))
             .await;
-        assert!(
-            !result.starts_with("Error: Sandbox violation"),
-            "result was: {result}"
-        );
+        assert!(!result.starts_with("Error: Path '"), "result was: {result}");
     }
 
     #[tokio::test]
-    async fn no_sandbox_allows_everything() {
+    async fn no_guard_allows_everything() {
         let tmp = tempfile::tempdir().unwrap();
         let mut manager = ToolManager::new();
         manager.register_defaults();
-        // Without sandbox, reading outside CWD works
+        // Without a guard, reading an arbitrary temp dir works.
         let result = manager
             .execute_tool_call(
                 "ls",
                 &serde_json::json!({"path": tmp.path().to_str().unwrap()}),
             )
             .await;
-        assert!(
-            !result.contains("Sandbox violation"),
-            "result was: {result}"
+        assert!(!result.starts_with("Error: Path '"), "result was: {result}");
+    }
+
+    #[tokio::test]
+    async fn guard_rejects_symlink_escape_through_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).unwrap();
+
+        let manager = guarded_manager(tmp.path());
+        let result = manager
+            .execute_tool_call(
+                "read",
+                &serde_json::json!({"path": format!("{}/link/secret.txt", tmp.path().display())}),
+            )
+            .await;
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
+        assert!(!result.contains("top secret"), "leaked: {result}");
+    }
+
+    #[tokio::test]
+    async fn guard_honours_allowed_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let extra = tempfile::tempdir().unwrap();
+        std::fs::write(extra.path().join("note.txt"), "from allowed").unwrap();
+
+        let mut manager = ToolManager::new();
+        manager.set_path_guard(
+            PathGuard::configured(
+                tmp.path(),
+                &[extra.path().to_string_lossy().to_string()],
+                None,
+                &[],
+            )
+            .unwrap(),
         );
+        manager.register_defaults();
+
+        let result = manager
+            .execute_tool_call(
+                "read",
+                &serde_json::json!({"path": extra.path().join("note.txt").to_str().unwrap()}),
+            )
+            .await;
+        assert!(result.contains("from allowed"), "result was: {result}");
     }
 }

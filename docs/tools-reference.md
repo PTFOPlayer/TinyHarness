@@ -14,9 +14,18 @@ TinyHarness provides 15 tools across three categories. Each tool has a JSON Sche
 
 - **ReadOnly tools** run immediately in all modes
 - **Destructive tools** prompt for confirmation (Yes/No/Auto-accept for all)
-  - `run` can **never** be auto-accepted, even in `all` mode (only `write`/`edit` can)
-  - Safe commands within `run` may still auto-accept if `/autoaccept` is `safe` or `all` and the command passes safety checks
+  - `/autoaccept all` approves them without prompting, `run` included
+  - `/autoaccept safe` (the default) auto-approves a `run` command only when it
+    passes the safe/denied prefix checks; `write`/`edit` always prompt
+  - the per-turn `a` key approves the rest of the turn, except an unsafe `run`
+    command, which still prompts individually
 - **Signal tools** are intercepted by the agent loop before reaching generic tool execution
+
+Containment is enforced separately from approval and never adds a prompt: the
+file tools are confined to the workspace by the always-on path guard
+(`allowed_paths` widens it), and `run` plus custom tools can be wrapped in an
+OS-level sandbox with `--sandbox` / `sandbox.backend`. See
+[Safety & Security](safety.md#path-containment-and-the-process-sandbox).
 
 ### Mode Filtering
 
@@ -30,6 +39,13 @@ TinyHarness provides 15 tools across three categories. Each tool has a JSON Sche
 ---
 
 ## File System Tools
+
+All six tools below are confined by the always-on **path guard**: a `path`
+(res or the static prefix of a glob `pattern`) that resolves outside the
+workspace root — via an absolute path, `..` traversal, or a symlink — is
+rejected with an error before the tool runs, in every mode and regardless of
+auto-accept. Widen it with the `allowed_paths` setting; see
+[Safety & Security](safety.md#path-containment-and-the-process-sandbox).
 
 ### `ls` — List Directory
 
@@ -107,7 +123,7 @@ Finds files by glob pattern. Returns sorted results. Use this instead of `find` 
 
 ### `run` — Execute Shell Command
 
-**Category**: Destructive | **Auto-executes**: **Never**
+**Category**: Destructive | **Auto-executes**: when approved by the auto-accept policy
 
 Executes a shell command and returns its output (stdout, stderr, exit code, duration). Output is truncated at 5,000 chars for stdout and 2,000 for stderr. Default timeout is 30 seconds.
 
@@ -118,6 +134,12 @@ Executes a shell command and returns its output (stdout, stderr, exit code, dura
 | `cwd` | No | Working directory (default: project root) |
 
 Commands are checked against the safe/denied prefix lists. Shell metacharacters (`;`, `&`, `|`, `$()`, backticks, newlines) are rejected. Safe descriptor redirections (`2>&1`, `2>/dev/null`) are stripped before matching.
+
+An explicit `cwd` outside the workspace is rejected by the path guard before the
+command runs. With `--sandbox`, the command runs inside bwrap/firejail: the
+workspace is the only writable tree, the inherited environment is cleared of
+API keys, and `cwd` must lie inside it. The network is left available so
+`git`/`curl`/`cargo` keep working.
 
 ---
 

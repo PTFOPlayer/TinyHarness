@@ -184,23 +184,46 @@ refused rather than nothing at all.
 ### Auto-Accept Mode
 
 Toggle with `/autoaccept off`, `/autoaccept safe`, or `/autoaccept all`.
+The default is **`safe`** (`auto_accept_mode` in `settings.json`).
 
-**`off`** (default):
+**`off`**:
 - All destructive tools prompt for confirmation
 - No auto-accept toggle is offered
 
-**`safe`** (`auto_accept_mode: "safe"`):
+**`safe`** (default):
 - **ReadOnly** tools auto-execute (always, regardless of this setting)
-- **Destructive** `write` and `edit` get a prompt — but pressing `A` during confirmation enables auto-accept for the rest of the session
-- **Destructive** `run` is NEVER auto-accepted, even with `A`
+- **Destructive** `run` auto-executes when the command matches the safe-command
+  prefix list (`ls`, `git status`, …) and no denied prefix; otherwise it prompts
+- **Destructive** `write` and `edit` always prompt
 
-**`all`** (`auto_accept_mode: "all"`):
-- **Destructive** `write` and `edit` auto-execute without prompting
-- **Destructive** `run` still prompts — it is NEVER auto-accepted, even in `all` mode
+**`all`**:
+- Every tool call auto-executes without prompting, `run` included
 
-### `run` Tool Special Rule
+Pressing `a` at a confirmation prompt enables auto-accept **for the rest of the
+turn**. That approves `write` and `edit` and safe `run` commands, but an unsafe
+`run` command still prompts individually.
 
-The `run` tool can **never** be auto-accepted, even with `/autoaccept all` and pressing `A`. This is a hard rule — if commands are safe, they pass the safety checker and auto-execute. If they're not, you must confirm them individually.
+### Path Containment and the Process Sandbox
+
+Approval is only half of the story: what an approved call can *reach* is
+bounded separately, and neither mechanism adds a prompt.
+
+- **Path guard (always on)** — the built-in file tools (`ls`, `read`, `write`,
+  `edit`, `grep`, `glob`) are confined to the workspace root plus any
+  `allowed_paths` entries. The check runs before the tool handler, so it holds
+  under `/autoaccept all` and the `a` key. `..` traversal, absolute paths, and
+  symlink escapes are all rejected; system prefixes (`/etc`, `/usr`, `/proc`,
+  `/dev`, …) can never be allowed.
+- **Process sandbox (opt-in, Linux only)** — `--sandbox[=auto|bwrap|firejail|off]`
+  or the `sandbox` setting runs `run` and custom tools inside bubblewrap or
+  firejail. bubblewrap builds a private mount tree, so paths outside the
+  workspace do not exist there at all, and the environment is cleared of API
+  keys. The network is **not** isolated — sandboxed commands keep it, so
+  `git`/`curl`/`cargo` work. See the README's "Process sandbox" section for the
+  guarantees and their limits.
+
+Because both are enforced at execution time, a sandboxed command follows the
+same confirmation policy as an unsandboxed one.
 
 ---
 
@@ -208,12 +231,13 @@ The `run` tool can **never** be auto-accepted, even with `/autoaccept all` and p
 
 ### For Users
 
-1. **Sandbox**: Run TinyHarness inside a Docker container or VM for untrusted models
+1. **Enable the sandbox**: `--sandbox` (or `sandbox.backend` in `settings.json`) confines shell commands; the path guard already confines the file tools. For untrusted models, add a container or VM on top
 2. **Review before confirming**: Always read the proposed command before pressing `Y`
 3. **Use the deny list**: Block commands you never want auto-executed: `/command deny "git push --force"`
 4. **Per-project settings**: Set `auto_accept_mode: "off"` for sensitive projects
-5. **Limit tools by mode**: Use `planning` mode for analysis, switch to `agent` only when you need destructive operations
-6. **Check the audit log**: `/audit last` shows recently executed commands; `/audit session` shows all in this session
+5. **Keep `allowed_paths` narrow**: it is the only way to widen what the file tools can read, and an over-broad entry (say `/`) is silently trimmed for system prefixes but still exposes everything else
+6. **Limit tools by mode**: Use `planning` mode for analysis, switch to `agent` only when you need destructive operations
+7. **Check the audit log**: `/audit last` shows recently executed commands; `/audit session` shows all in this session
 
 ### For Project Maintainers
 

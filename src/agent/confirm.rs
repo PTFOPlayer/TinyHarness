@@ -28,29 +28,6 @@ pub enum ConfirmationDecision {
     Denied,
 }
 
-/// Built-in tools that may proceed without an explicit confirmation prompt
-/// in sandbox mode.
-///
-/// `write`/`edit` qualify because their path arguments are statically
-/// confined to the sandbox root before execution. The read-only tools qualify
-/// because their paths are checked at execution time (ls/read/grep/glob) or
-/// they touch no filesystem at all (web_search/web_fetch/screenshot).
-///
-/// Anything not on this list — `run`, signal tools, and all custom tools —
-/// runs shell commands that cannot be statically contained, so sandbox mode
-/// forces an explicit confirmation for them even under auto-accept.
-const SANDBOX_AUTO_APPROVABLE: &[&str] = &[
-    "ls",
-    "read",
-    "grep",
-    "glob",
-    "web_search",
-    "web_fetch",
-    "screenshot",
-    "write",
-    "edit",
-];
-
 /// Determine whether a tool call should be approved, needs user confirmation,
 /// or should be denied.
 ///
@@ -58,11 +35,6 @@ const SANDBOX_AUTO_APPROVABLE: &[&str] = &[
 /// the user interaction when `NeedsConfirmation` is returned.
 ///
 /// The logic follows these rules:
-/// 0. Sandbox mode: only tools in `SANDBOX_AUTO_APPROVABLE` (built-ins with
-///    contained paths or no filesystem access) may proceed without a prompt.
-///    `run` and any custom tool execute shell commands that cannot be
-///    statically contained, so they always require confirmation — even with
-///    auto-accept enabled or for custom read-only tools.
 /// 1. Read-only tools (no confirmation needed) → `AutoApproved { auto_accepted: false }`
 /// 2. Per-turn auto-accept (`auto_accept == true`) → `AutoApproved { auto_accepted: true }`
 ///    for everything except unsafe `run` commands (which prompt via `NeedsConfirmation`).
@@ -70,6 +42,11 @@ const SANDBOX_AUTO_APPROVABLE: &[&str] = &[
 /// 4. Auto-accept mode (Safe) → auto-approve safe `run` commands;
 ///    unsafe `run` and other destructive tools need confirmation.
 /// 5. Everything else → `NeedsConfirmation`
+///
+/// Sandboxing does not feature here: shell commands are confined by the OS
+/// (`--sandbox`) and the built-in file tools by the path guard, both enforced
+/// at execution time, so approval follows the ordinary auto-accept policy
+/// either way.
 pub fn decide_tool_confirmation(
     call: &ToolCall,
     auto_accept: bool,
@@ -77,15 +54,7 @@ pub fn decide_tool_confirmation(
     safe_commands: &[String],
     denied_commands: &[String],
     needs_confirmation: bool,
-    sandbox_active: bool,
 ) -> ConfirmationDecision {
-    // Sandbox mode gate: runs BEFORE the read-only early return so that
-    // custom read-only tools (arbitrary shell commands) also require an
-    // explicit confirmation. Built-ins on the allow-list proceed normally.
-    if sandbox_active && !SANDBOX_AUTO_APPROVABLE.contains(&call.function.name.as_str()) {
-        return ConfirmationDecision::NeedsConfirmation;
-    }
-
     // Read-only tools: always approved, never "auto-accepted"
     if !needs_confirmation {
         return ConfirmationDecision::AutoApproved {
@@ -157,15 +126,7 @@ mod tests {
     #[test]
     fn read_only_always_approved() {
         let call = make_call("read", json!({"path": "/tmp/file"}));
-        let decision = decide_tool_confirmation(
-            &call,
-            false,
-            AutoAcceptMode::Off,
-            &[],
-            &[],
-            false, // needs_confirmation = false → read-only
-            false,
-        );
+        let decision = decide_tool_confirmation(&call, false, AutoAcceptMode::Off, &[], &[], false);
         assert_eq!(
             decision,
             ConfirmationDecision::AutoApproved {
@@ -177,23 +138,14 @@ mod tests {
     #[test]
     fn safe_mode_prompts_for_destructive() {
         let call = make_call("write", json!({"path": "/tmp/file", "content": "hi"}));
-        let decision = decide_tool_confirmation(
-            &call,
-            false,
-            AutoAcceptMode::Safe,
-            &[],
-            &[],
-            true, // needs_confirmation = true → destructive
-            false,
-        );
+        let decision = decide_tool_confirmation(&call, false, AutoAcceptMode::Safe, &[], &[], true);
         assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
 
     #[test]
     fn all_mode_auto_approves_destructive() {
         let call = make_call("write", json!({"path": "/tmp/file", "content": "hi"}));
-        let decision =
-            decide_tool_confirmation(&call, false, AutoAcceptMode::All, &[], &[], true, false);
+        let decision = decide_tool_confirmation(&call, false, AutoAcceptMode::All, &[], &[], true);
         assert_eq!(
             decision,
             ConfirmationDecision::AutoApproved {
@@ -212,7 +164,6 @@ mod tests {
             &[],
             &[],
             true,
-            false,
         );
         assert_eq!(
             decision,
@@ -233,7 +184,6 @@ mod tests {
             &safe_commands,
             &[],
             true,
-            false,
         );
         assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
@@ -249,7 +199,6 @@ mod tests {
             &safe_commands,
             &[],
             true,
-            false,
         );
         assert_eq!(
             decision,
@@ -270,7 +219,6 @@ mod tests {
             &safe_commands,
             &[],
             true,
-            false,
         );
         assert_eq!(
             decision,
@@ -291,7 +239,6 @@ mod tests {
             &safe_commands,
             &[],
             true,
-            false,
         );
         assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
@@ -299,34 +246,23 @@ mod tests {
     #[test]
     fn off_mode_always_prompts() {
         let call = make_call("write", json!({"path": "/tmp/file", "content": "hi"}));
-        let decision =
-            decide_tool_confirmation(&call, false, AutoAcceptMode::Off, &[], &[], true, false);
+        let decision = decide_tool_confirmation(&call, false, AutoAcceptMode::Off, &[], &[], true);
         assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
 
-    // ── Sandbox mode tests ──────────────────────────────────────────────
+    // ── Sandbox interaction tests ───────────────────────────────────────
+    //
+    // Sandboxing is enforced at execution time (OS sandbox for shell tools,
+    // path guard for file tools), so it must not change the approval
+    // decision. These pin that down: the same inputs that pass without a
+    // sandbox pass with one.
 
     #[test]
-    fn sandbox_run_always_prompts_even_in_all_mode() {
+    fn sandboxing_does_not_force_confirmation() {
+        // `run` under auto-accept All is approved — the command is confined
+        // by the OS sandbox, so an extra prompt would add nothing.
         let call = make_call("run", json!({"command": "ls"}));
-        let decision =
-            decide_tool_confirmation(&call, false, AutoAcceptMode::All, &[], &[], true, true);
-        assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
-    }
-
-    #[test]
-    fn sandbox_run_always_prompts_with_per_turn_auto_accept() {
-        let call = make_call("run", json!({"command": "ls"}));
-        let decision =
-            decide_tool_confirmation(&call, true, AutoAcceptMode::Off, &[], &[], true, true);
-        assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
-    }
-
-    #[test]
-    fn sandbox_write_can_be_auto_approved() {
-        let call = make_call("write", json!({"path": "./file", "content": "hi"}));
-        let decision =
-            decide_tool_confirmation(&call, true, AutoAcceptMode::All, &[], &[], true, true);
+        let decision = decide_tool_confirmation(&call, false, AutoAcceptMode::All, &[], &[], true);
         assert_eq!(
             decision,
             ConfirmationDecision::AutoApproved {
@@ -336,66 +272,27 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_edit_can_be_auto_approved() {
-        let call = make_call(
-            "edit",
-            json!({"path": "./file", "old_str": "a", "new_str": "b"}),
-        );
+    fn sandboxing_does_not_bypass_the_safe_list() {
+        // An unsafe command still prompts, sandboxed or not.
+        let safe = tinyharness_lib::config::get_default_safe_commands();
+        let call = make_call("run", json!({"command": "rm -rf /"}));
         let decision =
-            decide_tool_confirmation(&call, true, AutoAcceptMode::All, &[], &[], true, true);
-        assert_eq!(
-            decision,
-            ConfirmationDecision::AutoApproved {
-                auto_accepted: true
-            }
-        );
+            decide_tool_confirmation(&call, false, AutoAcceptMode::Safe, &safe, &[], true);
+        assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
     }
 
     #[test]
-    fn sandbox_read_only_tools_unaffected() {
-        let call = make_call("read", json!({"path": "./file"}));
-        let decision =
-            decide_tool_confirmation(&call, false, AutoAcceptMode::Off, &[], &[], false, true);
+    fn custom_tools_follow_the_normal_policy() {
+        // Custom tools used to always prompt under --sandbox because they
+        // could not be contained; now they are sandboxed like `run`, so a
+        // read-only one (needs_confirmation = false) is approved silently.
+        let call = make_call("my_custom_tool", json!({"arg": "x"}));
+        let decision = decide_tool_confirmation(&call, false, AutoAcceptMode::Off, &[], &[], false);
         assert_eq!(
             decision,
             ConfirmationDecision::AutoApproved {
                 auto_accepted: false
             }
         );
-    }
-
-    #[test]
-    fn sandbox_custom_readonly_tool_always_prompts() {
-        // Custom tools are shell commands — cannot be contained statically,
-        // so sandbox mode forces confirmation even if they're read-only and
-        // auto-accept mode is All.
-        let call = make_call("my_custom_tool", json!({"arg": "x"}));
-        let decision =
-            decide_tool_confirmation(&call, true, AutoAcceptMode::All, &[], &[], false, true);
-        assert_eq!(decision, ConfirmationDecision::NeedsConfirmation);
-    }
-
-    #[test]
-    fn sandbox_builtin_readonly_tools_unaffected() {
-        for name in [
-            "ls",
-            "grep",
-            "glob",
-            "web_search",
-            "web_fetch",
-            "screenshot",
-        ] {
-            let call = make_call(name, json!({}));
-            let decision =
-                decide_tool_confirmation(&call, false, AutoAcceptMode::All, &[], &[], false, true);
-            assert_eq!(
-                decision,
-                ConfirmationDecision::AutoApproved {
-                    auto_accepted: false
-                },
-                "tool {} should not prompt in sandbox mode",
-                name
-            );
-        }
     }
 }

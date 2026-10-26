@@ -130,6 +130,22 @@ impl ShellCommand {
         result
     }
 
+    /// The `TH_*` / raw environment variables for these tool arguments.
+    fn environment(&self, vars: &HashMap<String, String>) -> Vec<(String, String)> {
+        let mut out = Vec::with_capacity(vars.len() * 2);
+        for (key, value) in vars {
+            out.push((
+                format!("TH_{}", key.to_uppercase().replace([' ', '-'], "_")),
+                value.clone(),
+            ));
+        }
+        // Also the raw key, for templates that use `$name` instead of `$TH_NAME`.
+        for (key, value) in vars {
+            out.push((key.clone(), value.clone()));
+        }
+        out
+    }
+
     /// Execute the command asynchronously.
     ///
     /// Returns `Ok(stdout)` on success (exit code 0), or `Err(message)` on
@@ -138,28 +154,60 @@ impl ShellCommand {
     /// The `vars` are used for both `{var}` template substitution and as
     /// `TH_*` environment variables.
     pub async fn execute(&self, vars: &HashMap<String, String>) -> Result<String, String> {
-        let rendered = self.render(vars);
+        self.execute_with_sandbox(vars, None).await
+    }
 
-        let mut cmd = if cfg!(target_os = "windows") {
-            let mut c = tokio::process::Command::new("cmd");
-            c.arg("/C").arg(&rendered);
-            c
-        } else {
-            let mut c = tokio::process::Command::new("sh");
-            c.arg("-c").arg(&rendered);
-            c
+    /// [`ShellCommand::execute`] routed through an OS-level process sandbox.
+    ///
+    /// Custom tools are arbitrary shell templates, so they get the same
+    /// containment as the `run` tool: with a sandbox configured, the command
+    /// runs inside it.
+    pub async fn execute_with_sandbox(
+        &self,
+        vars: &HashMap<String, String>,
+        sandbox: Option<&crate::sandbox::Sandbox>,
+    ) -> Result<String, String> {
+        let rendered = self.render(vars);
+        let env = self.environment(vars);
+
+        let mut cmd = match (sandbox, cfg!(target_os = "windows")) {
+            (Some(sb), _) => {
+                // bwrap clears the environment inside the sandbox, so the
+                // tool's variables travel as explicit --setenv arguments
+                // rather than as inherited env vars.
+                let (program, sb_args) = sb.argv_with_env(
+                    &rendered,
+                    self.cwd.as_deref().map(std::path::Path::new),
+                    &env,
+                );
+                let mut c = tokio::process::Command::new(program);
+                c.args(sb_args);
+                c
+            }
+            (None, true) => {
+                let mut c = tokio::process::Command::new("cmd");
+                c.arg("/C").arg(&rendered);
+                c
+            }
+            (None, false) => {
+                let mut c = tokio::process::Command::new("sh");
+                c.arg("-c").arg(&rendered);
+                c
+            }
         };
 
-        // Set environment variables
-        for (key, value) in vars {
-            let env_key = format!("TH_{}", key.to_uppercase().replace([' ', '-'], "_"));
-            cmd.env(env_key, value);
-        }
-        // Also set the raw key as an env var for convenience
-        for (key, value) in vars {
+        // Set environment variables. Outside the sandbox these are inherited
+        // normally; inside it they are redundant but harmless, and keeping the
+        // call makes both paths behave identically for firejail (which, unlike
+        // bwrap, does not clear the environment).
+        for (key, value) in &env {
             cmd.env(key, value);
         }
 
+        // The CWD is set on the outer process for both paths: it is a real
+        // host directory, and bwrap binds the workspace at the same absolute
+        // path, so it resolves inside the sandbox too. (firejail has no
+        // --chdir and relies on this inheritance.)
         if let Some(ref cwd) = self.cwd {
             cmd.current_dir(cwd);
         }
@@ -227,7 +275,16 @@ async fn read_pipe<T: tokio::io::AsyncRead + Unpin>(mut pipe: Option<T>) -> Stri
 /// The tool arguments are passed as a `HashMap<String, String>` (same as
 /// built-in tools).
 pub async fn execute_shell_tool(command: &ShellCommand, args: &HashMap<String, String>) -> String {
-    match command.execute(args).await {
+    execute_shell_tool_with_sandbox(command, args, None).await
+}
+
+/// [`execute_shell_tool`] routed through an OS-level process sandbox.
+pub async fn execute_shell_tool_with_sandbox(
+    command: &ShellCommand,
+    args: &HashMap<String, String>,
+    sandbox: Option<&crate::sandbox::Sandbox>,
+) -> String {
+    match command.execute_with_sandbox(args, sandbox).await {
         Ok(stdout) => {
             if stdout.is_empty() {
                 "(no output)".to_string()

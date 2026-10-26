@@ -3,6 +3,7 @@ pub mod context;
 pub mod custom_tools;
 pub mod image;
 pub mod mode;
+pub mod path_guard;
 pub mod paths;
 pub mod provider;
 pub mod sandbox;
@@ -28,12 +29,13 @@ pub use custom_tools::{
 };
 pub use image::ImageAttachment;
 pub use mode::AgentMode;
+pub use path_guard::PathGuard;
 pub use paths::Paths;
 pub use provider::{
     ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,
     ToolCallFunction, ToolDefinition,
 };
-pub use sandbox::Sandbox;
+pub use sandbox::{Sandbox, SandboxBackend, SandboxOptions};
 pub use secret::SecretString;
 pub use session::{Session, SessionEntry, SessionMeta, SessionStore};
 pub use skill::{
