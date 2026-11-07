@@ -14,8 +14,7 @@
 //! settings, and `--no-sandbox` (like `--sandbox=off`) forces it off for one
 //! session. A bare `--sandbox` means "auto". The setting is global-only — a
 //! project `.tinyharness/config.json` cannot reach it, so a cloned repository
-//! cannot downgrade the user's containment. See
-//! [`SandboxConfig`](tinyharness_lib::config::SandboxConfig).
+//! cannot downgrade the user's containment. See [`SandboxConfig`].
 //!
 //! Failure handling: because sandboxing is the default rather than an opt-in,
 //! a sandbox that was *expected* but cannot be built is a **hard exit** — the

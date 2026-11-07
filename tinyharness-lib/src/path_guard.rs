@@ -461,7 +461,7 @@ impl PathGuard {
     /// `open(2)` — a racing process can swap a directory for a symlink in
     /// between (the process sandbox mounts the workspace read-write, so a
     /// sandboxed command can do exactly that). Verifying the descriptor's
-    /// real path (see [`PathGuard::verify_open_file`]) closes that race.
+    /// real path after the open closes that race.
     pub fn open_read_contained(&self, path: &Path) -> Result<std::fs::File, String> {
         let file = std::fs::File::open(path)
             .map_err(|e| format!("Error opening '{}': {}", path.display(), e))?;
