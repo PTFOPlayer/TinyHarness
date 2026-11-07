@@ -134,9 +134,10 @@ impl fmt::Display for AutoAcceptMode {
 /// have the network. A coding agent runs `git fetch`, `curl`, and `cargo add`
 /// constantly, so a knob that would break those is not worth exposing.
 ///
-/// Extra *readable* directories come from the top-level `allowed_paths`
-/// setting, which also drives the built-in file tools' path guard; only
-/// write access is configured here.
+/// Extra host directories come from the top-level `allowed_paths` setting,
+/// which also drives the built-in file tools' path guard (those tools run
+/// in-process, so the guard is their only confinement); only write access
+/// *inside the sandbox* is configured here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxConfig {
     /// Backend selector: `off` | `auto` | `bwrap` | `firejail`. Required
@@ -221,9 +222,13 @@ pub struct ProjectSettings {
     /// Override whether the model may ask questions for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions_enabled: Option<bool>,
-    /// Override the path-guard allow list for this project (replaces global).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_paths: Option<Vec<String>>,
+    // Deliberately **no `allowed_paths` field**: the path-guard allow list
+    // widens read *and write* access for the in-process file tools
+    // (`read`/`write`/`edit`), which no OS sandbox confines. A project config
+    // travels with the repository, so honouring it here would let any cloned
+    // repo open the user's home directory to those tools. Unknown keys are
+    // ignored by serde, so a stray `allowed_paths` block in a project file has
+    // no effect — the allow list is global-only, like `sandbox`.
 }
 
 /// Discover and load `.tinyharness/config.json` by walking up from `start_dir`.
@@ -312,10 +317,12 @@ pub struct MergedSettings {
     /// Not overridable per project: see [`SandboxConfig`].
     pub sandbox: SandboxConfig,
     pub sandbox_source: SettingSource,
-    /// Effective extra readable paths for the file tools.
+    /// Effective extra allowed paths for the file tools — always the global
+    /// list.
     ///
-    /// Project entries *extend* the global list (like safe commands) — adding
-    /// a path in a project config should not silently revoke a global one.
+    /// Not overridable per project: see [`ProjectSettings`]. These paths get
+    /// read **and write** access from the in-process file tools, so a
+    /// repository-controlled config must never be able to add one.
     pub allowed_paths: Vec<String>,
     pub allowed_paths_source: SettingSource,
 }
@@ -456,24 +463,12 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
             let sandbox = global.sandbox.clone();
             let sandbox_source = SettingSource::Global;
 
-            // Allowed paths: project extends global.
-            let allowed_paths = match &p.allowed_paths {
-                Some(proj) => {
-                    let mut combined = global.allowed_paths.clone().unwrap_or_default();
-                    for path in proj {
-                        if !combined.contains(path) {
-                            combined.push(path.clone());
-                        }
-                    }
-                    combined
-                }
-                None => global.allowed_paths.clone().unwrap_or_default(),
-            };
-            let allowed_paths_source = if p.allowed_paths.is_some() {
-                SettingSource::Project
-            } else {
-                SettingSource::Default
-            };
+            // Allowed paths: global only, never overridable by the project.
+            // The file tools run in-process, so an allowed path is a *write*
+            // grant as well as a read grant — a `.tinyharness/config.json`
+            // that travels with a repository must not be able to add one.
+            let allowed_paths = global.allowed_paths.clone().unwrap_or_default();
+            let allowed_paths_source = SettingSource::Global;
 
             MergedSettings {
                 safe_commands,
@@ -524,10 +519,10 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
         preferred_mode: Some(settings.preferred_mode),
         auto_compact_enabled: Some(settings.auto_compact_enabled),
         questions_enabled: Some(settings.questions_enabled),
-        // Deliberately not templated: the path allow list is a machine-local
-        // security decision (which absolute paths exist on this host), and the
-        // sandbox is not a project setting at all — see `ProjectSettings`.
-        allowed_paths: None,
+        // Deliberately not templated: the sandbox and the path allow list are
+        // machine-local security decisions (which backend is installed, which
+        // absolute paths exist on this host) and are not project settings at
+        // all — see `ProjectSettings`.
     }
 }
 
@@ -723,8 +718,10 @@ pub struct Settings {
     /// overrides the stored value for one session).
     #[serde(default, skip_serializing_if = "SandboxConfig::is_disabled")]
     pub sandbox: SandboxConfig,
-    /// Extra host directories the built-in file tools may read, beyond the
-    /// workspace root.
+    /// Extra host directories the built-in file tools may access, beyond the
+    /// workspace root. **Global-only**: a project `.tinyharness/config.json`
+    /// cannot add entries, because the file tools run in-process (no OS
+    /// sandbox) and this list grants them read *and* write.
     ///
     /// Entries may be absolute, `~`-prefixed, or relative to the workspace
     /// root. The workspace root itself is always allowed and is exempt from
@@ -733,8 +730,8 @@ pub struct Settings {
     /// [`DEFAULT_BLOCKED_PREFIXES`](crate::path_guard::DEFAULT_BLOCKED_PREFIXES).
     ///
     /// Under bwrap these are also bound read-only into the sandbox, so
-    /// `run` sees the same view as `read`. Grant write access via
-    /// [`SandboxConfig::writable_paths`] instead.
+    /// `run` sees the same view as `read`. Grant write access to sandboxed
+    /// commands via [`SandboxConfig::writable_paths`] instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_paths: Option<Vec<String>>,
 }
@@ -1414,6 +1411,34 @@ mod tests {
         let merged = merge_settings(&global, Some(&project));
         assert!(!merged.questions_enabled);
         assert_eq!(merged.questions_enabled_source, SettingSource::Project);
+    }
+
+    /// A project config must not be able to widen the path guard: the
+    /// `allowed_paths` key is unknown to `ProjectSettings` (dropped by serde)
+    /// and the merged allow list is always the global one — the file tools
+    /// run in-process, so a project entry would be a write grant outside the
+    /// workspace from a cloned repository.
+    #[test]
+    fn project_settings_cannot_set_allowed_paths() {
+        let global = Settings {
+            allowed_paths: Some(vec!["/opt/data".to_string()]),
+            ..Settings::default()
+        };
+
+        // A project file carrying `allowed_paths` parses (unknown keys are
+        // ignored) but has no effect on the merged settings.
+        let project: ProjectSettings =
+            serde_json::from_str(r#"{"allowed_paths": ["/", "~"]}"#).unwrap();
+        let merged = merge_settings(&global, Some(&project));
+        assert_eq!(merged.allowed_paths, vec!["/opt/data".to_string()]);
+        assert_eq!(merged.allowed_paths_source, SettingSource::Global);
+
+        // And the sandbox block is likewise ignored per project.
+        let project: ProjectSettings =
+            serde_json::from_str(r#"{"sandbox": {"backend": "off"}}"#).unwrap();
+        let merged = merge_settings(&global, Some(&project));
+        assert_eq!(merged.sandbox, global.sandbox);
+        assert_eq!(merged.sandbox_source, SettingSource::Global);
     }
 
     #[test]

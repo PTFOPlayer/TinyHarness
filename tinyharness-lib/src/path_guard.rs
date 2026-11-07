@@ -229,9 +229,18 @@ impl PathGuardBuilder {
                 canonical_root.join(trimmed)
             };
             let normalized = normalize_lexical(&expanded);
-            if blocked.iter().any(|b| normalized.starts_with(b)) {
+            // Reject in both directions: an entry *inside* a blocked prefix
+            // (`/etc/ssl`) is pointless, and an entry that *contains* one
+            // (`/`, `/var`) would let the blocked paths through the back
+            // door, because `covers()` only checks the blocked list against
+            // paths outside the workspace root. `starts_with` is
+            // component-wise, so `/root` does not match `/rootfoo`.
+            if blocked
+                .iter()
+                .any(|b| normalized.starts_with(b) || b.starts_with(&normalized))
+            {
                 tracing::warn!(
-                    "allowed_paths entry '{}' is covered by a blocked prefix — ignoring it",
+                    "allowed_paths entry '{}' overlaps a blocked prefix — ignoring it",
                     entry
                 );
                 continue;
@@ -445,6 +454,145 @@ impl PathGuard {
         self.resolve_contained(raw).is_ok()
     }
 
+    /// Open `path` for reading, then verify the open descriptor is contained.
+    ///
+    /// `resolve_contained` proves containment at check time, but the handler
+    /// opens the path later, and the kernel re-resolves every component at
+    /// `open(2)` — a racing process can swap a directory for a symlink in
+    /// between (the process sandbox mounts the workspace read-write, so a
+    /// sandboxed command can do exactly that). Verifying the descriptor's
+    /// real path (see [`PathGuard::verify_open_file`]) closes that race.
+    pub fn open_read_contained(&self, path: &Path) -> Result<std::fs::File, String> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| format!("Error opening '{}': {}", path.display(), e))?;
+        self.verify_open_file(&file, path)?;
+        Ok(file)
+    }
+
+    /// Open `path` for writing (create/truncate), then verify containment.
+    pub fn create_contained(&self, path: &Path) -> Result<std::fs::File, String> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|e| format!("Error opening '{}' for writing: {}", path.display(), e))?;
+        self.verify_open_file(&file, path)?;
+        Ok(file)
+    }
+
+    /// Open `path` as a directory, then verify the open descriptor.
+    pub fn open_dir_contained(&self, path: &Path) -> Result<std::fs::File, String> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| format!("Error opening directory '{}': {}", path.display(), e))?;
+        self.verify_open_file(&file, path)?;
+        Ok(file)
+    }
+
+    /// Read a file to a string through a verified descriptor.
+    pub fn read_contained(&self, path: &Path) -> Result<String, String> {
+        use std::io::Read;
+        let mut file = self.open_read_contained(path)?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)
+            .map_err(|e| format!("Error reading '{}': {}", path.display(), e))?;
+        Ok(buf)
+    }
+
+    /// Write a file through a verified descriptor, creating parent
+    /// directories one component at a time with each new directory verified
+    /// the same way (a plain `create_dir_all` would follow a symlink swapped
+    /// into place after the guard's check).
+    pub fn write_contained(&self, path: &Path, content: &str) -> Result<(), String> {
+        use std::io::Write;
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            self.create_dir_all_contained(parent)?;
+        }
+        let mut file = self.create_contained(path)?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Error writing '{}': {}", path.display(), e))?;
+        Ok(())
+    }
+
+    /// `create_dir_all` with per-component descriptor verification, so a
+    /// symlink swapped in after the guard's check cannot redirect directory
+    /// creation outside an allowed root.
+    pub fn create_dir_all_contained(&self, dir: &Path) -> Result<(), String> {
+        let mut missing: Vec<OsString> = Vec::new();
+        let mut ancestor = dir;
+        while !ancestor.exists() {
+            match (ancestor.file_name(), ancestor.parent()) {
+                (Some(name), Some(parent)) if parent != ancestor => {
+                    missing.push(name.to_os_string());
+                    ancestor = parent;
+                }
+                _ => return Err(self.violation_message(&dir.to_string_lossy())),
+            }
+        }
+        // Verify the existing ancestor itself, then build downward.
+        self.verify_open_file(&std::fs::File::open(ancestor).map_err(|e| {
+            format!("Error opening directory '{}': {}", ancestor.display(), e)
+        })?, dir)?;
+        let mut cur = ancestor.to_path_buf();
+        for comp in missing.iter().rev() {
+            cur.push(comp);
+            // `create_dir` fails if the component already exists (e.g. a
+            // racing process created it) — that is fine, the descriptor
+            // check below is what decides whether it is safe to use.
+            let _ = std::fs::create_dir(&cur);
+            let f = std::fs::File::open(&cur).map_err(|e| {
+                format!("Error opening directory '{}': {}", cur.display(), e)
+            })?;
+            self.verify_open_file(&f, dir)?;
+        }
+        Ok(())
+    }
+
+    /// Verify `file`'s descriptor resolves inside an allowed root.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn verify_open_file(&self, file: &std::fs::File, display: &Path) -> Result<(), String> {
+        use std::os::unix::io::AsRawFd;
+        let link = format!("/proc/self/fd/{}", file.as_raw_fd());
+        let real = std::fs::read_link(&link).map_err(|e| {
+            format!(
+                "Error: cannot verify opened file '{}' ({}); refusing it",
+                display.display(),
+                e
+            )
+        })?;
+        if !self.covers(&real) {
+            return Err(self.violation_message(&real.to_string_lossy()));
+        }
+        Ok(())
+    }
+
+    /// macOS has no `/proc`; `F_GETPATH` returns the descriptor's real path.
+    #[cfg(target_os = "macos")]
+    fn verify_open_file(&self, file: &std::fs::File, display: &Path) -> Result<(), String> {
+        use std::os::unix::io::AsRawFd;
+        let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        let ret = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+        if ret != 0 {
+            return Err(format!(
+                "Error: cannot verify opened file '{}' (F_GETPATH failed); refusing it",
+                display.display()
+            ));
+        }
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        let real = PathBuf::from(std::ffi::OsString::from_vec(buf[..len].to_vec()));
+        if !self.covers(&real) {
+            return Err(self.violation_message(&real.to_string_lossy()));
+        }
+        Ok(())
+    }
+
+    /// Non-Unix platforms have no descriptor-path query; the pre-open
+    /// `resolve_contained` check is the containment there.
+    #[cfg(not(unix))]
+    fn verify_open_file(&self, _file: &std::fs::File, _display: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Check a glob pattern against the guard: the static (non-wildcard)
     /// prefix of the pattern must resolve inside an allowed root.
     ///
@@ -485,6 +633,62 @@ mod tests {
 
     fn guard_in(tmp: &Path) -> PathGuard {
         PathGuard::new(tmp).unwrap()
+    }
+
+    /// The check-then-open race: `resolve_contained` authorizes a path while
+    /// `sub` is a real directory, then a racing process swaps `sub` for a
+    /// symlink to an outside directory. The open must still fail, because the
+    /// descriptor's real path is verified after `open(2)`.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn open_descriptor_is_verified_after_the_race() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "CANARY").unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/secret.txt"), "local").unwrap();
+        let sb = guard_in(&root);
+
+        // Authorized while `sub` is a real directory.
+        let resolved = sb.resolve_contained("sub/secret.txt").unwrap();
+        assert_eq!(sb.read_contained(&resolved).unwrap(), "local");
+
+        // The race: `sub` becomes a symlink to the outside directory.
+        std::fs::remove_dir_all(root.join("sub")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("sub")).unwrap();
+
+        // The descriptor now resolves outside, so both read and write of the
+        // previously-authorized path must fail closed.
+        let err = sb.open_read_contained(&resolved).unwrap_err();
+        assert!(err.contains("outside the workspace"), "err: {err}");
+        assert!(sb.read_contained(&resolved).is_err());
+        assert!(sb.write_contained(&resolved, "PWN").is_err());
+        // Nothing was written through the swapped symlink.
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+            "CANARY"
+        );
+    }
+
+    /// Parent-directory creation through the guard must not follow a symlink
+    /// swapped in for a not-yet-existing component.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn create_dir_all_contained_verifies_each_new_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let sb = guard_in(&root);
+
+        // `sub` does not exist yet; create it as a symlink to the outside
+        // dir, simulating a swap after the guard resolved the write path.
+        std::os::unix::fs::symlink(outside.path(), root.join("sub")).unwrap();
+
+        let target = root.join("sub/new-dir/file.txt");
+        assert!(sb.write_contained(&target, "PWN").is_err());
+        assert!(!outside.path().join("new-dir").exists());
     }
 
     #[test]
@@ -639,13 +843,16 @@ mod tests {
     #[test]
     fn blocked_prefix_defeats_overbroad_allowed_root() {
         let tmp = tempfile::tempdir().unwrap();
-        // Allowing "/" must not make /etc writable — the blocked list wins.
+        // Allowing "/" is rejected outright now: it contains every blocked
+        // prefix, and accepting it would still expose /home, /var/lib, etc.
+        // to the in-process write tools.
         let sb = PathGuard::configured(tmp.path(), &["/".to_string()], None, &[]).unwrap();
+        assert!(sb.allowed_roots().is_empty());
         assert!(!sb.contains("/etc/passwd"));
         assert!(!sb.contains("/usr/lib/libc.so"));
-        // ...but an unrelated path under "/" is reachable.
+        // ...and nothing else outside the workspace is reachable either.
         let other = tempfile::tempdir().unwrap();
-        assert!(sb.contains(other.path().join("x.txt").to_str().unwrap()));
+        assert!(!sb.contains(other.path().join("x.txt").to_str().unwrap()));
     }
 
     #[test]
@@ -664,6 +871,37 @@ mod tests {
         let sb = PathGuard::configured(tmp.path(), &["/etc".to_string()], None, &[]).unwrap();
         assert!(sb.allowed_roots().is_empty());
         assert!(!sb.contains("/etc/passwd"));
+    }
+
+    /// An allowed entry that *contains* a blocked prefix must be dropped too:
+    /// `"/"` covers `/etc`, and `"/var"` covers `/var/log`, so accepting them
+    /// would let `covers()` wave blocked system paths through.
+    #[test]
+    fn ancestor_of_a_blocked_prefix_is_not_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        for entry in ["/", "/var", "/run/.."] {
+            let sb = PathGuard::configured(tmp.path(), &[entry.to_string()], None, &[]).unwrap();
+            assert!(
+                sb.allowed_roots().is_empty(),
+                "entry {entry:?} must be dropped, got {:?}",
+                sb.allowed_roots()
+            );
+        }
+        let sb = PathGuard::configured(tmp.path(), &["/".to_string()], None, &[]).unwrap();
+        assert!(!sb.contains("/etc/passwd"));
+        assert!(!sb.contains("/var/log/auth.log"));
+        assert!(!sb.contains("/home/user/.bashrc"));
+    }
+
+    /// A sibling of a blocked prefix is fine: `/var/lib` does not contain
+    /// `/var/log`, and component-wise matching means `/root` does not cover
+    /// `/rootfoo`.
+    #[test]
+    fn sibling_of_a_blocked_prefix_is_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = PathGuard::configured(tmp.path(), &["/var/lib".to_string()], None, &[]).unwrap();
+        assert_eq!(sb.allowed_roots().len(), 1);
+        assert!(!sb.contains("/var/log/auth.log"));
     }
 
     #[test]

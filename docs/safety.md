@@ -218,7 +218,13 @@ bounded separately, and neither mechanism adds a prompt.
   `grep` never descends into a symlinked directory and `glob` filters its
   results through the guard, so neither can be walked out of the tree by a link
   inside it. The guard hands each tool the **resolved** path, so a relative
-  argument is never re-opened against the harness's working directory.
+  argument is never re-opened against the harness's working directory, and
+  `read`/`write`/`edit`/`ls` additionally verify the **open file descriptor's**
+  real path (`/proc/self/fd`, or `F_GETPATH` on macOS) after opening, so a
+  symlink swapped in between the check and the open still fails closed.
+  `allowed_paths` is global-only — a project config cannot widen it — and
+  entries overlapping a system prefix in either direction (`/etc/ssl`, `/`,
+  `/var`) are rejected.
 - **Process sandbox (on by default, Linux only)** — `--sandbox[=auto|bwrap|firejail]`
   or the `sandbox` setting runs `run` and custom tools inside bubblewrap or
   firejail. bubblewrap builds a private mount tree, so paths outside the
@@ -240,7 +246,7 @@ same confirmation policy as an unsandboxed one.
 2. **Review before confirming**: Always read the proposed command before pressing `Y`
 3. **Use the deny list**: Block commands you never want auto-executed: `/command deny "git push --force"`
 4. **Per-project settings**: Set `auto_accept_mode: "off"` for sensitive projects
-5. **Keep `allowed_paths` narrow**: it is the only way to widen what the file tools can read, and an over-broad entry (say `/`) is silently trimmed for system prefixes but still exposes everything else
+5. **Keep `allowed_paths` narrow**: it is the only way to widen what the file tools can access, and it grants **write** as well as read — an over-broad entry (say `/`) is rejected outright, but `/home` would still expose your whole home directory to `write`/`edit`. It is global-only, so a cloned repo cannot add entries
 6. **Limit tools by mode**: Use `planning` mode for analysis, switch to `agent` only when you need destructive operations
 7. **Check the audit log**: `/audit last` shows recently executed commands; `/audit session` shows all in this session
 

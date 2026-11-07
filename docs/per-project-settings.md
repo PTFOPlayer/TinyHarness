@@ -127,44 +127,32 @@ Controls whether the model may request conversation compaction. Defaults to `tru
 }
 ```
 
-### `allowed_paths`
+### `sandbox` and `allowed_paths` — not project settings
 
-Extends the global list of extra roots the built-in file tools may read beyond
-the workspace root. Entries may be absolute, `~`-prefixed, or relative to the
-project directory. There is no way to *narrow* the global list from a project
-config — only to add to it.
-
-```json
-{
-  "allowed_paths": ["../shared-schemas", "~/.local/share/mydata"]
-}
-```
-
-System prefixes (`/etc`, `/usr`, `/proc`, `/dev`, `/boot`, `/sys`, `/run`,
-`/var/log`, `/root`) are always rejected, so a broad entry like `"/"` cannot be
-used to reach system configuration. The workspace root itself is exempt from
-that block list. Under bwrap these paths are also bound read-only into the
-process sandbox, so `run` sees the same view as `read`.
-
-### `sandbox` — not a project setting
-
-The process sandbox **cannot** be configured per project. `ProjectSettings` has
-no `sandbox` field, and a `sandbox` block in `.tinyharness/config.json` is
-ignored (unknown keys are dropped by serde).
+Neither the process sandbox **nor** the path-guard allow list can be configured
+per project. `ProjectSettings` has no `sandbox` or `allowed_paths` field, and
+those blocks in `.tinyharness/config.json` are ignored (unknown keys are
+dropped by serde).
 
 This is deliberate: a project config travels inside the repository, so anyone
-who sends you a clone controls it. Honouring it would let a repository pin a
-weaker backend, or set `"backend": "off"` and silently disable the containment
-you configured for your own machine. Sandbox choice is global-only —
-`sandbox.backend` in `~/.config/tinyharness/settings.json`, or `--sandbox=…` /
-`--no-sandbox` on the command line. It defaults to `auto`, and a missing or
-broken backend is a **startup error** rather than a silent downgrade; pass
-`--no-sandbox` to opt out deliberately.
+who sends you a clone controls it. The sandbox block could pin a weaker
+backend or set `"backend": "off"`; worse, an `allowed_paths` entry widens the
+**in-process file tools**, which no OS sandbox confines — the file tools' guard
+is their only protection, and it grants read *and* write, so a cloned repo
+adding `"allowed_paths": ["~"]` could let the model overwrite `~/.bashrc` or
+`~/.ssh/authorized_keys`. Both are therefore global-only: `sandbox.backend` and
+`allowed_paths` in `~/.config/tinyharness/settings.json`, plus `--sandbox=…` /
+`--no-sandbox` on the command line. The sandbox defaults to `auto`, and a
+missing or broken backend is a **startup error** rather than a silent
+downgrade; pass `--no-sandbox` to opt out deliberately.
 
-`allowed_paths` **is** still per-project (see above): it only ever widens read
-access for a machine whose paths exist, its entries are validated against the
-blocked system prefixes, and a stale path is skipped with a warning — so it
-cannot be used to take anything away, and it cannot reach system configuration.
+Global `allowed_paths` entries may be absolute, `~`-prefixed, or relative to
+the workspace root. Entries overlapping a system prefix (`/etc`, `/usr`,
+`/proc`, `/dev`, `/boot`, `/sys`, `/run`, `/var/log`, `/root`) are rejected in
+*both* directions — `/etc/ssl` is pointless, and `/` or `/var` would contain a
+blocked prefix, so they are dropped too. The workspace root itself is exempt
+from that block list. Under bwrap the allowed paths are also bound read-only
+into the process sandbox, so `run` sees the same view as `read`.
 
 Neither key is written by `/project-settings init`: both are machine-local, and
 committing them would leak local layout.

@@ -96,8 +96,10 @@ impl ToolManager {
     /// Confine the built-in file tools (`ls`, `read`, `write`, `edit`,
     /// `grep`, `glob`) to the paths the guard allows.
     ///
-    /// Unlike the process sandbox this can be set at any time — it is checked
-    /// in [`ToolManager::execute_tool_call`], not baked into handlers.
+    /// **Must be called before** [`ToolManager::register_defaults`]: the
+    /// guard is checked in [`ToolManager::execute_tool_call`] *and* cloned
+    /// into the `ls`/`read`/`write`/`edit` handlers, which verify the opened
+    /// file descriptor against it (closing the check-then-open race).
     pub fn set_path_guard(&mut self, guard: crate::path_guard::PathGuard) {
         self.path_guard = Some(guard);
     }
@@ -179,11 +181,15 @@ impl ToolManager {
     /// Register all built-in tools.
     pub fn register_defaults(&mut self) {
         let sandbox = self.sandbox.clone();
+        // The file tools get the guard cloned in so they can verify the
+        // *opened* descriptor, not just the argument (see
+        // `PathGuard::open_read_contained`). Set the guard before this call.
+        let guard = self.path_guard.clone();
         self.register_tool(crate::tools::auto_compact::auto_compact_tool_entry());
-        self.register_tool(crate::tools::ls::ls_tool_entry());
-        self.register_tool(crate::tools::read::read_tool_entry());
-        self.register_tool(crate::tools::write::write_tool_entry());
-        self.register_tool(crate::tools::edit::edit_tool_entry());
+        self.register_tool(crate::tools::ls::ls_tool_entry(guard.clone()));
+        self.register_tool(crate::tools::read::read_tool_entry(guard.clone()));
+        self.register_tool(crate::tools::write::write_tool_entry(guard.clone()));
+        self.register_tool(crate::tools::edit::edit_tool_entry(guard));
         self.register_tool(crate::tools::grep::grep_tool_entry());
         self.register_tool(crate::tools::run::run_tool_entry(sandbox));
         self.register_tool(crate::tools::glob::glob_tool_entry());

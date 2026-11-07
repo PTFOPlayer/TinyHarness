@@ -167,7 +167,7 @@ Both are enforced at execution time, so they hold regardless of auto-accept.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allowed_paths` | vec\|null | `null` | Extra host roots the built-in file tools may read, beyond the workspace root. Entries may be absolute, `~`-prefixed, or relative to the workspace. System prefixes (`/etc`, `/usr`, `/boot`, `/sys`, `/proc`, `/dev`, `/root`, `/var/log`, `/var/run`, `/run`) are always rejected; the workspace root is exempt from that block list. Under bwrap these are also bound read-only into the sandbox |
+| `allowed_paths` | vec\|null | `null` | Extra host roots the built-in file tools may access (read **and** write — those tools run in-process), beyond the workspace root. **Global-only**: a project `.tinyharness/config.json` cannot add entries. Entries may be absolute, `~`-prefixed, or relative to the workspace. Entries overlapping a system prefix (`/etc`, `/usr`, `/boot`, `/sys`, `/proc`, `/dev`, `/root`, `/var/log`, `/var/run`, `/run`) are rejected in both directions — `/etc/ssl` and `/` alike; the workspace root is exempt. Under bwrap these are also bound read-only into the sandbox |
 | `sandbox.backend` | string | `"auto"` | Process sandbox for `run` and custom tools, **on by default**: `"auto"` (best installed, bwrap preferred), `"bwrap"`, `"firejail"`, or `"off"`. Global-only — a project `.tinyharness/config.json` cannot override it. `--sandbox[=<backend>]` / `--no-sandbox` override it for one session |
 | `sandbox.writable_paths` | vec | `[]` | Extra host roots sandboxed commands may **write**. Reachable only by sandboxed shell commands, never by the file tools |
 
@@ -207,11 +207,13 @@ Overrides global settings for a specific project. See [Per-Project Settings](per
   "auto_accept_mode": "off",
   "context_limit": 32768,
   "project_md_files": ["RULES.md", ".cursorrules"],
-  "preferred_mode": "agent",
-  "allowed_paths": ["../shared-schemas"],
-  "sandbox": { "backend": "bwrap" }
+  "preferred_mode": "agent"
 }
 ```
+
+`sandbox` and `allowed_paths` are **global-only** — they are not project
+settings and are ignored in `.tinyharness/config.json` (see
+[per-project-settings.md](per-project-settings.md)).
 
 ### Layering
 
@@ -222,10 +224,13 @@ Overrides global settings for a specific project. See [Per-Project Settings](per
 ```
 
 - `safe_command_prefixes`: **Extends** (not replaces) the global list
-- `allowed_paths`: **Extends** the global list (adding a path in a project config should not revoke a global one)
 - `denied_command_prefixes`: **Replaces** the global list
-- `sandbox`: **Replaces** the global block wholesale — a partial override would mix `backend` and `writable_paths` from two files, which is exactly what a security setting should not do
 - All other fields: **Override** if present, fall back to global if absent
+
+`sandbox` and `allowed_paths` are deliberately **not** project fields: a
+project config travels with the repository, and those two control containment
+(the sandbox backend, and the file tools' read/write allow list), so a cloned
+repo must not be able to weaken them.
 
 `/init` does not template `sandbox` or `allowed_paths` into a new
 `.tinyharness/config.json`: both are machine-local (which backend is installed,
@@ -342,9 +347,12 @@ resolved.
     └── <session-id>/
 
 <project>/.tinyharness/
-├── config.json             Per-project settings
-├── custom_tools.json       Project custom-tools config (extends global)
+├── config.json             Per-project settings (no `sandbox`/`allowed_paths`)
 └── skills/                 Project-local skills
+
+Project-level `custom_tools.json` is **not** loaded: a custom tool is a shell
+command template and a cloned repo must not register commands on your machine.
+Custom tools are global-only (`~/.config/tinyharness/custom_tools.json`).
     └── <name>/
         └── SKILL.md
 ```
