@@ -34,9 +34,6 @@ fn describe(name: &str) -> &'static str {
         "ls" => "list a directory",
         "grep" => "search file contents",
         "glob" => "match files by pattern",
-        "web_search" => "search the web",
-        "web_fetch" => "fetch a web page",
-        "screenshot" => "capture a screenshot",
         _ => "",
     }
 }

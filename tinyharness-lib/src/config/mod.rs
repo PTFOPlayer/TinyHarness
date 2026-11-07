@@ -638,8 +638,6 @@ pub struct Settings {
     pub provider_models: HashMap<ProviderKind, String>,
     #[serde(default)]
     pub preferred_mode: AgentMode,
-    #[serde(default)]
-    pub ollama_api_key: Option<SecretString>,
     /// API key sent as `Authorization: Bearer <key>` by the OpenAI-compatible
     /// provider (`--openai-compat`). Set via `--api-key` or `OPENAI_API_KEY`
     /// env var. Not used by Ollama, llama.cpp, vLLM, or Sockudo.
@@ -757,7 +755,6 @@ impl Default for Settings {
             provider_urls: HashMap::new(),
             provider_models: HashMap::new(),
             preferred_mode: AgentMode::Casual,
-            ollama_api_key: None,
             openai_compat_api_key: None,
             sockudo_app_id: None,
             sockudo_app_key: None,
@@ -1337,7 +1334,6 @@ mod tests {
             "last_provider_url": "http://localhost:8080/v1",
             "last_model": "MiniMax-M3",
             "preferred_mode": "Agent",
-            "ollama_api_key": null,
             "openai_compat_api_key": "sk-test",
             "request_timeout_secs": 5,
             "request_max_retries": 3,

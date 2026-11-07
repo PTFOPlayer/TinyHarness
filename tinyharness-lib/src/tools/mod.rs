@@ -7,10 +7,8 @@ pub mod ls;
 pub mod question;
 pub mod read;
 pub mod run;
-pub mod screenshot;
 pub mod switch_mode;
 pub mod tool;
-pub mod web_search;
 pub mod write;
 
 use crate::mode::AgentMode;
@@ -193,12 +191,9 @@ impl ToolManager {
         self.register_tool(crate::tools::grep::grep_tool_entry());
         self.register_tool(crate::tools::run::run_tool_entry(sandbox));
         self.register_tool(crate::tools::glob::glob_tool_entry());
-        self.register_tool(crate::tools::web_search::web_search_tool_entry());
-        self.register_tool(crate::tools::web_search::web_fetch_tool_entry());
         self.register_tool(crate::tools::switch_mode::switch_mode_tool_entry());
         self.register_tool(crate::tools::question::question_tool_entry());
         self.register_tool(crate::tools::invoke_skill::invoke_skill_tool_entry());
-        self.register_tool(crate::tools::screenshot::screenshot_tool_entry());
     }
 
     pub fn register_tool(&mut self, tool: Tool) {
@@ -248,12 +243,8 @@ impl ToolManager {
                 .filter(is_available)
                 .map(|t| t.to_definition())
                 .collect(),
-            AgentMode::Casual => self
-                .tools
-                .iter()
-                .filter(|t| is_available(t) && (t.name == "web_search" || t.name == "web_fetch"))
-                .map(|t| t.to_definition())
-                .collect(),
+            // Casual mode is pure chat — no tools are advertised.
+            AgentMode::Casual => Vec::new(),
             AgentMode::Planning => self
                 .tools
                 .iter()
@@ -466,8 +457,8 @@ fn resolve_tool_args_guarded(
                 resolve_into("cwd", cwd)?;
             }
         }
-        // All other tools (web_search, web_fetch, signal tools, custom tools
-        // without a known path arg) are not subject to path containment.
+        // All other tools (signal tools, custom tools without a known path
+        // arg) are not subject to path containment.
         _ => {}
     }
 
@@ -597,9 +588,9 @@ mod tests {
     async fn guard_does_not_affect_non_path_tools() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = guarded_manager(tmp.path());
-        // screenshot tool has no path arg — should not be blocked
+        // switch_mode tool has no path arg — should not be blocked
         let result = manager
-            .execute_tool_call("screenshot", &serde_json::json!({"description": "test"}))
+            .execute_tool_call("switch_mode", &serde_json::json!({"mode": "agent"}))
             .await;
         assert!(!result.starts_with("Error: Path '"), "result was: {result}");
     }

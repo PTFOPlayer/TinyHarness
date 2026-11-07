@@ -6,25 +6,25 @@ TinyHarness has four agent modes that control which tools are available and how 
 
 | Mode | Tools | Purpose | Best For |
 |------|-------|---------|----------|
-| **casual** | `web_search`, `web_fetch` | Chat with web access | General questions, research without touching your code |
+| **casual** | (none) | Pure chat, no tools | General questions without touching your code |
 | **planning** | All ReadOnly + all Signal | Analyze, plan, escalate | Codebase exploration, architecture review, planning changes |
-| **agent** | All 15 tools | Full development access | Writing code, running commands, full development workflow |
+| **agent** | All tools | Full development access | Writing code, running commands, full development workflow |
 | **research** | All ReadOnly + all Signal | Web research, escalate | Research-heavy tasks with codebase awareness |
 
 ## Tool Availability by Mode
 
 ### Casual
 ```
-Available: web_search, web_fetch
+Available: (none)
 Not available: ls, read, write, edit, grep, glob, run,
-               switch_mode, question, auto_compact, invoke_skill, screenshot
+               switch_mode, question, auto_compact, invoke_skill
 ```
-The most restricted mode. No filesystem access at all. The AI can search the web and fetch pages, but cannot read or modify files.
+The most restricted mode. Pure chat — no tools at all, so no filesystem access, no commands, no web access.
 
 ### Planning
 ```
-Available: ls, read, grep, glob, web_search, web_fetch,
-          switch_mode, question, auto_compact, invoke_skill, screenshot
+Available: ls, read, grep, glob,
+          switch_mode, question, auto_compact, invoke_skill
 Not available: write, edit, run
 ```
 Can explore code but not change it. Ideal for architecture discussions, code reviews, and planning before switching to agent mode.
@@ -32,16 +32,15 @@ Can explore code but not change it. Ideal for architecture discussions, code rev
 ### Agent
 ```
 Available: ls, read, write, edit, grep, glob, run,
-          web_search, web_fetch, switch_mode, question,
-          auto_compact, invoke_skill, screenshot
+          switch_mode, question, auto_compact, invoke_skill
 Not available: (none)
 ```
 Full access. All tools are available. This is the default for development work.
 
 ### Research
 ```
-Available: ls, read, grep, glob, web_search, web_fetch,
-          switch_mode, question, auto_compact, invoke_skill, screenshot
+Available: ls, read, grep, glob,
+          switch_mode, question, auto_compact, invoke_skill
 Not available: write, edit, run
 ```
 Same toolset as planning, but with a research-focused system prompt. The prompt emphasizes gathering information, cross-referencing sources, and presenting findings.
@@ -122,7 +121,7 @@ Used by agent, planning, and research modes. Contains:
 #### `casual.md` (self-contained, no header)
 ```
 You are a helpful AI assistant named TinyHarness. You run in casual mode
-with access to web search and web fetch only...
+with no tools at all — pure chat...
 ```
 
 #### `planning.md`
@@ -181,7 +180,6 @@ planning (review changes)
 
 - General programming questions ("How does Rust's borrow checker work?")
 - Research before touching code ("What's the best library for X?")
-- Quick web searches during development
 
 ### When to Use Research
 
@@ -239,7 +237,7 @@ Located in `ToolManager::tools_for_mode()` (`tinyharness-lib/src/tools/mod.rs`):
 fn tools_for_mode(&self, mode: AgentMode) -> Vec<ToolDefinition> {
     match mode {
         AgentMode::Agent => self.get_all_tool_definitions(),
-        AgentMode::Casual => /* web_search + web_fetch only */,
+        AgentMode::Casual => /* no tools — pure chat */,
         AgentMode::Planning => /* ReadOnly + Signal */,
         AgentMode::Research => /* ReadOnly + Signal */,
     }

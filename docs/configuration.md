@@ -10,7 +10,7 @@ Settings are loaded at startup. On first launch, defaults are used until you cha
 
 ### Setting vs. Saving
 
-- **Global settings** are managed via slash commands (`/command`, `/model`, `/apikey`, etc.)
+- **Global settings** are managed via slash commands (`/command`, `/model`, etc.)
 - **Project settings** are managed via `/project-settings` and `.tinyharness/config.json`
 - **Manual editing** the JSON file works too — reload with `/refresh`
 
@@ -28,7 +28,6 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
   "last_provider_url": "http://127.0.0.1:11434",
   "last_model": "qwen2.5-coder:14b",
   "preferred_mode": "agent",
-  "ollama_api_key": null,
   "openai_compat_api_key": null,
   "sockudo_app_id": null,
   "sockudo_app_key": null,
@@ -122,7 +121,6 @@ Can be overridden per-project via `.tinyharness/config.json` → `preferred_mode
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `ollama_api_key` | string\|null | `null` | API key for Ollama cloud features (`web_search`, `web_fetch`). Set via `/apikey <key>`. Leave `null` for local-only use |
 | `ollama_think_type` | string | `"medium"` | Reasoning level for models that support it (qwen2.5 variants): `"off"`, `"low"`, `"medium"`, `"high"`. Set via `/think <level>` |
 
 ### Request Timeout & Retry Settings (provider-agnostic)
@@ -276,7 +274,7 @@ On first launch, TinyHarness seeds this directory with default `.md` prompt file
 ├── header.md         Shared header for agent/planning/research
 ├── casual.md         Self-contained casual mode prompt
 ├── planning.md       Planning mode (ReadOnly + Signal tools)
-├── agent.md          Agent mode (all 15 tools)
+├── agent.md          Agent mode (all tools)
 └── research.md       Research mode (ReadOnly + Signal tools)
 ```
 

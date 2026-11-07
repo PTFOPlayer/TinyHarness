@@ -1,4 +1,3 @@
-pub mod apikey;
 pub mod audit;
 pub mod clear;
 pub mod command;
@@ -103,23 +102,6 @@ pub fn build_registry() -> CommandRegistry {
         "Show current settings. Use 'all' to list all safe commands.",
         "/settings [all]",
         |arg, ctx, _msg| crate::commands::settings::execute(&mut ctx.output, &ctx.paths, arg),
-    );
-
-    reg.register_sync_with_usage(
-        "/apikey",
-        "Set or show the Ollama API key for web search. Use /apikey clear to remove it.",
-        "/apikey [key]",
-        |arg, ctx, _msg| {
-            let a = arg.unwrap_or("");
-            if a.is_empty() {
-                crate::commands::apikey::execute_show(&mut ctx.output, &ctx.paths);
-            } else if a == "clear" {
-                crate::commands::apikey::execute_clear(&mut ctx.output, &ctx.paths);
-            } else {
-                crate::commands::apikey::execute_set(&mut ctx.output, &ctx.paths, a);
-            }
-            Ok(CommandResult::Ok)
-        },
     );
 
     reg.register_sync_with_usage(
@@ -479,7 +461,6 @@ pub fn build_registry() -> CommandRegistry {
     reg.register_subcommands("/autoaccept", vec!["off", "safe", "all"]);
     reg.register_subcommands("/autocompact", vec!["off", "on"]);
     reg.register_subcommands("/questions", vec!["off", "on"]);
-    reg.register_subcommands("/apikey", vec!["clear"]);
     reg.register_subcommands("/showthink", vec!["off", "on"]);
     reg.register_subcommands("/think", vec!["high", "low", "medium", "off"]);
 

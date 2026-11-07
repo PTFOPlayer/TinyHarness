@@ -159,8 +159,8 @@ async fn create_provider(
         let _ = writeln!(
             err_out,
             "{BOLD}Error:{RESET} --openai-compat requires an API key. \
-             Pass {CYAN}--api-key <KEY>{RESET}, set the {CYAN}OPENAI_API_KEY{RESET} \
-             env var, or use {CYAN}/apikey <KEY>{RESET} once you are in. \
+             Pass {CYAN}--api-key <KEY>{RESET} or set the {CYAN}OPENAI_API_KEY{RESET} \
+             env var. \
              To use the gateway without auth, pass {CYAN}--api-key \"\"{RESET}.",
         );
         std::process::exit(1);
@@ -172,7 +172,6 @@ async fn create_provider(
         api_key,
         timeout_secs,
         max_retries,
-        settings.ollama_think_type,
         SockudoCredentials::from(settings),
     )?));
 

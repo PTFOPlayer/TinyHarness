@@ -104,13 +104,10 @@ impl CustomToolManager {
             "grep",
             "glob",
             "run",
-            "web_search",
-            "web_fetch",
             "switch_mode",
             "question",
             "auto_compact",
             "invoke_skill",
-            "screenshot",
         ];
         for tool in &combined.custom_tools {
             if builtin.contains(&tool.name.as_str()) {

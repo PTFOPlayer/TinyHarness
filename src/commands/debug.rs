@@ -384,7 +384,6 @@ fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
         "timeout_secs": settings.effective_timeout_secs(),
         "max_retries": settings.effective_max_retries(),
         "think_type": settings.ollama_think_type.to_string(),
-        "api_key_configured": settings.ollama_api_key.is_some(),
     });
 
     // ── Token usage ────────────────────────────────────────────────────────
@@ -686,12 +685,6 @@ fn dump_provider_diagnostics(file: &mut std::fs::File, ctx: &CommandContext) {
     writeln!(file, "Timeout: {}s", settings.effective_timeout_secs()).unwrap();
     writeln!(file, "Max retries: {}", settings.effective_max_retries()).unwrap();
     writeln!(file, "Think type: {}", settings.ollama_think_type).unwrap();
-    writeln!(
-        file,
-        "API key configured: {}",
-        settings.ollama_api_key.is_some()
-    )
-    .unwrap();
 }
 
 fn dump_token_usage(file: &mut std::fs::File, ctx: &CommandContext, messages: &[Message]) {
@@ -921,10 +914,9 @@ mod tests {
                     None,
                     120,
                     0,
-                    tinyharness_lib::config::OllamaThinkType::Off,
                     tinyharness_lib::provider::SockudoCredentials::default(),
                 )
-                .expect("valid test Ollama URL"),
+                .expect("valid test provider URL"),
             )),
             tinyharness_lib::context::WorkspaceContext::collect(),
             crate::test_helpers::isolated_paths("debug-ctx"),
