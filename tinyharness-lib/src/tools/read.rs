@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs;
+use std::path::Path;
 
 use crate::extract_args;
 use crate::image::SUPPORTED_MIME_TYPES;
+use crate::path_guard::PathGuard;
 use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, make_tool};
 use serde_json::Value;
 
@@ -16,7 +17,7 @@ const MAX_NOTEBOOK_VALUE_CHARS: usize = 4_000;
 /// structure-aware sanitizer cannot run.
 const MAX_SCRUBBED_LINE_CHARS: usize = 2_000;
 
-pub fn read_tool_entry() -> crate::tools::tool::Tool {
+pub fn read_tool_entry(guard: Option<PathGuard>) -> crate::tools::tool::Tool {
     make_tool(
         "read",
         "Read file content. Returns the entire file or a specific line range if from/to are provided. For image files (png, jpg, webp, gif, bmp), returns a description and the image data is automatically loaded for the model to view. For Jupyter notebooks (.ipynb), renders the JSON with base64 image outputs stripped and oversized text truncated — pass from/to to page through the rendered result.",
@@ -32,54 +33,91 @@ pub fn read_tool_entry() -> crate::tools::tool::Tool {
                 ),
             ],
         ),
-        |args| Box::pin(read_tool(args)),
+        move |args| {
+            let guard = guard.clone();
+            Box::pin(read_tool_inner(args, guard))
+        },
     )
 }
 
 pub fn read_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
-    Box::pin(async move {
-        extract_args!(args, path);
+    Box::pin(read_tool_inner(args, None))
+}
 
-        // Check if this is an image file — skip binary read, return description only.
-        // The agent layer will load the image as an ImageAttachment separately.
-        if is_image_file(&path) {
-            let dims = detect_image_dimensions(&path);
-            let dims_str = dims
-                .map(|(w, h)| format!("{}x{}px, ", w, h))
-                .unwrap_or_default();
-            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            let size_str = format_image_size(size);
-            let mime = guess_image_mime(&path).unwrap_or("unknown");
-            return format!(
-                "[IMAGE] {0}\nImage file: '{0}' ({1}{2} {3})\n\
-                This is an image — its content has been automatically loaded so you can view it.",
-                path, dims_str, size_str, mime,
-            );
+/// Read a file's bytes through the guard's verified descriptor when a guard
+/// is active, so a symlink swapped in after the argument check cannot redirect
+/// the read outside an allowed root.
+pub(crate) fn read_bytes_guarded(path: &str, guard: Option<&PathGuard>) -> Result<Vec<u8>, String> {
+    match guard {
+        Some(g) => {
+            use std::io::Read;
+            let mut file = g.open_read_contained(Path::new(path))?;
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)
+                .map_err(|e| format!("Error reading '{}': {}", path, e))?;
+            Ok(buf)
         }
+        None => fs::read(path).map_err(|e| e.to_string()),
+    }
+}
 
-        // Check if partial reading is requested
-        let from = args.get("from").and_then(|f| f.parse::<usize>().ok());
-        let to = args.get("to").and_then(|t| t.parse::<usize>().ok());
+/// Same as [`read_bytes_guarded`] for text.
+pub(crate) fn read_string_guarded(path: &str, guard: Option<&PathGuard>) -> Result<String, String> {
+    match guard {
+        Some(g) => g.read_contained(Path::new(path)),
+        None => fs::read_to_string(path).map_err(|e| e.to_string()),
+    }
+}
 
-        // Jupyter notebooks: embedded base64 image outputs routinely reach
-        // hundreds of kilobytes per cell and blow the model's input limit, so
-        // render a structure-aware, image-free view of the notebook instead of
-        // dumping the raw JSON. `from`/`to` page through the rendered text.
-        if is_notebook_file(&path) {
-            return read_notebook(&path, from, to);
-        }
+async fn read_tool_inner(args: HashMap<String, String>, guard: Option<PathGuard>) -> String {
+    extract_args!(args, path);
 
-        match (from, to) {
-            (Some(from), Some(to)) => read_partial(&path, from, to),
-            _ => match fs::read_to_string(&path) {
-                Ok(content) => {
-                    let line_count = content.lines().count();
-                    format!("({} lines)\n{}", line_count, content)
-                }
-                Err(e) => format!("Error reading file: {}", e),
-            },
-        }
-    })
+    // Check if this is an image file — skip binary read, return description only.
+    // The agent layer will load the image as an ImageAttachment separately.
+    if is_image_file(&path) {
+        // Read through the guard's verified descriptor when active, so a
+        // symlink swapped in after the argument check cannot redirect the
+        // read outside an allowed root.
+        let data = match read_bytes_guarded(&path, guard.as_ref()) {
+            Ok(d) => d,
+            Err(e) => return format!("Error reading file: {}", e),
+        };
+        let dims = image_dimensions(&data);
+        let dims_str = dims
+            .map(|(w, h)| format!("{}x{}px, ", w, h))
+            .unwrap_or_default();
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let size_str = format_image_size(size);
+        let mime = guess_image_mime(&path).unwrap_or("unknown");
+        return format!(
+            "[IMAGE] {0}\nImage file: '{0}' ({1}{2} {3})\n\
+            This is an image — its content has been automatically loaded so you can view it.",
+            path, dims_str, size_str, mime,
+        );
+    }
+
+    // Check if partial reading is requested
+    let from = args.get("from").and_then(|f| f.parse::<usize>().ok());
+    let to = args.get("to").and_then(|t| t.parse::<usize>().ok());
+
+    // Jupyter notebooks: embedded base64 image outputs routinely reach
+    // hundreds of kilobytes per cell and blow the model's input limit, so
+    // render a structure-aware, image-free view of the notebook instead of
+    // dumping the raw JSON. `from`/`to` page through the rendered text.
+    if is_notebook_file(&path) {
+        return read_notebook(&path, from, to, guard.as_ref());
+    }
+
+    match (from, to) {
+        (Some(from), Some(to)) => read_partial(&path, from, to, guard.as_ref()),
+        _ => match read_string_guarded(&path, guard.as_ref()) {
+            Ok(content) => {
+                let line_count = content.lines().count();
+                format!("({} lines)\n{}", line_count, content)
+            }
+            Err(e) => format!("Error reading file: {}", e),
+        },
+    }
 }
 
 /// Check if a path refers to a Jupyter notebook by extension.
@@ -109,8 +147,13 @@ pub fn is_notebook_file(path: &str) -> bool {
 ///
 /// `from`/`to` page through the *rendered* text, not the on-disk file, so the
 /// line numbers stay stable across reads.
-fn read_notebook(path: &str, from: Option<usize>, to: Option<usize>) -> String {
-    let raw = match fs::read_to_string(path) {
+fn read_notebook(
+    path: &str,
+    from: Option<usize>,
+    to: Option<usize>,
+    guard: Option<&PathGuard>,
+) -> String {
+    let raw = match read_string_guarded(path, guard) {
         Ok(content) => content,
         Err(e) => return format!("Error reading file: {e}"),
     };
@@ -270,6 +313,11 @@ pub fn guess_image_mime(path: &str) -> Option<&'static str> {
 /// Returns `None` for unsupported formats or on error.
 pub fn detect_image_dimensions(path: &str) -> Option<(u32, u32)> {
     let data = std::fs::read(path).ok()?;
+    image_dimensions(&data)
+}
+
+/// [`detect_image_dimensions`] on already-read bytes.
+fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     if data.len() < 24 {
         return None;
     }
@@ -314,19 +362,17 @@ fn format_image_size(bytes: u64) -> String {
     }
 }
 
-fn read_partial(path: &str, from: usize, to: usize) -> String {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(err) => return format!("Error: {}", err),
+fn read_partial(path: &str, from: usize, to: usize, guard: Option<&PathGuard>) -> String {
+    let raw = match read_string_guarded(path, guard) {
+        Ok(c) => c,
+        Err(e) => return format!("Error: {}", e),
     };
-
-    let reader = BufReader::new(file);
 
     let mut content = String::new();
     let mut lines_read = 0usize;
 
-    for line in reader.lines().skip(from).take(to).flatten() {
-        content.push_str(&line);
+    for line in raw.lines().skip(from).take(to) {
+        content.push_str(line);
         content.push('\n');
         lines_read += 1;
     }
@@ -407,7 +453,7 @@ mod tests {
     }
 
     fn read_nb(path: &std::path::Path) -> String {
-        read_notebook(&path.to_string_lossy(), None, None)
+        read_notebook(&path.to_string_lossy(), None, None, None)
     }
 
     #[test]
@@ -555,27 +601,32 @@ mod tests {
             b = fake_b64(20_000)
         );
         let path = write_notebook(dir.path(), "paged.ipynb", &nb);
-        let full = read_notebook(&path.to_string_lossy(), None, None);
+        let full = read_notebook(&path.to_string_lossy(), None, None, None);
         // `from`/`to` index the rendered body, never the meta line — the same
         // contract `read_partial` honours for plain files.
         let body: Vec<&str> = full.lines().skip(1).collect();
         assert!(body.len() > 4, "fixture should render several lines");
 
-        let window = read_notebook(&path.to_string_lossy(), Some(0), Some(3));
+        let window = read_notebook(&path.to_string_lossy(), Some(0), Some(3), None);
         assert!(window.starts_with("(3 lines from line 0)"));
         assert_eq!(window.lines().skip(1).collect::<Vec<_>>(), &body[..3]);
 
-        let middle = read_notebook(&path.to_string_lossy(), Some(1), Some(2));
+        let middle = read_notebook(&path.to_string_lossy(), Some(1), Some(2), None);
         assert_eq!(middle.lines().skip(1).collect::<Vec<_>>(), &body[1..3]);
 
-        let tail = read_notebook(&path.to_string_lossy(), Some(body.len() - 2), Some(5));
+        let tail = read_notebook(&path.to_string_lossy(), Some(body.len() - 2), Some(5), None);
         assert_eq!(
             tail.lines().skip(1).collect::<Vec<_>>(),
             &body[body.len() - 2..]
         );
         assert!(tail.contains("\"nbformat_minor\": 5"));
 
-        let empty = read_notebook(&path.to_string_lossy(), Some(body.len() + 10), Some(5));
+        let empty = read_notebook(
+            &path.to_string_lossy(),
+            Some(body.len() + 10),
+            Some(5),
+            None,
+        );
         assert!(empty.starts_with("Error: No lines to read"));
     }
 

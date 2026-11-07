@@ -6,7 +6,7 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 
 - **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
 - **Tool System**: 15 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `web_search`, `web_fetch`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, `screenshot`, plus the built-in `read` image loader for multimodal models).
-- **Custom Tools**: Extend TinyHarness with shell-command-based tools the LLM can call — defined in `custom_tools.json` (`~/.config/tinyharness/custom_tools.json` global, `.tinyharness/custom_tools.json` per-project), no Rust code or recompilation required. Supports `{param}` template substitution, `TH_*` env vars, `readonly`/`destructive` categories, and timeouts.
+- **Custom Tools**: Extend TinyHarness with shell-command-based tools the LLM can call — defined in `custom_tools.json` (`~/.config/tinyharness/custom_tools.json` global only; project-level files are not loaded, since a cloned repo must not register shell commands on your machine), no Rust code or recompilation required. Supports `{param}` template substitution, `TH_*` env vars, `readonly`/`destructive` categories, and timeouts.
 - **Agent Modes**: Four modes — `casual` (web-only), `planning` (read-only + signals), `agent` (full access), and `research` (web-focused) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
 - **Skills**: Pluggable SKILL.md modules discovered from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`. Invokable by the AI via `invoke_skill` or by the user via `/use <name>`. Supports YAML frontmatter with name, description, compatibility, licensing, and model-invocation controls.
 - **Context Management**: Token estimation with per-model context window sizes (8K–256K), load warnings at 70%/90% thresholds, and cascading conversation compaction via `/compact`.
@@ -152,7 +152,8 @@ Sends an initial prompt and then drops into the interactive loop for follow-up t
 | `--skip-health-check` | Skip provider health check at startup (a failure is otherwise just a warning) |
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
-| `--sandbox` | Restrict path-based tools to the current directory; `run` always requires confirmation (Linux only) |
+| `--sandbox[=<backend>]` | Pin the OS sandbox backend (`auto`, `bwrap`, `firejail`); on by default (Linux only) |
+| `--no-sandbox` | Run shell commands **unsandboxed** — the only way to opt out (Linux only) |
 
 ## Agent Modes
 
@@ -265,7 +266,7 @@ The `/command` system controls which shell commands are auto-accepted:
 /command resetdeny     # Clear the deny list
 ```
 
-Safe commands include `cd`, `ls`, `grep`, `cat`, `git status`, `git diff`, `git log`, `cargo tree`, and ~40 more. Shell redirections (`2>&1`, `2>/dev/null`) are stripped before matching. The deny list takes priority — if a command matches both lists, it is denied. The `run` tool can never be auto-accepted even in auto-accept mode.
+Safe commands include `cd`, `ls`, `grep`, `cat`, `git status`, `git diff`, `git log`, `cargo tree`, and ~40 more. Shell redirections (`2>&1`, `2>/dev/null`) are stripped before matching. The deny list takes priority — if a command matches both lists, it is denied. In `safe` mode a `run` command auto-executes only if it matches the safe list; `all` mode approves every command, and the per-turn `a` key still prompts for unsafe ones. To bound what an approved command can reach, see the process sandbox below.
 
 ### Session Compaction
 
@@ -347,7 +348,7 @@ tinyharness-lib/src/
 ├── secret.rs             SecretString wrapper for API key redaction (custom Debug, serde support)
 ├── image.rs              Image attachment handling (base64 encoding, dimension detection)
 ├── custom_tools/         Custom-tools system — shell-command tools via custom_tools.json
-│   ├── mod.rs            CustomToolManager — load/merge global + project configs
+│   ├── mod.rs            CustomToolManager — loads the global custom_tools.json only
 │   ├── custom_tool.rs    CustomToolDefinition, CustomToolCategory, build_tool()
 │   └── shell.rs          ShellCommand — template substitution, timeout, env vars
 ├── prompts/              Hardcoded default system prompts (header.md, casual.md, planning.md, agent.md, research.md)
@@ -490,29 +491,62 @@ After making changes, run:
 
 TinyHarness grants LLMs the ability to interact with your filesystem through tool calling. This introduces specific risks:
 
-- **Sandboxing**: Run within a sandboxed environment (Docker container, VM) to prevent unintended modifications.
+- **Sandboxing**: OS-level confinement for shell commands, **on by default** on Linux, plus an always-on path guard for the file tools. Opt out with `--no-sandbox`. For full isolation from an untrusted model, still prefer a container or VM.
 - **Non-determinism**: LLMs may hallucinate or produce incorrect tool arguments. Always review proposed actions.
 - **Accountability**: You assume full responsibility for all operations performed by the AI. Ensure you have backups.
 
-The `run` tool can never be auto-accepted — even in `all` mode — unlike `write` and `edit`. Safe commands (e.g., `ls`, `git status`) can be auto-accepted when `/autoaccept` is set to `safe` or `all`.
+The `run` tool follows the configured auto-accept policy: `/autoaccept safe` prompts for anything outside the safe-command list, `/autoaccept all` approves without asking, and the per-turn `a` key approves for the rest of the turn except for unsafe `run` commands. The sandbox — on by default — bounds what an approved command can reach.
 
-### Sandbox mode (`--sandbox`, Linux only)
+### Containment: path guard (always on)
 
-Start TinyHarness with `--sandbox` to confine the agent to the current working directory:
+The built-in file tools — `ls`, `read`, `write`, `edit`, `grep`, `glob` — run in-process, so they are confined by a **path guard** rather than an OS sandbox. This is unconditional: there is no flag to disable it.
 
-```bash
-tinyharness --sandbox
+- **Confined to the workspace root**: any path outside it is rejected with an error before the tool runs, so the check applies **even when auto-accept is enabled**.
+- **Path resolution is robust**: `..` traversal, absolute paths, and symlink escapes are all detected. Paths are resolved component by component in the order `open(2)` uses, so a `..` *after* a symlink is applied to the link's target rather than to the textual path — the case a purely lexical collapse gets wrong (`<root>/link/../etc/passwd` with `link -> /usr` opens `/etc/passwd`, and is rejected).
+- **Widen it deliberately**: set `allowed_paths` in the **global** `settings.json` (a project `.tinyharness/config.json` cannot add entries) to grant extra roots. Entries may be absolute, `~`-prefixed, or relative to the workspace. Note the file tools run in-process, so an allowed root gets read **and** write access from `read`/`write`/`edit`. Entries overlapping a system prefix (`/etc`, `/usr`, `/proc`, `/dev`, `/boot`, `/sys`, `/run`, `/var/log`, `/root`) are rejected in both directions — `/etc/ssl` and `/` alike — and the workspace root itself is exempt from that block list.
+
+```json
+{
+  "allowed_paths": ["../shared-schemas", "~/.local/share/mydata"]
+}
 ```
 
-On Windows and macOS the flag is rejected at startup with an error: `--sandbox is a Linux-only feature`.
+### Process sandbox (on by default, Linux only)
 
-In this mode:
-- **Path tools are confined**: `ls`, `read`, `write`, `edit`, `grep`, and `glob` reject any path outside the workspace root with a sandbox violation error. This check happens at the `ToolManager` level before execution, so it applies **even when auto-accept is enabled** (`/autoaccept all` or the per-turn `a` key).
-- **Path resolution is robust**: `..` traversal, absolute paths, and symlink escapes are all detected (paths are canonicalized against the sandbox root).
-- **`run` always needs confirmation**: shell commands cannot be statically contained, so the `run` tool always prompts for explicit approval in sandbox mode, regardless of auto-accept settings. Its explicit `cwd` argument is also checked against the sandbox root.
-- **The model is informed**: the system prompt includes a sandbox notice so the model avoids wasting turns on out-of-bounds paths.
+Shell commands (`run` and custom tools) can optionally run inside a real OS sandbox:
 
-Note: `run` commands that you approve can still touch anything the user account can reach — `--sandbox` constrains the tool layer, not the OS. For full isolation, combine it with a container/VM.
+```bash
+# Sandboxing is already on — no flag needed. Pin a backend only if you must:
+tinyharness --sandbox=bwrap        # pin bubblewrap
+tinyharness --sandbox=firejail     # pin firejail
+tinyharness --no-sandbox           # opt out for this session (also --sandbox=off)
+```
+
+The same choice persists as `sandbox` in `settings.json`:
+
+```json
+{
+  "sandbox": {
+    "backend": "auto",
+    "writable_paths": ["/tmp/build-cache"]
+  }
+}
+```
+
+bubblewrap is preferred and is what you should expect to be used. It builds a private mount tree from a `tmpfs` root and binds only the workspace (read-write), `/usr` and `/etc` (read-only), and your `allowed_paths` — so **files outside those roots do not exist inside the sandbox**, rather than merely being unreadable. It also unshares the PID/IPC/UTS/cgroup namespaces, clears the environment (no API keys reach a sandboxed command), and starts a new session. `/etc` is bound read-only along with whatever `/etc/resolv.conf` symlinks to, so DNS keeps working on systemd-resolved hosts.
+
+firejail takes the opposite approach: it mounts the **existing** host filesystem read-only and re-binds the workspace writable. Writes outside the workspace are blocked and privileges are dropped, but **reads outside it still succeed** — it is write/privilege containment, not visibility containment. It also normally needs a setuid helper.
+
+Behaviour notes:
+
+- **Auto-accept is unchanged by the sandbox.** A sandboxed command follows the same confirmation policy as an unsandboxed one; the sandbox bounds its reach instead of adding a prompt.
+- **The network is always available.** There is deliberately no network setting: an agent runs `git fetch`, `curl`, and `cargo add` constantly, so blocking the network would make the sandbox unusable rather than safe. Network isolation is out of scope — the containment is filesystem and environment.
+- **`allowed_paths` are bound read-only**, so `run` and `read` see the same extra trees. Use `sandbox.writable_paths` when a sandboxed command must write outside the workspace; those are reachable only by sandboxed commands, not by the file tools.
+- **The Rust toolchain stays usable**: `~/.cargo/bin` and `~/.rustup` are bound read-only and `$CARGO_HOME` points at a writable cache under the data dir. Because that cache starts empty, a sandboxed build that must *download* crates fetches them into it rather than reusing your populated `~/.cargo/registry`.
+- **A missing backend is a startup error, not a silent downgrade.** Since sandboxing is the default, continuing without one would mean unsandboxed shell commands under a user who believes they are contained. Install bubblewrap, or pass `--no-sandbox` to opt out deliberately.
+- On Windows and macOS there is no process sandbox: `--sandbox` is rejected at startup (`--sandbox is a Linux-only feature`) and `sandbox.backend` is ignored. `--no-sandbox` is accepted and is the norm there.
+
+Neither backend is a defence against a hostile *user*: sandboxed commands run as your uid, so anything inside the workspace (`.env`, `.git`, committed credentials) remains in scope, and there are no resource limits. For untrusted models, prefer a container or VM.
 
 ## Project Instructions (TINYHARNESS.md)
 

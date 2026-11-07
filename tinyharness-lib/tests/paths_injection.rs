@@ -198,7 +198,7 @@ fn workspace_context_collects_from_injected_project_dir() {
 }
 
 #[test]
-fn custom_tools_merge_from_injected_roots() {
+fn custom_tools_load_global_only_from_injected_roots() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = layout(tmp.path());
 
@@ -213,7 +213,8 @@ fn custom_tools_merge_from_injected_roots() {
     std::fs::create_dir_all(global_file.parent().unwrap()).unwrap();
     std::fs::write(&global_file, tool_json("global-tool")).unwrap();
 
-    // Project tool, discovered by walking up from the injected project dir.
+    // A project-level custom_tools.json must be ignored: it travels with the
+    // repository and would register shell commands on the user's machine.
     let project_cfg = paths.project_config_root();
     std::fs::create_dir_all(&project_cfg).unwrap();
     std::fs::write(
@@ -229,7 +230,7 @@ fn custom_tools_merge_from_injected_roots() {
         .map(|t| t.name.as_str())
         .collect();
     assert!(names.contains(&"global-tool"), "got {names:?}");
-    assert!(names.contains(&"project-tool"), "got {names:?}");
+    assert!(!names.contains(&"project-tool"), "got {names:?}");
 }
 
 #[test]

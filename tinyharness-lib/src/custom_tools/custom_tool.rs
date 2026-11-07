@@ -4,7 +4,7 @@ use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::shell::{ShellCommand, execute_shell_tool};
+use super::shell::{ShellCommand, execute_shell_tool_with_sandbox};
 use crate::tools::tool::{BoxFuture, Tool, ToolCategory, make_tool};
 
 /// Category string for custom tools, as used in the config file.
@@ -51,6 +51,20 @@ pub struct CustomToolDefinition {
 impl CustomToolDefinition {
     /// Convert this definition into a `Tool` that can be registered in `ToolManager`.
     pub fn build_tool(&self) -> Result<Tool, String> {
+        self.build_tool_with_sandbox(None)
+    }
+
+    /// [`CustomToolDefinition::build_tool`] with an OS-level process sandbox.
+    ///
+    /// The sandbox is captured by the handler because tool handlers are opaque
+    /// closures that outlive the `ToolManager`, so it must be supplied at
+    /// registration time — see [`ToolManager::set_sandbox`].
+    ///
+    /// [`ToolManager::set_sandbox`]: crate::tools::ToolManager::set_sandbox
+    pub fn build_tool_with_sandbox(
+        &self,
+        sandbox: Option<crate::sandbox::Sandbox>,
+    ) -> Result<Tool, String> {
         let parameters: Schema = serde_json::from_value(self.parameters.clone()).map_err(|e| {
             format!(
                 "Failed to parse parameters schema for '{}': {}",
@@ -69,7 +83,10 @@ impl CustomToolDefinition {
             parameters,
             move |args: HashMap<String, String>| -> BoxFuture<'static, String> {
                 let cmd = command.clone();
-                Box::pin(async move { execute_shell_tool(&cmd, &args).await })
+                let sb = sandbox.clone();
+                Box::pin(
+                    async move { execute_shell_tool_with_sandbox(&cmd, &args, sb.as_ref()).await },
+                )
             },
         ))
     }

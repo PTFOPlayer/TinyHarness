@@ -184,23 +184,57 @@ refused rather than nothing at all.
 ### Auto-Accept Mode
 
 Toggle with `/autoaccept off`, `/autoaccept safe`, or `/autoaccept all`.
+The default is **`safe`** (`auto_accept_mode` in `settings.json`).
 
-**`off`** (default):
+**`off`**:
 - All destructive tools prompt for confirmation
 - No auto-accept toggle is offered
 
-**`safe`** (`auto_accept_mode: "safe"`):
+**`safe`** (default):
 - **ReadOnly** tools auto-execute (always, regardless of this setting)
-- **Destructive** `write` and `edit` get a prompt — but pressing `A` during confirmation enables auto-accept for the rest of the session
-- **Destructive** `run` is NEVER auto-accepted, even with `A`
+- **Destructive** `run` auto-executes when the command matches the safe-command
+  prefix list (`ls`, `git status`, …) and no denied prefix; otherwise it prompts
+- **Destructive** `write` and `edit` always prompt
 
-**`all`** (`auto_accept_mode: "all"`):
-- **Destructive** `write` and `edit` auto-execute without prompting
-- **Destructive** `run` still prompts — it is NEVER auto-accepted, even in `all` mode
+**`all`**:
+- Every tool call auto-executes without prompting, `run` included
 
-### `run` Tool Special Rule
+Pressing `a` at a confirmation prompt enables auto-accept **for the rest of the
+turn**. That approves `write` and `edit` and safe `run` commands, but an unsafe
+`run` command still prompts individually.
 
-The `run` tool can **never** be auto-accepted, even with `/autoaccept all` and pressing `A`. This is a hard rule — if commands are safe, they pass the safety checker and auto-execute. If they're not, you must confirm them individually.
+### Path Containment and the Process Sandbox
+
+Approval is only half of the story: what an approved call can *reach* is
+bounded separately, and neither mechanism adds a prompt.
+
+- **Path guard (always on)** — the built-in file tools (`ls`, `read`, `write`,
+  `edit`, `grep`, `glob`) are confined to the workspace root plus any
+  `allowed_paths` entries. The check runs before the tool handler, so it holds
+  under `/autoaccept all` and the `a` key. `..` traversal, absolute paths, and
+  symlink escapes are all rejected — including a `..` that *follows* a symlink,
+  which is resolved in the order `open(2)` uses rather than lexically. System
+  prefixes (`/etc`, `/usr`, `/proc`, `/dev`, …) can never be allowed.
+  `grep` never descends into a symlinked directory and `glob` filters its
+  results through the guard, so neither can be walked out of the tree by a link
+  inside it. The guard hands each tool the **resolved** path, so a relative
+  argument is never re-opened against the harness's working directory, and
+  `read`/`write`/`edit`/`ls` additionally verify the **open file descriptor's**
+  real path (`/proc/self/fd`, or `F_GETPATH` on macOS) after opening, so a
+  symlink swapped in between the check and the open still fails closed.
+  `allowed_paths` is global-only — a project config cannot widen it — and
+  entries overlapping a system prefix in either direction (`/etc/ssl`, `/`,
+  `/var`) are rejected.
+- **Process sandbox (on by default, Linux only)** — `--sandbox[=auto|bwrap|firejail]`
+  or the `sandbox` setting runs `run` and custom tools inside bubblewrap or
+  firejail. bubblewrap builds a private mount tree, so paths outside the
+  workspace do not exist there at all, and the environment is cleared of API
+  keys. The network is **not** isolated — sandboxed commands keep it, so
+  `git`/`curl`/`cargo` work. See the README's "Process sandbox" section for the
+  guarantees and their limits.
+
+Because both are enforced at execution time, a sandboxed command follows the
+same confirmation policy as an unsandboxed one.
 
 ---
 
@@ -208,12 +242,13 @@ The `run` tool can **never** be auto-accepted, even with `/autoaccept all` and p
 
 ### For Users
 
-1. **Sandbox**: Run TinyHarness inside a Docker container or VM for untrusted models
+1. **Keep the sandbox on**: it is the default, and a missing backend is a startup error — install bubblewrap rather than reaching for `--no-sandbox`. The path guard confines the file tools regardless. For untrusted models, add a container or VM on top
 2. **Review before confirming**: Always read the proposed command before pressing `Y`
 3. **Use the deny list**: Block commands you never want auto-executed: `/command deny "git push --force"`
 4. **Per-project settings**: Set `auto_accept_mode: "off"` for sensitive projects
-5. **Limit tools by mode**: Use `planning` mode for analysis, switch to `agent` only when you need destructive operations
-6. **Check the audit log**: `/audit last` shows recently executed commands; `/audit session` shows all in this session
+5. **Keep `allowed_paths` narrow**: it is the only way to widen what the file tools can access, and it grants **write** as well as read — an over-broad entry (say `/`) is rejected outright, but `/home` would still expose your whole home directory to `write`/`edit`. It is global-only, so a cloned repo cannot add entries
+6. **Limit tools by mode**: Use `planning` mode for analysis, switch to `agent` only when you need destructive operations
+7. **Check the audit log**: `/audit last` shows recently executed commands; `/audit session` shows all in this session
 
 ### For Project Maintainers
 

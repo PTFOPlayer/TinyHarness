@@ -4,6 +4,7 @@ use std::time::Instant;
 use tokio::io::AsyncReadExt;
 
 use crate::extract_args;
+use crate::sandbox::Sandbox;
 use crate::tools::tool::{ToolCategory, build_string_params_schema, make_tool};
 
 /// Terminate a child process and, on Unix, its entire process group.
@@ -21,7 +22,13 @@ pub(crate) async fn kill_child(mut child: tokio::process::Child) {
     let _ = child.wait().await; // reap zombie process
 }
 
-pub fn run_tool_entry() -> crate::tools::tool::Tool {
+/// Build the `run` tool.
+///
+/// `sandbox` is captured by the handler: when present, every command is
+/// executed through the OS-level process sandbox instead of directly. It has
+/// to be supplied here (rather than consulted at call time) because tool
+/// handlers are opaque `Fn` closures that outlive the `ToolManager`.
+pub fn run_tool_entry(sandbox: Option<Sandbox>) -> crate::tools::tool::Tool {
     make_tool(
         "run",
         "Execute a shell command and return its output. Use for building, testing, running git commands, or any terminal operation. Returns stdout, stderr (if any), exit code, and duration. stdout is truncated at 5000 chars and stderr at 2000 chars. Default timeout is 30 seconds.",
@@ -41,13 +48,22 @@ pub fn run_tool_entry() -> crate::tools::tool::Tool {
                 ),
             ],
         ),
-        move |args| Box::pin(run_tool(args)),
+        move |args| {
+            // The future must be 'static, so the sandbox is moved into it
+            // rather than borrowed from the closure.
+            let sb = sandbox.clone();
+            Box::pin(async move { run_tool_inner(args, sb.as_ref()).await })
+        },
     )
 }
 
 /// Execute a shell command asynchronously with a timeout.
 /// Returns stdout, stderr, exit code, and duration.
 pub async fn run_tool(args: HashMap<String, String>) -> String {
+    run_tool_inner(args, None).await
+}
+
+async fn run_tool_inner(args: HashMap<String, String>, sandbox: Option<&Sandbox>) -> String {
     extract_args!(args, command);
 
     let timeout_ms: u64 = args
@@ -55,22 +71,37 @@ pub async fn run_tool(args: HashMap<String, String>) -> String {
         .and_then(|t| t.parse().ok())
         .unwrap_or(30_000);
 
-    let cwd = args.get("cwd").map(|s| s.as_str());
+    let cwd = args.get("cwd").filter(|s| !s.trim().is_empty()).cloned();
 
-    // Use shell to run the command
-    let mut cmd = if cfg!(target_os = "windows") {
-        let mut c = tokio::process::Command::new("cmd");
-        c.arg("/C");
-        c.arg(&command);
-        c
-    } else {
-        let mut c = tokio::process::Command::new("sh");
-        c.arg("-c");
-        c.arg(&command);
-        c
+    let mut cmd = match (sandbox, cfg!(target_os = "windows")) {
+        // Sandboxed: bwrap/firejail wrap the shell invocation. The sandbox
+        // sets its own working directory (--chdir), so `current_dir` is left
+        // alone unless the host can honour it.
+        (Some(sb), _) => {
+            let (program, sb_args) = sb.argv(&command, cwd.as_deref().map(std::path::Path::new));
+            let mut c = tokio::process::Command::new(program);
+            c.args(sb_args);
+            c
+        }
+        (None, true) => {
+            let mut c = tokio::process::Command::new("cmd");
+            c.arg("/C");
+            c.arg(&command);
+            c
+        }
+        (None, false) => {
+            let mut c = tokio::process::Command::new("sh");
+            c.arg("-c");
+            c.arg(&command);
+            c
+        }
     };
 
-    if let Some(dir) = cwd {
+    // Outside the sandbox the command inherits the host CWD, so honour `cwd`
+    // directly. Inside it, `--chdir` already placed the process there — but
+    // setting the outer CWD too is harmless (the workspace is bound at the
+    // same absolute path) and keeps firejail, which has no --chdir, correct.
+    if let Some(dir) = &cwd {
         cmd.current_dir(dir);
     }
 

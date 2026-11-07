@@ -94,6 +94,100 @@ impl fmt::Display for AutoAcceptMode {
     }
 }
 
+// ── Sandbox ────────────────────────────────────────────────────────────────
+
+/// OS-level sandbox configuration for shell-executing tools.
+///
+/// Serializes as the `sandbox` object in the **global** `settings.json` only:
+///
+/// ```json
+/// {
+///   "sandbox": {
+///     "backend": "bwrap",
+///     "writable_paths": ["/tmp/build-cache"]
+///   }
+/// }
+/// ```
+///
+/// The default is [`SandboxConfig::auto`] — sandbox with whatever backend is
+/// installed, bwrap preferred. Sandboxing shell commands is the baseline, and
+/// turning it off is a deliberate act: `--no-sandbox` on the command line, or
+/// `{"backend": "off"}` in the global settings file.
+///
+/// This block is deliberately **absent from `.tinyharness/config.json`**
+/// ([`ProjectSettings`] has no `sandbox` field). A project config is shipped
+/// inside the repository, so honouring it would let any cloned repo downgrade
+/// the user's chosen containment — including switching the sandbox off
+/// entirely. Unknown keys are ignored by serde, so a stray `sandbox` block in
+/// a project file has no effect.
+///
+/// `backend` is **required** whenever the `sandbox` object is present, and
+/// accepts `auto` (use whatever is installed, bwrap preferred), `bwrap`,
+/// `firejail`, or `off`. See
+/// [`SandboxBackend`](crate::sandbox::SandboxBackend). Requiring it is
+/// deliberate: a block like `{"sandbox": {"writable_paths": ["/tmp/x"]}}`
+/// states an intention to be sandboxed without naming a backend, and silently
+/// defaulting that to `off` would leave the user unprotected while believing
+/// otherwise. Omit the whole `sandbox` key to get [`SandboxConfig::auto`].
+///
+/// There is deliberately **no network setting**: sandboxed commands always
+/// have the network. A coding agent runs `git fetch`, `curl`, and `cargo add`
+/// constantly, so a knob that would break those is not worth exposing.
+///
+/// Extra host directories come from the top-level `allowed_paths` setting,
+/// which also drives the built-in file tools' path guard (those tools run
+/// in-process, so the guard is their only confinement); only write access
+/// *inside the sandbox* is configured here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Backend selector: `off` | `auto` | `bwrap` | `firejail`. Required
+    /// whenever a `sandbox` block is present.
+    pub backend: String,
+    /// Extra host directories sandboxed commands may **write**.
+    ///
+    /// Deliberately separate from `allowed_paths`: that setting also feeds the
+    /// path guard confining the built-in file tools, and those tools run
+    /// in-process, so granting it write access would widen their reach too.
+    /// Anything here is reachable *only* by sandboxed shell commands.
+    #[serde(default)]
+    pub writable_paths: Vec<String>,
+}
+
+impl Default for SandboxConfig {
+    /// Sandboxing is on by default — see the type-level docs.
+    fn default() -> Self {
+        Self::auto()
+    }
+}
+
+impl SandboxConfig {
+    /// No sandbox (the default).
+    pub fn disabled() -> Self {
+        SandboxConfig {
+            backend: "off".to_string(),
+            writable_paths: Vec::new(),
+        }
+    }
+
+    /// Auto-detect the best installed backend.
+    pub fn auto() -> Self {
+        SandboxConfig {
+            backend: "auto".to_string(),
+            ..Self::disabled()
+        }
+    }
+
+    /// `true` when no sandboxing is requested.
+    pub fn is_disabled(&self) -> bool {
+        crate::sandbox::SandboxBackend::is_off(&self.backend)
+    }
+
+    /// `true` when a sandbox (auto-detected or explicit) is requested.
+    pub fn is_enabled(&self) -> bool {
+        !self.is_disabled()
+    }
+}
+
 // ── Project Settings ────────────────────────────────────────────────────────
 
 /// Per-project override settings discovered from `.tinyharness/config.json`.
@@ -128,6 +222,13 @@ pub struct ProjectSettings {
     /// Override whether the model may ask questions for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions_enabled: Option<bool>,
+    // Deliberately **no `allowed_paths` field**: the path-guard allow list
+    // widens read *and write* access for the in-process file tools
+    // (`read`/`write`/`edit`), which no OS sandbox confines. A project config
+    // travels with the repository, so honouring it here would let any cloned
+    // repo open the user's home directory to those tools. Unknown keys are
+    // ignored by serde, so a stray `allowed_paths` block in a project file has
+    // no effect — the allow list is global-only, like `sandbox`.
 }
 
 /// Discover and load `.tinyharness/config.json` by walking up from `start_dir`.
@@ -211,6 +312,19 @@ pub struct MergedSettings {
     pub auto_compact_enabled_source: SettingSource,
     pub questions_enabled: bool,
     pub questions_enabled_source: SettingSource,
+    /// Effective sandbox configuration — always the global block.
+    ///
+    /// Not overridable per project: see [`SandboxConfig`].
+    pub sandbox: SandboxConfig,
+    pub sandbox_source: SettingSource,
+    /// Effective extra allowed paths for the file tools — always the global
+    /// list.
+    ///
+    /// Not overridable per project: see [`ProjectSettings`]. These paths get
+    /// read **and write** access from the in-process file tools, so a
+    /// repository-controlled config must never be able to add one.
+    pub allowed_paths: Vec<String>,
+    pub allowed_paths_source: SettingSource,
 }
 
 /// Load and merge global + project settings for an injected set of paths.
@@ -279,6 +393,10 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
             auto_compact_enabled_source: SettingSource::Default,
             questions_enabled: global.questions_enabled,
             questions_enabled_source: SettingSource::Default,
+            sandbox: global.sandbox.clone(),
+            sandbox_source: SettingSource::Global,
+            allowed_paths: global.allowed_paths.clone().unwrap_or_default(),
+            allowed_paths_source: SettingSource::Default,
         },
         Some(p) => {
             // Safe commands: project extends global
@@ -338,6 +456,20 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 .map(|v| (v, SettingSource::Project))
                 .unwrap_or((global.questions_enabled, SettingSource::Default));
 
+            // Sandbox: global only, never overridable by the project. A
+            // `.tinyharness/config.json` travels with the repository, so
+            // honouring it here would let a cloned repo pick the backend —
+            // or disable the sandbox altogether.
+            let sandbox = global.sandbox.clone();
+            let sandbox_source = SettingSource::Global;
+
+            // Allowed paths: global only, never overridable by the project.
+            // The file tools run in-process, so an allowed path is a *write*
+            // grant as well as a read grant — a `.tinyharness/config.json`
+            // that travels with a repository must not be able to add one.
+            let allowed_paths = global.allowed_paths.clone().unwrap_or_default();
+            let allowed_paths_source = SettingSource::Global;
+
             MergedSettings {
                 safe_commands,
                 safe_commands_source: safe_source,
@@ -355,6 +487,10 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 auto_compact_enabled_source: ac_source,
                 questions_enabled,
                 questions_enabled_source: q_source,
+                sandbox,
+                sandbox_source,
+                allowed_paths,
+                allowed_paths_source,
             }
         }
     }
@@ -383,6 +519,10 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
         preferred_mode: Some(settings.preferred_mode),
         auto_compact_enabled: Some(settings.auto_compact_enabled),
         questions_enabled: Some(settings.questions_enabled),
+        // Deliberately not templated: the sandbox and the path allow list are
+        // machine-local security decisions (which backend is installed, which
+        // absolute paths exist on this host) and are not project settings at
+        // all — see `ProjectSettings`.
     }
 }
 
@@ -571,6 +711,29 @@ pub struct Settings {
     /// question. Toggle with `/questions`.
     #[serde(default = "default_true")]
     pub questions_enabled: bool,
+    /// OS-level sandbox for shell-executing tools (`run`, custom tools).
+    ///
+    /// Defaults to disabled; set `sandbox.backend` to `auto`, `bwrap`, or
+    /// `firejail` to enable, or pass `--sandbox` on the command line (which
+    /// overrides the stored value for one session).
+    #[serde(default, skip_serializing_if = "SandboxConfig::is_disabled")]
+    pub sandbox: SandboxConfig,
+    /// Extra host directories the built-in file tools may access, beyond the
+    /// workspace root. **Global-only**: a project `.tinyharness/config.json`
+    /// cannot add entries, because the file tools run in-process (no OS
+    /// sandbox) and this list grants them read *and* write.
+    ///
+    /// Entries may be absolute, `~`-prefixed, or relative to the workspace
+    /// root. The workspace root itself is always allowed and is exempt from
+    /// the blocked-prefix list. System paths (`/etc`, `/usr`, `/proc`, …) can
+    /// never be allowed this way — see
+    /// [`DEFAULT_BLOCKED_PREFIXES`](crate::path_guard::DEFAULT_BLOCKED_PREFIXES).
+    ///
+    /// Under bwrap these are also bound read-only into the sandbox, so
+    /// `run` sees the same view as `read`. Grant write access to sandboxed
+    /// commands via [`SandboxConfig::writable_paths`] instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_paths: Option<Vec<String>>,
 }
 
 fn default_true() -> bool {
@@ -611,6 +774,8 @@ impl Default for Settings {
             project_md_files: None,
             auto_compact_enabled: true,
             questions_enabled: true,
+            sandbox: SandboxConfig::default(),
+            allowed_paths: None,
         }
     }
 }
@@ -1246,6 +1411,34 @@ mod tests {
         let merged = merge_settings(&global, Some(&project));
         assert!(!merged.questions_enabled);
         assert_eq!(merged.questions_enabled_source, SettingSource::Project);
+    }
+
+    /// A project config must not be able to widen the path guard: the
+    /// `allowed_paths` key is unknown to `ProjectSettings` (dropped by serde)
+    /// and the merged allow list is always the global one — the file tools
+    /// run in-process, so a project entry would be a write grant outside the
+    /// workspace from a cloned repository.
+    #[test]
+    fn project_settings_cannot_set_allowed_paths() {
+        let global = Settings {
+            allowed_paths: Some(vec!["/opt/data".to_string()]),
+            ..Settings::default()
+        };
+
+        // A project file carrying `allowed_paths` parses (unknown keys are
+        // ignored) but has no effect on the merged settings.
+        let project: ProjectSettings =
+            serde_json::from_str(r#"{"allowed_paths": ["/", "~"]}"#).unwrap();
+        let merged = merge_settings(&global, Some(&project));
+        assert_eq!(merged.allowed_paths, vec!["/opt/data".to_string()]);
+        assert_eq!(merged.allowed_paths_source, SettingSource::Global);
+
+        // And the sandbox block is likewise ignored per project.
+        let project: ProjectSettings =
+            serde_json::from_str(r#"{"sandbox": {"backend": "off"}}"#).unwrap();
+        let merged = merge_settings(&global, Some(&project));
+        assert_eq!(merged.sandbox, global.sandbox);
+        assert_eq!(merged.sandbox_source, SettingSource::Global);
     }
 
     #[test]

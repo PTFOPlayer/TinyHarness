@@ -127,6 +127,36 @@ Controls whether the model may request conversation compaction. Defaults to `tru
 }
 ```
 
+### `sandbox` and `allowed_paths` — not project settings
+
+Neither the process sandbox **nor** the path-guard allow list can be configured
+per project. `ProjectSettings` has no `sandbox` or `allowed_paths` field, and
+those blocks in `.tinyharness/config.json` are ignored (unknown keys are
+dropped by serde).
+
+This is deliberate: a project config travels inside the repository, so anyone
+who sends you a clone controls it. The sandbox block could pin a weaker
+backend or set `"backend": "off"`; worse, an `allowed_paths` entry widens the
+**in-process file tools**, which no OS sandbox confines — the file tools' guard
+is their only protection, and it grants read *and* write, so a cloned repo
+adding `"allowed_paths": ["~"]` could let the model overwrite `~/.bashrc` or
+`~/.ssh/authorized_keys`. Both are therefore global-only: `sandbox.backend` and
+`allowed_paths` in `~/.config/tinyharness/settings.json`, plus `--sandbox=…` /
+`--no-sandbox` on the command line. The sandbox defaults to `auto`, and a
+missing or broken backend is a **startup error** rather than a silent
+downgrade; pass `--no-sandbox` to opt out deliberately.
+
+Global `allowed_paths` entries may be absolute, `~`-prefixed, or relative to
+the workspace root. Entries overlapping a system prefix (`/etc`, `/usr`,
+`/proc`, `/dev`, `/boot`, `/sys`, `/run`, `/var/log`, `/root`) are rejected in
+*both* directions — `/etc/ssl` is pointless, and `/` or `/var` would contain a
+blocked prefix, so they are dropped too. The workspace root itself is exempt
+from that block list. Under bwrap the allowed paths are also bound read-only
+into the process sandbox, so `run` sees the same view as `read`.
+
+Neither key is written by `/project-settings init`: both are machine-local, and
+committing them would leak local layout.
+
 ## Viewing Merged Settings
 
 ```

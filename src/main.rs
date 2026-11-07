@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod commands;
+pub mod sandbox_setup;
 #[cfg(test)]
 pub mod test_helpers;
 
@@ -91,14 +92,35 @@ struct Args {
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
 
-    /// Restrict all file-access tools (ls, read, write, edit, grep, glob) to
-    /// the current working directory. Any attempt to touch paths outside the
-    /// sandbox is rejected as an error — even when auto-accept is enabled.
-    /// In sandbox mode the `run` tool always requires explicit confirmation,
-    /// since shell commands cannot be statically contained.
+    /// Pin the OS-level sandbox backend for shell commands.
+    ///
+    /// Sandboxing is **on by default** with auto-detection, so this flag is
+    /// only needed to force a particular backend: `--sandbox=bwrap` or
+    /// `--sandbox=firejail`. A bare `--sandbox` means auto-detect, and
+    /// `--sandbox=off` is equivalent to `--no-sandbox`.
+    ///
+    /// bubblewrap is preferred: it builds a private mount tree so files outside
+    /// the workspace don't exist at all, whereas firejail mounts the host
+    /// filesystem read-only (writes blocked, reads still possible) and normally
+    /// needs a setuid helper.
+    ///
+    /// The built-in file tools are confined to the workspace regardless of
+    /// this flag — see the `allowed_paths` setting to widen that.
     /// Linux only: on Windows and macOS this flag is rejected at startup.
+    #[arg(long, num_args = 0..=1, require_equals = true, value_name = "BACKEND")]
+    sandbox: Option<Option<String>>,
+
+    /// Run without the OS-level sandbox for shell commands.
+    ///
+    /// The sandbox is on by default and a missing backend is a startup error,
+    /// so this is the only way to run `run` and custom tools unsandboxed.
+    /// Prefer installing bubblewrap (`bwrap`) over reaching for this flag.
+    ///
+    /// The built-in file tools stay confined to the workspace either way —
+    /// that layer has no off switch. Linux only: on Windows and macOS no
+    /// process sandbox exists at all and this flag is the norm.
     #[arg(long)]
-    sandbox: bool,
+    no_sandbox: bool,
 }
 
 /// Determine the provider kind from CLI flags or saved settings.
@@ -303,8 +325,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // ── --sandbox is Linux-only: reject early on Windows/macOS ────────────
+    // `--no-sandbox` is *not* rejected there: it is the only spelling that
+    // matches reality on those platforms.
     #[cfg(not(target_os = "linux"))]
-    if args.sandbox {
+    if args.sandbox.is_some() {
         let mut err_out = Output::stderr();
         let _ = writeln!(
             err_out,
@@ -447,48 +471,80 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // ── Ensure prompt files exist (seeded from hardcoded defaults on first launch)
     ensure_prompts_initialized_in(&paths.prompts_dir());
 
+    // ── Containment: path guard (always) + process sandbox (on by default) ──
+    // Both are configured *before* the tools are registered: tool handlers are
+    // opaque closures, so the process sandbox is cloned into `run` and the
+    // custom tools at construction time.
+    //
+    // The process sandbox is Linux-only. On other platforms it is forced off
+    // — not just the flag, but the settings too, so a shared `settings.json`
+    // with `sandbox.backend` set degrades silently instead of warning on
+    // every startup. (The flag itself is rejected earlier, at arg parsing.)
+    let (_global_settings, _project_settings, merged) =
+        tinyharness_lib::config::load_merged_settings_from(&paths);
+
+    #[cfg(not(target_os = "linux"))]
+    let cli_sandbox = sandbox_setup::CliSandbox::Named("off".to_string());
+    #[cfg(target_os = "linux")]
+    let cli_sandbox = if args.no_sandbox {
+        sandbox_setup::CliSandbox::Named("off".to_string())
+    } else {
+        sandbox_setup::CliSandbox::from_arg(&args.sandbox)
+    };
+
+    // Sandboxing is the default, so anything short of an explicit opt-out is
+    // a hard requirement: a missing or broken backend must stop the session
+    // rather than quietly degrade to running shell commands unsandboxed.
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_opt_out = true;
+    #[cfg(target_os = "linux")]
+    let sandbox_opt_out = args.no_sandbox;
+
+    let resolution = match sandbox_setup::resolve(&cli_sandbox, &merged, &paths, !sandbox_opt_out) {
+        Ok(resolution) => resolution,
+        Err(e) => {
+            let mut err_out = Output::stderr();
+            let _ = writeln!(
+                err_out,
+                "{BOLD}Error:{RESET} could not set up containment: {e}"
+            );
+            if !sandbox_opt_out {
+                let _ = writeln!(
+                    err_out,
+                    "{DIM}Install bubblewrap (`bwrap`), or pass --no-sandbox to run shell commands unsandboxed.{RESET}"
+                );
+            }
+            std::process::exit(1);
+        }
+    };
+
+    let mut err_out = Output::stderr();
+    for warning in &resolution.warnings {
+        let _ = writeln!(err_out, "{BOLD}Warning:{RESET} {warning}");
+    }
+
+    let sandbox_status = resolution.status;
+
     let mut tool_manager = ToolManager::new();
+    tool_manager.set_path_guard(resolution.path_guard);
+    if let Some(sandbox) = resolution.sandbox {
+        let banner = sandbox_setup::describe(&sandbox, paths.project_dir());
+        let _ = writeln!(
+            err_out,
+            "{BOLD}{GREEN}Sandbox enabled{RESET} {DIM}— {}{RESET}",
+            banner[0]
+        );
+        for line in &banner[1..] {
+            let _ = writeln!(err_out, "{DIM}  {line}{RESET}");
+        }
+        tool_manager.set_sandbox(sandbox);
+    }
+
     tool_manager.register_defaults();
 
     // Load custom tools (shell-command tools configured via custom_tools.json)
     let custom_tool_manager = CustomToolManager::load_from(&paths);
     tool_manager.register_custom_tools(custom_tool_manager.custom_tools());
-
-    // ── Sandbox mode: confine path-based tools to the workspace root ──────
-    // Linux-only feature — on Windows and macOS the flag was already
-    // rejected right after arg parsing.
-    #[cfg(not(target_os = "linux"))]
-    let sandbox_active = false;
-
-    #[cfg(target_os = "linux")]
-    let sandbox_active = if args.sandbox {
-        match tinyharness_lib::sandbox::Sandbox::new(paths.project_dir()) {
-            Ok(sandbox) => {
-                let mut err_out = Output::stderr();
-                let _ = writeln!(
-                    err_out,
-                    "{BOLD}{GREEN}Sandbox enabled:{RESET} file access is restricted to {CYAN}{}{RESET}",
-                    sandbox.root().display(),
-                );
-                let _ = writeln!(
-                    err_out,
-                    "{DIM}  The `run` tool will always require confirmation in sandbox mode.{RESET}",
-                );
-                tool_manager.set_sandbox(sandbox);
-                true
-            }
-            Err(e) => {
-                let mut err_out = Output::stderr();
-                let _ = writeln!(
-                    err_out,
-                    "{BOLD}Error:{RESET} --sandbox could not be enabled: {e}"
-                );
-                std::process::exit(1);
-            }
-        }
-    } else {
-        false
-    };
 
     let initial_mode = settings.preferred_mode;
 
@@ -556,11 +612,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ctx.current_mode = initial_mode;
     ctx.show_thinking = settings.show_thinking;
     ctx.session_id = Some(session.id().to_string());
-    ctx.sandbox_active = sandbox_active;
+    ctx.sandbox = sandbox_status.clone();
 
-    // Refresh the system prompt so sandbox mode is reflected in it (covers
-    // both freshly-created and resumed sessions).
-    if sandbox_active {
+    // Refresh the system prompt so an active process sandbox is reflected in
+    // it (covers both freshly-created and resumed sessions).
+    if sandbox_status.is_some() {
         ctx.refresh_system_prompt(&mut messages);
     }
 

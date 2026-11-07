@@ -44,9 +44,13 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
   "questions_enabled": true,
   "safe_command_prefixes": null,
   "denied_command_prefixes": null,
-  "project_md_files": null
+  "project_md_files": null,
+  "allowed_paths": null,
+  "sandbox": { "backend": "off", "writable_paths": [] }
 }
 ```
+
+`sandbox` is omitted entirely when disabled, and `allowed_paths` when unset.
 
 ### Provider Settings
 
@@ -148,13 +152,32 @@ These apply to every provider that supports timeouts/retries (Ollama, llama.cpp,
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `auto_accept_mode` | string | `"safe"` | Auto-accept mode: `"off"`, `"safe"` (read-only commands), or `"all"` (all destructive tools except `run`). Toggle with `/autoaccept`. Legacy `auto_accept_safe_commands` (bool) and `auto_accept_all` (bool) are auto-migrated to this field. |
+| `auto_accept_mode` | string | `"safe"` | Auto-accept mode: `"off"`, `"safe"` (auto-approve `run` commands matching the safe list), or `"all"` (every tool call, `run` included). Toggle with `/autoaccept`. Legacy `auto_accept_safe_commands` (bool) and `auto_accept_all` (bool) are auto-migrated to this field. |
 | `auto_compact_enabled` | bool | `true` | Whether the `auto_compact` tool is available to the model. Toggle with `/autocompact` |
 | `questions_enabled` | bool | `true` | Whether the `question` tool is available to the model. When `false`, the model cannot stop the agent to ask the user questions. Toggle with `/questions` |
 | `safe_command_prefixes` | vec\|null | `null` | Custom safe command prefixes. If `null`, uses the hardcoded default list (43 commands). Set via `/command add/rm/reset` |
 | `denied_command_prefixes` | vec\|null | `null` | Always-denied prefixes. Takes priority over safe list. Set via `/command deny/undeny/resetdeny` |
 
 The deny list takes priority. If a command matches both a safe prefix and a denied prefix, it is denied. This lets you block specific dangerous commands (e.g. deny `git push` but keep `git status` safe).
+
+### Containment Settings
+
+Approval decides *whether* a tool call runs; these decide what it can reach.
+Both are enforced at execution time, so they hold regardless of auto-accept.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed_paths` | vec\|null | `null` | Extra host roots the built-in file tools may access (read **and** write — those tools run in-process), beyond the workspace root. **Global-only**: a project `.tinyharness/config.json` cannot add entries. Entries may be absolute, `~`-prefixed, or relative to the workspace. Entries overlapping a system prefix (`/etc`, `/usr`, `/boot`, `/sys`, `/proc`, `/dev`, `/root`, `/var/log`, `/var/run`, `/run`) are rejected in both directions — `/etc/ssl` and `/` alike; the workspace root is exempt. Under bwrap these are also bound read-only into the sandbox |
+| `sandbox.backend` | string | `"auto"` | Process sandbox for `run` and custom tools, **on by default**: `"auto"` (best installed, bwrap preferred), `"bwrap"`, `"firejail"`, or `"off"`. Global-only — a project `.tinyharness/config.json` cannot override it. `--sandbox[=<backend>]` / `--no-sandbox` override it for one session |
+| `sandbox.writable_paths` | vec | `[]` | Extra host roots sandboxed commands may **write**. Reachable only by sandboxed shell commands, never by the file tools |
+
+There is no `sandbox.network` setting: sandboxed commands always have the network.
+An agent runs `git fetch`, `curl`, and `cargo add` constantly, so a knob that
+would break those is not worth exposing; network isolation is out of scope for
+this sandbox.
+
+The path guard is always on and has no off switch. See the README's
+“Containment” and “Process sandbox” sections for the guarantees and their limits.
 
 ### Project Instruction File Settings
 
@@ -188,6 +211,10 @@ Overrides global settings for a specific project. See [Per-Project Settings](per
 }
 ```
 
+`sandbox` and `allowed_paths` are **global-only** — they are not project
+settings and are ignored in `.tinyharness/config.json` (see
+[per-project-settings.md](per-project-settings.md)).
+
 ### Layering
 
 ```
@@ -199,6 +226,16 @@ Overrides global settings for a specific project. See [Per-Project Settings](per
 - `safe_command_prefixes`: **Extends** (not replaces) the global list
 - `denied_command_prefixes`: **Replaces** the global list
 - All other fields: **Override** if present, fall back to global if absent
+
+`sandbox` and `allowed_paths` are deliberately **not** project fields: a
+project config travels with the repository, and those two control containment
+(the sandbox backend, and the file tools' read/write allow list), so a cloned
+repo must not be able to weaken them.
+
+`/init` does not template `sandbox` or `allowed_paths` into a new
+`.tinyharness/config.json`: both are machine-local (which backend is installed,
+which absolute paths exist here), and committing them would leak local layout
+while overriding every teammate's own settings.
 
 ### Viewing Merged Settings
 
@@ -310,9 +347,12 @@ resolved.
     └── <session-id>/
 
 <project>/.tinyharness/
-├── config.json             Per-project settings
-├── custom_tools.json       Project custom-tools config (extends global)
+├── config.json             Per-project settings (no `sandbox`/`allowed_paths`)
 └── skills/                 Project-local skills
+
+Project-level `custom_tools.json` is **not** loaded: a custom tool is a shell
+command template and a cloned repo must not register commands on your machine.
+Custom tools are global-only (`~/.config/tinyharness/custom_tools.json`).
     └── <name>/
         └── SKILL.md
 ```
@@ -335,6 +375,8 @@ All CLI flags override settings:
 | `--skip-health-check` | Skips provider health check at startup (a failed health check is otherwise a warning, not fatal) |
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
 | `-p`, `--prompt <text>` | Sends initial prompt then enters interactive mode |
+| `--sandbox[=<backend>]` | Nothing — session-only. Pins `sandbox.backend` (`auto`, `bwrap`, `firejail`) for this run, overriding the setting without writing it. Never persisted |
+| `--no-sandbox` | Nothing — session-only. Disables the process sandbox (equivalent to `--sandbox=off`). The only opt-out; the file tools stay confined either way |
 
 ---
 

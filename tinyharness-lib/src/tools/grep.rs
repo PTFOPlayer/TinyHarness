@@ -120,7 +120,15 @@ fn walk_dir(
     for entry in entries.flatten() {
         let path = entry.path();
 
-        if path.is_dir() {
+        // Never follow a symlink, in either direction. `path.is_dir()` would
+        // resolve it, so a single link inside the workspace (`link -> /home`)
+        // would let the walker read trees the path guard confined the *root*
+        // argument away from. Skipping them keeps the walk inside the tree the
+        // guard actually authorized.
+        let is_dir = std::fs::symlink_metadata(&path)
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if is_dir {
             // Skip hidden directories and common non-code directories
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
                 && (name.starts_with('.') || name == "node_modules" || name == "target")
@@ -128,7 +136,10 @@ fn walk_dir(
                 continue;
             }
             walk_dir(&path, regex, include_pattern, results, total_matches)?;
-        } else if path.is_file() {
+        } else if std::fs::symlink_metadata(&path)
+            .map(|m| m.is_file())
+            .unwrap_or(false)
+        {
             // Apply include filter if specified
             if let Some(inc) = include_pattern
                 && !path.to_string_lossy().contains(inc)
