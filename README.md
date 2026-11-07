@@ -152,7 +152,8 @@ Sends an initial prompt and then drops into the interactive loop for follow-up t
 | `--skip-health-check` | Skip provider health check at startup (a failure is otherwise just a warning) |
 | `-c`, `--continue` | Continue the most recent session in the current directory |
 | `-p`, `--prompt <text>` | Start with this message, then drop into interactive mode |
-| `--sandbox[=<backend>]` | Run shell commands in an OS sandbox (`auto`, `bwrap`, `firejail`, `off`; Linux only) |
+| `--sandbox[=<backend>]` | Pin the OS sandbox backend (`auto`, `bwrap`, `firejail`); on by default (Linux only) |
+| `--no-sandbox` | Run shell commands **unsandboxed** — the only way to opt out (Linux only) |
 
 ## Agent Modes
 
@@ -490,18 +491,18 @@ After making changes, run:
 
 TinyHarness grants LLMs the ability to interact with your filesystem through tool calling. This introduces specific risks:
 
-- **Sandboxing**: Optional OS-level confinement for shell commands (`--sandbox`, Linux only) plus an always-on path guard for the file tools. For full isolation from an untrusted model, still prefer a container or VM.
+- **Sandboxing**: OS-level confinement for shell commands, **on by default** on Linux, plus an always-on path guard for the file tools. Opt out with `--no-sandbox`. For full isolation from an untrusted model, still prefer a container or VM.
 - **Non-determinism**: LLMs may hallucinate or produce incorrect tool arguments. Always review proposed actions.
 - **Accountability**: You assume full responsibility for all operations performed by the AI. Ensure you have backups.
 
-The `run` tool follows the configured auto-accept policy: `/autoaccept safe` prompts for anything outside the safe-command list, `/autoaccept all` approves without asking, and the per-turn `a` key approves for the rest of the turn except for unsafe `run` commands. Use `sandbox.backend` or `--sandbox` to bound what an approved command can reach.
+The `run` tool follows the configured auto-accept policy: `/autoaccept safe` prompts for anything outside the safe-command list, `/autoaccept all` approves without asking, and the per-turn `a` key approves for the rest of the turn except for unsafe `run` commands. The sandbox — on by default — bounds what an approved command can reach.
 
 ### Containment: path guard (always on)
 
 The built-in file tools — `ls`, `read`, `write`, `edit`, `grep`, `glob` — run in-process, so they are confined by a **path guard** rather than an OS sandbox. This is unconditional: there is no flag to disable it.
 
 - **Confined to the workspace root**: any path outside it is rejected with an error before the tool runs, so the check applies **even when auto-accept is enabled**.
-- **Path resolution is robust**: `..` traversal, absolute paths, and symlink escapes are all detected (lexical normalization plus canonicalization of the nearest existing ancestor).
+- **Path resolution is robust**: `..` traversal, absolute paths, and symlink escapes are all detected. Paths are resolved component by component in the order `open(2)` uses, so a `..` *after* a symlink is applied to the link's target rather than to the textual path — the case a purely lexical collapse gets wrong (`<root>/link/../etc/passwd` with `link -> /usr` opens `/etc/passwd`, and is rejected).
 - **Widen it deliberately**: set `allowed_paths` in `settings.json` to grant extra readable roots. Entries may be absolute, `~`-prefixed, or relative to the workspace. System prefixes (`/etc`, `/usr`, `/proc`, `/dev`, `/boot`, `/sys`, `/run`, `/var/log`, `/root`) can never be allowed this way, and the workspace root itself is exempt from that block list.
 
 ```json
@@ -510,15 +511,15 @@ The built-in file tools — `ls`, `read`, `write`, `edit`, `grep`, `glob` — ru
 }
 ```
 
-### Process sandbox (`--sandbox`, Linux only)
+### Process sandbox (on by default, Linux only)
 
 Shell commands (`run` and custom tools) can optionally run inside a real OS sandbox:
 
 ```bash
-tinyharness --sandbox              # auto-detect the best installed backend
+# Sandboxing is already on — no flag needed. Pin a backend only if you must:
 tinyharness --sandbox=bwrap        # pin bubblewrap
 tinyharness --sandbox=firejail     # pin firejail
-tinyharness --sandbox=off          # force off, overriding settings.json for this session
+tinyharness --no-sandbox           # opt out for this session (also --sandbox=off)
 ```
 
 The same choice persists as `sandbox` in `settings.json`:
@@ -532,7 +533,7 @@ The same choice persists as `sandbox` in `settings.json`:
 }
 ```
 
-bubblewrap is preferred and is what you should expect to be used. It builds a private mount tree from a `tmpfs` root and binds only the workspace (read-write), `/usr` and `/etc` (read-only), and your `allowed_paths` — so **files outside those roots do not exist inside the sandbox**, rather than merely being unreadable. It also unshares the PID/IPC/UTS/cgroup namespaces, clears the environment (no API keys reach a sandboxed command), and starts a new session.
+bubblewrap is preferred and is what you should expect to be used. It builds a private mount tree from a `tmpfs` root and binds only the workspace (read-write), `/usr` and `/etc` (read-only), and your `allowed_paths` — so **files outside those roots do not exist inside the sandbox**, rather than merely being unreadable. It also unshares the PID/IPC/UTS/cgroup namespaces, clears the environment (no API keys reach a sandboxed command), and starts a new session. `/etc` is bound read-only along with whatever `/etc/resolv.conf` symlinks to, so DNS keeps working on systemd-resolved hosts.
 
 firejail takes the opposite approach: it mounts the **existing** host filesystem read-only and re-binds the workspace writable. Writes outside the workspace are blocked and privileges are dropped, but **reads outside it still succeed** — it is write/privilege containment, not visibility containment. It also normally needs a setuid helper.
 
@@ -542,8 +543,8 @@ Behaviour notes:
 - **The network is always available.** There is deliberately no network setting: an agent runs `git fetch`, `curl`, and `cargo add` constantly, so blocking the network would make the sandbox unusable rather than safe. Network isolation is out of scope — the containment is filesystem and environment.
 - **`allowed_paths` are bound read-only**, so `run` and `read` see the same extra trees. Use `sandbox.writable_paths` when a sandboxed command must write outside the workspace; those are reachable only by sandboxed commands, not by the file tools.
 - **The Rust toolchain stays usable**: `~/.cargo/bin` and `~/.rustup` are bound read-only and `$CARGO_HOME` points at a writable cache under the data dir. Because that cache starts empty, a sandboxed build that must *download* crates fetches them into it rather than reusing your populated `~/.cargo/registry`.
-- **Failure modes differ by origin**: a `--sandbox` flag that cannot be honoured exits at startup with an explanation, while a `sandbox.backend` setting that is unavailable (another machine, uninstalled helper) warns and continues unsandboxed.
-- On Windows and macOS the flag is rejected at startup and the setting is ignored: `--sandbox is a Linux-only feature`.
+- **A missing backend is a startup error, not a silent downgrade.** Since sandboxing is the default, continuing without one would mean unsandboxed shell commands under a user who believes they are contained. Install bubblewrap, or pass `--no-sandbox` to opt out deliberately.
+- On Windows and macOS there is no process sandbox: `--sandbox` is rejected at startup (`--sandbox is a Linux-only feature`) and `sandbox.backend` is ignored. `--no-sandbox` is accepted and is the norm there.
 
 Neither backend is a defence against a hostile *user*: sandboxed commands run as your uid, so anything inside the workspace (`.env`, `.git`, committed credentials) remains in scope, and there are no resource limits. For untrusted models, prefer a container or VM.
 

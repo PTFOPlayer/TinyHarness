@@ -125,12 +125,55 @@ impl ToolManager {
         self.sandbox.as_ref()
     }
 
-    /// If a path guard is active and this tool call would access a path
-    /// outside it, return the violation error message. Returns `None` if the
-    /// call is allowed (or no guard is active).
-    pub fn path_check(&self, tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
-        let guard = self.path_guard.as_ref()?;
-        check_tool_args_guarded(guard, tool_name, arguments)
+    /// Validate a tool call's path arguments against the guard and return
+    /// arguments with every path **replaced by its resolved absolute form**.
+    ///
+    /// Substitution is the point: a handler that received the raw string would
+    /// resolve a relative path against the *process* cwd, while the guard
+    /// resolved it against the *workspace root*. Those coincide only when the
+    /// harness happens to be started in the workspace, so checking one and
+    /// opening the other leaves the containment purely incidental.
+    ///
+    /// Returns `Err(violation_message)` when the guard rejects a path, or the
+    /// arguments unchanged when no guard is active.
+    pub fn guard_arguments(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        match self.path_guard.as_ref() {
+            Some(guard) => resolve_tool_args_guarded(guard, tool_name, arguments),
+            None => Ok(arguments.clone()),
+        }
+    }
+
+    /// Confine a `glob` result to the guard's roots, line by line.
+    ///
+    /// Validating the pattern's static prefix is not sufficient: the `glob`
+    /// crate descends into symlinked directories, so `**/*.env` lists
+    /// `<root>/link/canary.env` — and thus whatever is really under
+    /// `/outside` — even though every argument was in bounds. Filtering the
+    /// *results* through the guard is what confines the tool.
+    ///
+    /// Non-path lines (the "no files found" and truncation notices) resolve
+    /// under the workspace root and so survive; only paths a symlink carried
+    /// the walker out to are dropped.
+    fn filter_glob_output(&self, result: String) -> String {
+        let Some(guard) = self.path_guard.as_ref() else {
+            return result;
+        };
+        let kept: Vec<&str> = result
+            .lines()
+            .filter(|line| guard.resolve_contained(line).is_ok())
+            .collect();
+        if kept.len() == result.lines().count() {
+            return result;
+        }
+        if kept.is_empty() {
+            return "No files found matching pattern (all matches resolved outside the workspace)"
+                .to_string();
+        }
+        kept.join("\n")
     }
 
     /// Register all built-in tools.
@@ -143,7 +186,6 @@ impl ToolManager {
         self.register_tool(crate::tools::edit::edit_tool_entry());
         self.register_tool(crate::tools::grep::grep_tool_entry());
         self.register_tool(crate::tools::run::run_tool_entry(sandbox));
-        self.register_tool(crate::tools::glob::glob_tool_entry());
         self.register_tool(crate::tools::glob::glob_tool_entry());
         self.register_tool(crate::tools::web_search::web_search_tool_entry());
         self.register_tool(crate::tools::web_search::web_fetch_tool_entry());
@@ -319,72 +361,118 @@ impl ToolManager {
         arguments: &serde_json::Value,
     ) -> String {
         // Path containment: reject any tool call that would touch a path
-        // outside the allowed roots. This happens before the tool handler
-        // runs, so it applies regardless of auto-accept mode.
-        if let Some(error) = self.path_check(tool_name, arguments) {
-            return error;
-        }
+        // outside the allowed roots, and hand the handler the *resolved*
+        // paths. This happens before the tool handler runs, so it applies
+        // regardless of auto-accept mode.
+        let arguments = match self.guard_arguments(tool_name, arguments) {
+            Ok(args) => args,
+            Err(error) => return error,
+        };
 
-        if let Some(tool) = self.tools.iter().find(|t| t.name == tool_name) {
-            tool::execute_tool_call(tool, arguments).await
+        let Some(tool) = self.tools.iter().find(|t| t.name == tool_name) else {
+            return format!("Error: Tool '{}' not found", tool_name);
+        };
+
+        let result = tool::execute_tool_call(tool, &arguments).await;
+        if tool_name == "glob" {
+            self.filter_glob_output(result)
         } else {
-            format!("Error: Tool '{}' not found", tool_name)
+            result
         }
     }
 }
 
-/// Enforce path containment for a tool call's arguments.
+/// Resolve a tool call's path arguments against the guard.
 ///
 /// Path-bearing tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`) have
-/// their path/pattern arguments checked against the guard. The `run` tool's
-/// explicit `cwd` is also checked — not because a sandboxed shell could
+/// their path/pattern arguments resolved, and the resolved absolute form is
+/// **substituted into the arguments** the handler receives. The `run` tool's
+/// explicit `cwd` is resolved too — not because a sandboxed shell could
 /// escape (it couldn't; the directory simply would not exist in the mount
 /// tree), but so the model gets a clear containment error instead of a
 /// confusing `No such file or directory`.
 ///
-/// Returns `Some(error)` to block the call, or `None` to allow it.
-fn check_tool_args_guarded(
+/// Returns `Err(violation)` if any path is outside the allowed roots, or the
+/// arguments with paths rewritten to absolute form.
+fn resolve_tool_args_guarded(
     guard: &crate::path_guard::PathGuard,
     tool_name: &str,
     arguments: &serde_json::Value,
-) -> Option<String> {
+) -> Result<serde_json::Value, String> {
     let arg_str = |name: &str| -> Option<String> {
         arguments
             .get(name)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     };
+    let mut out = arguments.clone();
+    let Some(map) = out.as_object_mut() else {
+        return Ok(out);
+    };
+
+    let mut resolve_into = |key: &str, value: String| -> Result<(), String> {
+        let resolved = guard.resolve_contained(&value)?;
+        map.insert(
+            key.to_string(),
+            serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+        );
+        Ok(())
+    };
 
     match tool_name {
-        // Tools with a required "path" argument
+        // Tools with a required "path" argument.
         "ls" | "read" | "write" | "edit" => {
             let path = arg_str("path").unwrap_or_default();
-            guard.resolve_contained(&path).err()
+            resolve_into("path", path)?;
         }
-        // grep: optional "path" directory argument (defaults to ".")
+        // grep: optional "path" directory argument (defaults to the workspace root).
         "grep" => {
             let path = arg_str("path").unwrap_or_else(|| ".".to_string());
-            guard.resolve_contained(&path).err()
+            resolve_into("path", path)?;
         }
-        // glob: the static prefix of the pattern must be inside an allowed root
+        // glob: only the pattern's static prefix can be checked, so it is the
+        // prefix that gets resolved and spliced back in — the wildcards are
+        // not paths. Results are filtered separately (see
+        // [`ToolManager::filter_glob_output`]), because the glob walker
+        // follows symlinks.
         "glob" => {
             let pattern = arg_str("pattern").unwrap_or_default();
-            guard.check_glob_pattern(&pattern).err()
+            let base = crate::path_guard::glob_static_prefix(&pattern);
+            let resolved = guard.resolve_contained(base)?;
+            let resolved_str = resolved.to_string_lossy().into_owned();
+            // Re-attach the wildcard tail. A pattern whose prefix is "." was
+            // anchored at the working directory, so the whole pattern hangs
+            // off the resolved root.
+            let tail = match pattern.strip_prefix(base) {
+                Some(rest) if base != "." => rest.to_string(),
+                _ => pattern.clone(),
+            };
+            let rewritten = if tail.starts_with('/') {
+                format!("{resolved_str}{tail}")
+            } else {
+                format!("{resolved_str}/{tail}")
+            };
+            map.insert("pattern".to_string(), serde_json::Value::String(rewritten));
         }
-        // run: only the explicit "cwd" can be checked statically
-        "run" => match arg_str("cwd") {
-            Some(cwd) if !cwd.trim().is_empty() => guard.resolve_contained(&cwd).err(),
-            _ => None,
-        },
+        // run: only the explicit "cwd" can be checked statically.
+        "run" => {
+            if let Some(cwd) = arg_str("cwd").filter(|s| !s.trim().is_empty()) {
+                resolve_into("cwd", cwd)?;
+            }
+        }
         // All other tools (web_search, web_fetch, signal tools, custom tools
         // without a known path arg) are not subject to path containment.
-        _ => None,
+        _ => {}
     }
+
+    Ok(out)
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::path::Path;
+
     use crate::path_guard::PathGuard;
 
     /// Manager with a path guard rooted at `root` and no process sandbox —
@@ -541,6 +629,202 @@ mod tests {
             .await;
         assert!(result.starts_with("Error: Path '"), "result was: {result}");
         assert!(!result.contains("top secret"), "leaked: {result}");
+    }
+
+    /// A symlink plus `..` must not reach outside the root: the guard used to
+    /// normalize `..` lexically (collapsing `<root>/link/../etc/passwd` to
+    /// `<root>/etc/passwd`, in bounds) while the kernel resolved the symlink
+    /// first and opened `/etc/passwd`.
+    #[tokio::test]
+    async fn guard_blocks_symlink_dotdot_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(Path::new("/usr"), tmp.path().join("link")).unwrap();
+        let manager = guarded_manager(tmp.path());
+
+        let raw = format!("{}/link/../etc/passwd", tmp.path().display());
+        let result = manager
+            .execute_tool_call("read", &serde_json::json!({"path": raw}))
+            .await;
+        assert!(result.starts_with("Error: Path '"), "result was: {result}");
+        assert!(!result.contains("nologin"), "leaked /etc/passwd: {result}");
+    }
+
+    /// Same shape, but for a write: previously the payload landed outside the
+    /// workspace while the guard believed it had authorized `<root>/x`.
+    #[tokio::test]
+    async fn guard_blocks_symlink_dotdot_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sub = outside.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::os::unix::fs::symlink(&sub, tmp.path().join("link")).unwrap();
+
+        let manager = guarded_manager(tmp.path());
+        let raw = format!("{}/link/../dropped.txt", tmp.path().display());
+        let _ = manager
+            .execute_tool_call("write", &serde_json::json!({"path": raw, "content": "PWN"}))
+            .await;
+
+        assert!(
+            !outside.path().join("dropped.txt").exists(),
+            "wrote outside the workspace via symlink+.."
+        );
+    }
+
+    /// The guard resolves a relative path against the workspace root, so the
+    /// handler must receive that resolved path — not the raw string, which
+    /// `std::fs` would resolve against the *process* cwd. Those coincide only
+    /// when the harness is started inside the workspace, so a relative
+    /// `write("victim.txt")` could otherwise clobber a file next to the cwd
+    /// while the guard believed it had authorized `<root>/victim.txt`.
+    #[tokio::test]
+    async fn guard_substitutes_resolved_path_for_relative_args() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = guarded_manager(tmp.path());
+
+        // The resolved argument is absolute and rooted at the workspace, which
+        // is what makes the handler's `fs::write` land in a predictable place.
+        let args = manager
+            .guard_arguments(
+                "write",
+                &serde_json::json!({"path": "victim.txt", "content": "x"}),
+            )
+            .unwrap();
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap();
+        assert!(
+            Path::new(path).is_absolute(),
+            "handler still got a relative path: {path}"
+        );
+        assert_eq!(
+            Path::new(path),
+            tmp.path().canonicalize().unwrap().join("victim.txt")
+        );
+
+        // End-to-end: the file lands in the workspace, wherever the test binary
+        // happens to have been started from.
+        let result = manager
+            .execute_tool_call(
+                "write",
+                &serde_json::json!({"path": "victim.txt", "content": "OVERWRITTEN"}),
+            )
+            .await;
+        assert!(result.starts_with("Wrote"), "result was: {result}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("victim.txt")).unwrap(),
+            "OVERWRITTEN"
+        );
+    }
+
+    /// `grep` walks a directory tree, so checking only its root argument is
+    /// not containment: the walker used to descend into symlinked directories
+    /// and copy outside content straight into the model's context.
+    #[tokio::test]
+    async fn grep_does_not_follow_symlinked_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("leak.txt"), "CANARY-CONTENT\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).unwrap();
+        std::fs::write(tmp.path().join("local.txt"), "CANARY-CONTENT\n").unwrap();
+
+        let manager = guarded_manager(tmp.path());
+        let result = manager
+            .execute_tool_call(
+                "grep",
+                &serde_json::json!({"pattern": "CANARY-CONTENT", "path": tmp.path()}),
+            )
+            .await;
+        assert!(
+            result.contains("local.txt"),
+            "missed the in-tree file: {result}"
+        );
+        assert!(
+            !result.contains("link/leak.txt"),
+            "grep followed a symlink outside the workspace: {result}"
+        );
+    }
+
+    /// `glob` only has a *pattern* to check, and the pattern's static prefix
+    /// passing the guard says nothing about where the walker ends up. Results
+    /// reached through a symlink must be filtered out.
+    #[tokio::test]
+    async fn glob_results_are_confined_to_the_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("canary.env"), "A=1\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("link")).unwrap();
+        std::fs::write(tmp.path().join("local.env"), "B=2\n").unwrap();
+
+        let manager = guarded_manager(tmp.path());
+        let result = manager
+            .execute_tool_call("glob", &serde_json::json!({"pattern": "**/*.env"}))
+            .await;
+        assert!(
+            result.contains("local.env"),
+            "missed the in-tree file: {result}"
+        );
+        assert!(
+            !result.contains("canary.env"),
+            "glob listed a file outside the workspace through a symlink: {result}"
+        );
+    }
+
+    /// `glob` must keep working for ordinary in-tree patterns, including after
+    /// the pattern is rewritten to an absolute one by the guard.
+    #[tokio::test]
+    async fn glob_still_finds_in_tree_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/a.rs"), "// a").unwrap();
+        std::fs::write(tmp.path().join("src/b.rs"), "// b").unwrap();
+
+        let manager = guarded_manager(tmp.path());
+        for pattern in ["**/*.rs", "src/**/*.rs", "./src/*.rs"] {
+            let result = manager
+                .execute_tool_call("glob", &serde_json::json!({"pattern": pattern}))
+                .await;
+            assert!(
+                result.contains("a.rs") && result.contains("b.rs"),
+                "pattern {pattern:?} returned: {result}"
+            );
+        }
+    }
+
+    /// `run`'s `cwd` is resolved the same way, so a sandboxed command starts in
+    /// the directory the guard authorized rather than a raw relative string.
+    #[tokio::test]
+    async fn run_cwd_is_resolved_against_the_workspace_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        let manager = guarded_manager(tmp.path());
+
+        let args = manager
+            .guard_arguments("run", &serde_json::json!({"command": "pwd", "cwd": "."}))
+            .unwrap();
+        assert_eq!(
+            args.get("cwd").and_then(|v| v.as_str()).unwrap(),
+            tmp.path().canonicalize().unwrap().to_string_lossy()
+        );
+
+        let sub = manager
+            .guard_arguments("run", &serde_json::json!({"command": "pwd", "cwd": "sub"}))
+            .unwrap();
+        assert_eq!(
+            sub.get("cwd").and_then(|v| v.as_str()).unwrap(),
+            tmp.path()
+                .canonicalize()
+                .unwrap()
+                .join("sub")
+                .to_string_lossy()
+        );
+
+        // An escaping cwd is still rejected before the handler sees it.
+        let err = manager
+            .guard_arguments(
+                "run",
+                &serde_json::json!({"command": "pwd", "cwd": "../escape"}),
+            )
+            .unwrap_err();
+        assert!(err.starts_with("Error: Path '"), "{err}");
     }
 
     #[tokio::test]

@@ -146,32 +146,28 @@ used to reach system configuration. The workspace root itself is exempt from
 that block list. Under bwrap these paths are also bound read-only into the
 process sandbox, so `run` sees the same view as `read`.
 
-### `sandbox`
+### `sandbox` — not a project setting
 
-Replaces the global `sandbox` block **wholesale** — a partial override would
-mix `backend` from one file with `writable_paths` from another, which is exactly
-what a security setting should not do.
+The process sandbox **cannot** be configured per project. `ProjectSettings` has
+no `sandbox` field, and a `sandbox` block in `.tinyharness/config.json` is
+ignored (unknown keys are dropped by serde).
 
-```json
-{
-  "sandbox": {
-    "backend": "bwrap",
-    "writable_paths": ["/tmp/project-build-cache"]
-  }
-}
-```
+This is deliberate: a project config travels inside the repository, so anyone
+who sends you a clone controls it. Honouring it would let a repository pin a
+weaker backend, or set `"backend": "off"` and silently disable the containment
+you configured for your own machine. Sandbox choice is global-only —
+`sandbox.backend` in `~/.config/tinyharness/settings.json`, or `--sandbox=…` /
+`--no-sandbox` on the command line. It defaults to `auto`, and a missing or
+broken backend is a **startup error** rather than a silent downgrade; pass
+`--no-sandbox` to opt out deliberately.
 
-`backend` is `off` (default), `auto`, `bwrap`, or `firejail`; `writable_paths`
-lists extra roots **only** sandboxed shell commands may write (never the file
-tools). There is no `network` key — sandboxed commands always have the network.
+`allowed_paths` **is** still per-project (see above): it only ever widens read
+access for a machine whose paths exist, its entries are validated against the
+blocked system prefixes, and a stale path is skipped with a warning — so it
+cannot be used to take anything away, and it cannot reach system configuration.
 
-A project config that pins a backend the machine does not have is a warning,
-not a startup failure — TinyHarness continues unsandboxed, so a shared
-`.tinyharness/config.json` stays usable on a machine without bubblewrap.
-
-Neither `sandbox` nor `allowed_paths` is written by `/project-settings init`:
-both are machine-local, and committing them would leak local layout while
-overriding every teammate's own settings.
+Neither key is written by `/project-settings init`: both are machine-local, and
+committing them would leak local layout.
 
 ## Viewing Merged Settings
 

@@ -98,8 +98,7 @@ impl fmt::Display for AutoAcceptMode {
 
 /// OS-level sandbox configuration for shell-executing tools.
 ///
-/// Serializes as the `sandbox` object in `settings.json` /
-/// `.tinyharness/config.json`:
+/// Serializes as the `sandbox` object in the **global** `settings.json` only:
 ///
 /// ```json
 /// {
@@ -110,9 +109,17 @@ impl fmt::Display for AutoAcceptMode {
 /// }
 /// ```
 ///
-/// The default is [`SandboxConfig::disabled`] — no sandbox — so existing
-/// setups are unaffected until the user opts in via `sandbox.backend` or the
-/// `--sandbox` flag.
+/// The default is [`SandboxConfig::auto`] — sandbox with whatever backend is
+/// installed, bwrap preferred. Sandboxing shell commands is the baseline, and
+/// turning it off is a deliberate act: `--no-sandbox` on the command line, or
+/// `{"backend": "off"}` in the global settings file.
+///
+/// This block is deliberately **absent from `.tinyharness/config.json`**
+/// ([`ProjectSettings`] has no `sandbox` field). A project config is shipped
+/// inside the repository, so honouring it would let any cloned repo downgrade
+/// the user's chosen containment — including switching the sandbox off
+/// entirely. Unknown keys are ignored by serde, so a stray `sandbox` block in
+/// a project file has no effect.
 ///
 /// `backend` is **required** whenever the `sandbox` object is present, and
 /// accepts `auto` (use whatever is installed, bwrap preferred), `bwrap`,
@@ -121,7 +128,7 @@ impl fmt::Display for AutoAcceptMode {
 /// deliberate: a block like `{"sandbox": {"writable_paths": ["/tmp/x"]}}`
 /// states an intention to be sandboxed without naming a backend, and silently
 /// defaulting that to `off` would leave the user unprotected while believing
-/// otherwise. Omit the whole `sandbox` key to stay unsandboxed.
+/// otherwise. Omit the whole `sandbox` key to get [`SandboxConfig::auto`].
 ///
 /// There is deliberately **no network setting**: sandboxed commands always
 /// have the network. A coding agent runs `git fetch`, `curl`, and `cargo add`
@@ -146,8 +153,9 @@ pub struct SandboxConfig {
 }
 
 impl Default for SandboxConfig {
+    /// Sandboxing is on by default — see the type-level docs.
     fn default() -> Self {
-        Self::disabled()
+        Self::auto()
     }
 }
 
@@ -213,12 +221,6 @@ pub struct ProjectSettings {
     /// Override whether the model may ask questions for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions_enabled: Option<bool>,
-    /// Override the OS-level sandbox configuration for this project.
-    ///
-    /// Replaces (not extends) the global `sandbox` block, since a partial
-    /// override would be ambiguous.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox: Option<SandboxConfig>,
     /// Override the path-guard allow list for this project (replaces global).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_paths: Option<Vec<String>>,
@@ -305,7 +307,9 @@ pub struct MergedSettings {
     pub auto_compact_enabled_source: SettingSource,
     pub questions_enabled: bool,
     pub questions_enabled_source: SettingSource,
-    /// Effective sandbox configuration (project replaces global, or `off`).
+    /// Effective sandbox configuration — always the global block.
+    ///
+    /// Not overridable per project: see [`SandboxConfig`].
     pub sandbox: SandboxConfig,
     pub sandbox_source: SettingSource,
     /// Effective extra readable paths for the file tools.
@@ -383,7 +387,7 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
             questions_enabled: global.questions_enabled,
             questions_enabled_source: SettingSource::Default,
             sandbox: global.sandbox.clone(),
-            sandbox_source: SettingSource::Default,
+            sandbox_source: SettingSource::Global,
             allowed_paths: global.allowed_paths.clone().unwrap_or_default(),
             allowed_paths_source: SettingSource::Default,
         },
@@ -445,15 +449,12 @@ fn merge_settings(global: &Settings, project: Option<&ProjectSettings>) -> Merge
                 .map(|v| (v, SettingSource::Project))
                 .unwrap_or((global.questions_enabled, SettingSource::Default));
 
-            // Sandbox: project replaces global wholesale. A partial override
-            // would leave `backend` from one file and `writable_paths` from
-            // another, which is exactly the kind of silent mixing a security
-            // setting shouldn't allow.
-            let (sandbox, sandbox_source) = p
-                .sandbox
-                .clone()
-                .map(|v| (v, SettingSource::Project))
-                .unwrap_or((global.sandbox.clone(), SettingSource::Default));
+            // Sandbox: global only, never overridable by the project. A
+            // `.tinyharness/config.json` travels with the repository, so
+            // honouring it here would let a cloned repo pick the backend —
+            // or disable the sandbox altogether.
+            let sandbox = global.sandbox.clone();
+            let sandbox_source = SettingSource::Global;
 
             // Allowed paths: project extends global.
             let allowed_paths = match &p.allowed_paths {
@@ -523,12 +524,9 @@ pub fn generate_project_config_template(settings: &Settings) -> ProjectSettings 
         preferred_mode: Some(settings.preferred_mode),
         auto_compact_enabled: Some(settings.auto_compact_enabled),
         questions_enabled: Some(settings.questions_enabled),
-        // Deliberately not templated: the sandbox and the path allow list are
-        // machine-local security decisions (which backend is installed, which
-        // absolute paths exist on this host). Writing them into a committed
-        // `.tinyharness/config.json` would leak local layout and override the
-        // developer's own settings.
-        sandbox: None,
+        // Deliberately not templated: the path allow list is a machine-local
+        // security decision (which absolute paths exist on this host), and the
+        // sandbox is not a project setting at all — see `ProjectSettings`.
         allowed_paths: None,
     }
 }

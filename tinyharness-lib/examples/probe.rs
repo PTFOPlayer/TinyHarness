@@ -3,9 +3,9 @@
 //!
 //! Three behaviours are worth looking at in the output:
 //!
-//! 1. Omitting `sandbox` entirely gives the disabled default; an explicit
-//!    `"sandbox": null` is a hard parse error, so "turn it off" is spelled
-//!    `{"backend": "off"}`, not `null`.
+//! 1. Omitting `sandbox` entirely gives the **auto** default (sandboxing is on
+//!    unless the user opts out); an explicit `"sandbox": null` is a hard parse
+//!    error, so "turn it off" is spelled `{"backend": "off"}`, not `null`.
 //! 2. `backend` is required whenever a block is present — a backend-less block
 //!    is rejected rather than silently treated as `off`.
 //! 3. An unknown key inside the block (here the removed `network` setting) is

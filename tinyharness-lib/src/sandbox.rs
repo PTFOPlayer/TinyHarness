@@ -13,10 +13,12 @@
 //!
 //! **bwrap** builds a fresh mount tree from a `tmpfs` root and binds *only*
 //! what the command needs, so anything not bound simply does not exist inside
-//! the sandbox: the workspace (read-write), the system libraries (read-only),
-//! and whatever the user added via `allowed_paths`. It also unshares the PID,
-//! IPC, UTS and cgroup namespaces, clears the environment, and starts a new
-//! session so a command cannot grab the terminal.
+//! the sandbox: the workspace (read-write), the system libraries and `/etc`
+//! (read-only), the file `/etc/resolv.conf` points at when it is a symlink out
+//! of `/etc` (see `resolv_conf_target`), and whatever the user added via
+//! `allowed_paths`. It also unshares the PID, IPC, UTS and cgroup namespaces,
+//! clears the environment, and starts a new session so a command cannot grab
+//! the terminal.
 //!
 //! **firejail** takes the opposite approach: it mounts the *existing* host
 //! filesystem read-only and re-binds the workspace read-write, then drops
@@ -32,6 +34,12 @@
 //! blocking those would make the sandbox unusable rather than safe, and the
 //! exfiltration risk it would mitigate is already accepted by giving the model
 //! shell access. Network isolation is out of scope here.
+//!
+//! Reachability is not the same as *configuration*, though: name resolution
+//! needs `/etc/resolv.conf`, which on a systemd-resolved host is a symlink into
+//! the unbound `/run`. bwrap therefore binds that target explicitly, or every
+//! `curl`/`npm`/`git fetch` fails with a DNS error that looks exactly like a
+//! blocked network.
 //!
 //! # Limits
 //!
@@ -159,6 +167,58 @@ pub struct Sandbox {
     /// `/lib`-style symlinks that must be recreated inside the bwrap mount
     /// tree (empty for firejail, which sees the host tree).
     symlinks: Vec<(PathBuf, PathBuf)>,
+    /// The real file behind `/etc/resolv.conf` when it is a symlink pointing
+    /// outside `/etc` (empty for firejail, which sees the host tree).
+    ///
+    /// See [`resolv_conf_target`].
+    resolv_conf: Option<PathBuf>,
+}
+
+/// The host's `/etc/resolv.conf` target, if it is a symlink leaving `/etc`.
+///
+/// bwrap binds `/etc` read-only but deliberately not `/run`, so on a
+/// systemd-resolved host — where `/etc/resolv.conf` is a symlink to
+/// `/run/systemd/resolve/stub-resolv.conf` — the link *dangles* inside the
+/// sandbox and every name resolution fails with `EAI_NONAME` / curl exit 6.
+/// That looks exactly like "the sandbox blocked the network", and it is not:
+/// the network is wide open. Binding the resolved target at its own path
+/// restores the link.
+///
+/// Returns `None` when `/etc/resolv.conf` is a regular file (already covered
+/// by the `/etc` bind) or unreadable, so a non-systemd host changes nothing.
+fn resolv_conf_target_at(link_path: &Path) -> Option<PathBuf> {
+    if !std::fs::symlink_metadata(link_path)
+        .ok()?
+        .file_type()
+        .is_symlink()
+    {
+        return None;
+    }
+    let target = std::fs::read_link(link_path).ok()?;
+    // Relative targets (`-> ../run/...`) resolve against the link's directory,
+    // which is what the sandbox also sees, so canonicalize against `/etc`.
+    let absolute = if target.is_absolute() {
+        target
+    } else {
+        link_path.parent()?.join(target)
+    };
+    let resolved = normalize_existing(&absolute)?;
+    // A target still inside `/etc` needs no extra bind.
+    let etc = link_path.parent()?;
+    if resolved.starts_with(etc) || !resolved.is_file() {
+        return None;
+    }
+    Some(resolved)
+}
+
+/// The host's `/etc/resolv.conf` target, if it needs an extra bind.
+fn resolv_conf_target() -> Option<PathBuf> {
+    resolv_conf_target_at(Path::new("/etc/resolv.conf"))
+}
+
+/// Canonicalize `path`, but only if it exists — `None` otherwise.
+fn normalize_existing(path: &Path) -> Option<PathBuf> {
+    path.exists().then(|| path.canonicalize().ok()).flatten()
 }
 
 /// Is `path` a symlink whose target is exactly `target`?
@@ -212,11 +272,17 @@ impl Sandbox {
             SandboxBackend::Firejail => Vec::new(),
         };
 
+        let resolv_conf = match backend {
+            SandboxBackend::Bwrap => resolv_conf_target(),
+            SandboxBackend::Firejail => None,
+        };
+
         Ok(Self {
             backend,
             workspace: canonical,
             options,
             symlinks,
+            resolv_conf,
         })
     }
 
@@ -270,9 +336,11 @@ impl Sandbox {
     pub fn detect(workspace: &Path, options: SandboxOptions) -> Result<Self, String> {
         match Self::available().first().copied() {
             Some(backend) => Self::new(backend, workspace, options),
-            None => Err("No sandbox backend found. Install bubblewrap (`bwrap`) or \
-                 firejail, or start without --sandbox."
-                .to_string()),
+            None => Err(
+                "No sandbox backend found. Install bubblewrap (`bwrap`) or firejail, \
+                 or start with --no-sandbox to run shell commands unsandboxed."
+                    .to_string(),
+            ),
         }
     }
 
@@ -397,6 +465,16 @@ impl Sandbox {
         // System toolchain and config, read-only.
         a.extend(bind_ro(Path::new("/usr")));
         a.extend(bind_ro(Path::new("/etc")));
+        // `/etc/resolv.conf` is usually a symlink into `/run`, which is not
+        // bound — without its target the link dangles and DNS fails even
+        // though the network itself is open. `--ro-bind-try` so a target that
+        // vanished between construction and execution degrades to no DNS
+        // rather than to a sandbox that refuses to start.
+        if let Some(resolv) = self.resolv_conf.as_deref() {
+            a.push(os("--ro-bind-try"));
+            a.push(resolv.as_os_str().to_owned());
+            a.push(resolv.as_os_str().to_owned());
+        }
         for (link, target) in &self.symlinks {
             a.push(os("--symlink"));
             a.push(target.as_os_str().to_owned());
@@ -623,6 +701,131 @@ mod tests {
         assert!(!SandboxBackend::is_off("bwrap"));
         assert_eq!(SandboxBackend::Bwrap.to_string(), "bwrap");
         assert_eq!(SandboxBackend::Firejail.to_string(), "firejail");
+    }
+
+    /// The systemd-resolved layout: `/etc/resolv.conf` links out of `/etc`, so
+    /// the target must be found and reported at its own absolute path.
+    #[test]
+    fn resolv_conf_target_follows_a_link_out_of_etc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let etc = tmp.path().join("etc");
+        let run = tmp.path().join("run/systemd/resolve");
+        std::fs::create_dir_all(&etc).unwrap();
+        std::fs::create_dir_all(&run).unwrap();
+        let real = run.join("stub-resolv.conf");
+        std::fs::write(&real, "nameserver 127.0.0.53\n").unwrap();
+        std::os::unix::fs::symlink(&real, etc.join("resolv.conf")).unwrap();
+
+        assert_eq!(resolv_conf_target_at(&etc.join("resolv.conf")), Some(real));
+    }
+
+    /// A relative link (`-> ../run/...`) resolves against `/etc`, not the CWD.
+    #[test]
+    fn resolv_conf_target_resolves_relative_links_against_etc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let etc = tmp.path().join("etc");
+        let run = tmp.path().join("run/systemd/resolve");
+        std::fs::create_dir_all(&etc).unwrap();
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("stub-resolv.conf"), "nameserver 1.1.1.1\n").unwrap();
+        std::os::unix::fs::symlink(
+            "../run/systemd/resolve/stub-resolv.conf",
+            etc.join("resolv.conf"),
+        )
+        .unwrap();
+
+        let got = resolv_conf_target_at(&etc.join("resolv.conf")).unwrap();
+        assert_eq!(got, run.join("stub-resolv.conf").canonicalize().unwrap());
+    }
+
+    /// A regular file is already inside the `/etc` bind — binding it again would
+    /// be pointless, and a link still under `/etc` likewise.
+    #[test]
+    fn resolv_conf_target_is_none_for_plain_files_and_internal_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let etc = tmp.path().join("etc");
+        std::fs::create_dir_all(&etc).unwrap();
+
+        // Regular file.
+        let plain = etc.join("resolv.conf");
+        std::fs::write(&plain, "nameserver 8.8.8.8\n").unwrap();
+        assert_eq!(resolv_conf_target_at(&plain), None);
+
+        // Symlink whose target is still under /etc.
+        std::fs::write(etc.join("other.conf"), "nameserver 9.9.9.9\n").unwrap();
+        let internal = etc.join("resolv-link.conf");
+        std::os::unix::fs::symlink("other.conf", &internal).unwrap();
+        assert_eq!(resolv_conf_target_at(&internal), None);
+
+        // Dangling link: nothing to bind, and it must not panic.
+        let dangling = etc.join("resolv-dangling.conf");
+        std::os::unix::fs::symlink("/no/such/resolv.conf", &dangling).unwrap();
+        assert_eq!(resolv_conf_target_at(&dangling), None);
+
+        // Missing file entirely.
+        assert_eq!(resolv_conf_target_at(&etc.join("nope.conf")), None);
+    }
+
+    /// Whatever the host's layout, the bind must target the resolved file at its
+    /// own path — mounting onto the `/etc/resolv.conf` symlink itself is refused
+    /// by bwrap ("Can't mount on symlink destination"), which is how the first
+    /// attempt at this fix failed.
+    #[test]
+    fn bwrap_binds_dns_config_when_resolv_conf_is_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = sandbox_in(tmp.path(), SandboxOptions::default());
+        let (_, args) = sb.argv("true", None);
+        let flat: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+
+        match resolv_conf_target() {
+            Some(target) => {
+                let t = target.to_string_lossy().into_owned();
+                assert!(
+                    flat.windows(3)
+                        .any(|w| w[0] == "--ro-bind-try" && w[1] == t && w[2] == t),
+                    "DNS config {t} not bound: {flat:?}"
+                );
+                assert!(
+                    !flat
+                        .windows(3)
+                        .any(|w| w[0] == "--ro-bind-try" && w[1] == "/etc/resolv.conf"),
+                    "must not mount onto the /etc/resolv.conf symlink: {flat:?}"
+                );
+            }
+            None => assert!(
+                !flat.iter().any(|a| a == "--ro-bind-try"),
+                "no extra DNS bind expected on this host: {flat:?}"
+            ),
+        }
+    }
+
+    /// firejail sees the host filesystem, so it never needs (and must not get)
+    /// bwrap's mount flags.
+    #[test]
+    fn firejail_gets_no_dns_bind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(
+            SandboxBackend::Firejail,
+            tmp.path(),
+            SandboxOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            sb.resolv_conf.is_none(),
+            "firejail must not carry DNS state"
+        );
+        let (_, args) = sb.argv("true", None);
+        let flat: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !flat.iter().any(|a| a == "--ro-bind-try"),
+            "unexpected bwrap flag: {flat:?}"
+        );
     }
 
     #[test]

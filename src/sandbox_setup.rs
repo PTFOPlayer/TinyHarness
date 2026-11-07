@@ -1,4 +1,4 @@
-//! Resolve the CLI `--sandbox` flag and settings into a concrete sandbox and
+//! Resolve the CLI sandbox flags and settings into a concrete sandbox and
 //! path guard for this session.
 //!
 //! Two independent containment layers are decided here:
@@ -7,16 +7,21 @@
 //!    `write`, `edit`, `grep`, `glob`) to the workspace plus `allowed_paths`.
 //!    Always on; there is no way to turn it off.
 //! 2. **Process sandbox** — wraps `run` and custom tools in bwrap/firejail.
-//!    Opt-in via `--sandbox` or the `sandbox.backend` setting.
+//!    **On by default** (`sandbox.backend` defaults to `auto`); opt out with
+//!    `--no-sandbox`, or pin a backend with `--sandbox=bwrap|firejail`.
 //!
-//! Precedence for the process sandbox: an explicit `--sandbox…` flag wins
-//! over settings, including `--sandbox=off` which forces it off for one
-//! session. A bare `--sandbox` means "auto".
+//! Precedence for the process sandbox: an explicit `--sandbox…` flag wins over
+//! settings, and `--no-sandbox` (like `--sandbox=off`) forces it off for one
+//! session. A bare `--sandbox` means "auto". The setting is global-only — a
+//! project `.tinyharness/config.json` cannot reach it, so a cloned repository
+//! cannot downgrade the user's containment. See
+//! [`SandboxConfig`](tinyharness_lib::config::SandboxConfig).
 //!
-//! Failure handling differs by origin, deliberately: a flag the user typed
-//! today must work or explain itself loudly (hard exit), while a setting that
-//! worked on another machine must not stop the app from starting (warn and
-//! continue unsandboxed).
+//! Failure handling: because sandboxing is the default rather than an opt-in,
+//! a sandbox that was *expected* but cannot be built is a **hard exit** — the
+//! alternative is silently running every shell command unsandboxed, which is
+//! exactly the failure the flag exists to prevent. Only an explicit
+//! `--no-sandbox` opts out of that, and it opts out loudly.
 
 use std::path::{Path, PathBuf};
 
@@ -170,15 +175,17 @@ fn resolve_dirs(entries: &[String], home: &Option<PathBuf>, project: &Path) -> V
 
 /// Resolve the session's containment layers.
 ///
-/// `strict` selects the failure mode for a sandbox that was *requested* but
-/// could not be built: `true` (the flag was typed) returns `Err` so the caller
-/// can exit, `false` (settings asked for it) downgrades to a warning and
-/// continues unsandboxed.
+/// `required` selects the failure mode for a sandbox that cannot be built:
+/// `true` (the default — the user never opted out) returns `Err` so the caller
+/// exits, because continuing would mean unsandboxed shell commands under a user
+/// who believes they are sandboxed. `false` (`--no-sandbox`, or
+/// `sandbox.backend = "off"`) skips the sandbox entirely and never reaches
+/// this path.
 pub fn resolve(
     cli: &CliSandbox,
     merged: &MergedSettings,
     paths: &Paths,
-    strict: bool,
+    required: bool,
 ) -> Result<Resolution, String> {
     let config = effective_config(cli, &merged.sandbox);
     let mut warnings = Vec::new();
@@ -216,7 +223,7 @@ pub fn resolve(
 
     let sandbox = match Sandbox::from_setting(&config.backend, paths.project_dir(), options) {
         Ok(sandbox) => sandbox,
-        Err(e) if strict => return Err(e),
+        Err(e) if required => return Err(e),
         Err(e) => {
             warnings.push(format!(
                 "settings requested sandbox backend '{}' but it is unavailable: {e}",
@@ -239,7 +246,7 @@ pub fn resolve(
             "sandbox backend '{}' is installed but could not run a test command: {cause}",
             sandbox.backend()
         );
-        if strict {
+        if required {
             return Err(msg);
         }
         warnings.push(msg);
@@ -431,6 +438,7 @@ mod tests {
 #[cfg(all(test, unix))]
 mod fs_tests {
     use super::*;
+    use tinyharness_lib::config::SettingSource;
     use tinyharness_lib::sandbox::SandboxBackend;
 
     #[test]
@@ -462,35 +470,105 @@ mod fs_tests {
         assert!(resolve_dirs(&entries, &None, tmp.path()).is_empty());
     }
 
+    /// Sandboxing is the default, so a session with no CLI flag and no
+    /// `sandbox` setting must *require* a sandbox: it either gets one or the
+    /// startup fails loudly. Silently continuing unsandboxed is the exact
+    /// regression this test guards against.
     #[test]
-    fn resolve_without_request_yields_no_sandbox_but_a_guard() {
+    fn default_session_requires_a_sandbox_or_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::with_home(tmp.path()).with_project_dir(tmp.path());
         let (_global, _project, merged) =
             tinyharness_lib::config::load_merged_settings_from(&paths);
-        let res = resolve(&CliSandbox::Unspecified, &merged, &paths, true).unwrap();
-        assert!(res.sandbox.is_none());
-        assert!(res.status.is_none());
-        // Guard is always produced — that is the point of the split.
-        let guard = PathGuard::builder(paths.project_dir())
-            .home(paths.home())
-            .build()
-            .unwrap();
-        assert_eq!(guard.root(), tmp.path().canonicalize().unwrap());
+        assert!(
+            merged.sandbox.is_enabled(),
+            "the default settings must ask for a sandbox, got {:?}",
+            merged.sandbox.backend
+        );
+
+        match resolve(&CliSandbox::Unspecified, &merged, &paths, true) {
+            // A backend is installed: it must be wired up, not skipped.
+            Ok(res) => {
+                assert!(
+                    res.sandbox.is_some(),
+                    "default session came out unsandboxed"
+                );
+                assert!(res.status.is_some());
+            }
+            // No backend: a hard error is correct — the caller exits.
+            Err(e) => assert!(
+                Sandbox::available().is_empty(),
+                "resolve failed although a backend is installed: {e}"
+            ),
+        }
     }
 
+    /// `--no-sandbox` is the only opt-out, and it still gets the path guard:
+    /// the file-tool layer has no off switch.
     #[test]
-    fn resolve_reports_unusable_backend_loudly_when_strict() {
+    fn explicit_opt_out_yields_no_sandbox_but_still_a_guard() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::with_home(tmp.path()).with_project_dir(tmp.path());
         let (_g, _p, merged) = tinyharness_lib::config::load_merged_settings_from(&paths);
-        // A backend name that is not a real one is a hard error either way.
+        let res = resolve(&CliSandbox::Named("off".into()), &merged, &paths, false).unwrap();
+        assert!(res.sandbox.is_none());
+        assert!(res.status.is_none());
+        assert!(
+            res.warnings.is_empty(),
+            "an explicit opt-out should not warn: {:?}",
+            res.warnings
+        );
+        // Guard is always produced — that is the point of the split.
+        assert_eq!(
+            res.path_guard.root(),
+            tmp.path().canonicalize().unwrap(),
+            "the path guard must survive an opt-out"
+        );
+    }
+
+    /// A project `.tinyharness/config.json` cannot downgrade the sandbox: it
+    /// has no `sandbox` field at all, so a cloned repository cannot turn off
+    /// containment the user configured globally.
+    #[test]
+    fn project_config_cannot_override_the_sandbox() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".config/tinyharness")).unwrap();
+        std::fs::write(
+            home.path().join(".config/tinyharness/settings.json"),
+            r#"{"sandbox": {"backend": "bwrap"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.path().join(".tinyharness")).unwrap();
+        // A hostile project tries both an explicit disable and a weaker backend.
+        for attack in [
+            r#"{"sandbox": {"backend": "off"}}"#,
+            r#"{"sandbox": {"backend": "firejail"}}"#,
+            r#"{"sandbox": "off"}"#,
+        ] {
+            std::fs::write(project.path().join(".tinyharness/config.json"), attack).unwrap();
+            let paths = Paths::with_home(home.path()).with_project_dir(project.path());
+            let (_g, _p, merged) = tinyharness_lib::config::load_merged_settings_from(&paths);
+            assert_eq!(
+                merged.sandbox.backend, "bwrap",
+                "project config {attack} changed the sandbox"
+            );
+            assert_eq!(merged.sandbox_source, SettingSource::Global);
+        }
+    }
+
+    #[test]
+    fn resolve_reports_unusable_backend_loudly_when_required() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::with_home(tmp.path()).with_project_dir(tmp.path());
+        let (_g, _p, merged) = tinyharness_lib::config::load_merged_settings_from(&paths);
+        // An explicit but bogus backend is a hard error when required.
         let err = resolve(&CliSandbox::Named("docker".into()), &merged, &paths, true).unwrap_err();
         assert!(err.contains("Unknown sandbox backend"), "{err}");
     }
 
     #[test]
-    fn resolve_downgrades_to_warning_when_not_strict() {
+    fn resolve_downgrades_to_warning_when_not_required() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::with_home(tmp.path()).with_project_dir(tmp.path());
         let (_g, _p, merged) = tinyharness_lib::config::load_merged_settings_from(&paths);

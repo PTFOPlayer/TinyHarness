@@ -168,7 +168,7 @@ Both are enforced at execution time, so they hold regardless of auto-accept.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `allowed_paths` | vec\|null | `null` | Extra host roots the built-in file tools may read, beyond the workspace root. Entries may be absolute, `~`-prefixed, or relative to the workspace. System prefixes (`/etc`, `/usr`, `/boot`, `/sys`, `/proc`, `/dev`, `/root`, `/var/log`, `/var/run`, `/run`) are always rejected; the workspace root is exempt from that block list. Under bwrap these are also bound read-only into the sandbox |
-| `sandbox.backend` | string | `"off"` | Process sandbox for `run` and custom tools: `"auto"` (best installed, bwrap preferred), `"bwrap"`, `"firejail"`, or `"off"`. The `--sandbox[=<backend>]` flag overrides this for one session — including `--sandbox=off` |
+| `sandbox.backend` | string | `"auto"` | Process sandbox for `run` and custom tools, **on by default**: `"auto"` (best installed, bwrap preferred), `"bwrap"`, `"firejail"`, or `"off"`. Global-only — a project `.tinyharness/config.json` cannot override it. `--sandbox[=<backend>]` / `--no-sandbox` override it for one session |
 | `sandbox.writable_paths` | vec | `[]` | Extra host roots sandboxed commands may **write**. Reachable only by sandboxed shell commands, never by the file tools |
 
 There is no `sandbox.network` setting: sandboxed commands always have the network.
@@ -367,7 +367,8 @@ All CLI flags override settings:
 | `--skip-health-check` | Skips provider health check at startup (a failed health check is otherwise a warning, not fatal) |
 | `-c`, `--continue` | Loads most recent session (doesn't modify settings) |
 | `-p`, `--prompt <text>` | Sends initial prompt then enters interactive mode |
-| `--sandbox[=<backend>]` | Nothing — session-only. Selects `sandbox.backend` (`auto`, `bwrap`, `firejail`, `off`) for this run, overriding the setting without writing it. Never persisted |
+| `--sandbox[=<backend>]` | Nothing — session-only. Pins `sandbox.backend` (`auto`, `bwrap`, `firejail`) for this run, overriding the setting without writing it. Never persisted |
+| `--no-sandbox` | Nothing — session-only. Disables the process sandbox (equivalent to `--sandbox=off`). The only opt-out; the file tools stay confined either way |
 
 ---
 

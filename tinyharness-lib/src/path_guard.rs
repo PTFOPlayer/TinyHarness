@@ -11,15 +11,20 @@
 //! adds it to `allowed_paths`. Resolution handles:
 //!
 //! - relative paths (joined with the workspace root),
-//! - `..` traversal (lexical normalization),
-//! - symlink escapes (canonicalization of the nearest existing ancestor),
-//! - glob patterns (only the static prefix can be checked).
+//! - `..` traversal,
+//! - symlink escapes, including a `..` *after* a symlink (resolved component
+//!   by component, in the order `open(2)` uses),
+//! - glob patterns (only the static prefix can be checked, so `glob` also
+//!   filters its results — see [`crate::tools::glob`]).
 //!
 //! Checks fail closed: a path that cannot be *proven* to be inside an allowed
 //! root is rejected, and the rejection is reported as a tool error regardless
-//! of auto-accept mode.
+//! of auto-accept mode. Callers must act on the **returned** path rather than
+//! the raw argument — a relative argument means "relative to the workspace
+//! root" here, but "relative to the process cwd" to `std::fs`.
 
-use std::ffi::OsStr;
+use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 /// Prefixes that extra allowed roots may never cover.
@@ -32,9 +37,20 @@ pub const DEFAULT_BLOCKED_PREFIXES: &[&str] = &[
     "/etc", "/usr", "/boot", "/sys", "/proc", "/dev", "/root", "/var/log", "/var/run", "/run",
 ];
 
+/// Maximum symlink hops tolerated while resolving a path, matching the
+/// kernel's `ELOOP` limit. Beyond it the resolution fails closed.
+const MAX_SYMLINK_HOPS: usize = 40;
+
 /// Normalize a path lexically: resolve `.` and `..` components without
 /// touching the filesystem. The input should be absolute; a `..` that would
 /// escape the filesystem root is clamped at the root.
+///
+/// Only for paths that do not exist yet (configuration prefixes, where there
+/// is nothing to canonicalize). Containment of a *tool call* must go through
+/// [`PathGuard::resolve_contained`], because lexical `..` and the kernel's
+/// left-to-right resolution disagree whenever a symlink is involved:
+/// `<root>/link/../etc/passwd` (with `link -> /usr`) normalizes lexically to
+/// `<root>/etc/passwd` but the kernel opens `/etc/passwd`.
 fn normalize_lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
@@ -50,6 +66,17 @@ fn normalize_lexical(path: &Path) -> PathBuf {
     out
 }
 
+/// Reassemble a component stack produced by [`PathGuard::resolve_kernel_order`].
+///
+/// The stack always starts with the `"/"` marker, so the result is absolute.
+fn join_components(parts: &[OsString]) -> PathBuf {
+    let mut path = PathBuf::new();
+    for part in parts {
+        path.push(part);
+    }
+    path
+}
+
 /// Extract the static (non-wildcard) directory prefix of a glob pattern.
 ///
 /// Everything before the first glob metacharacter (`*`, `?`, `[`), trimmed
@@ -58,7 +85,7 @@ fn normalize_lexical(path: &Path) -> PathBuf {
 ///
 /// Examples: `**/*.rs` → `.`, `src/**/*.toml` → `src`, `/etc/**` → `/etc`,
 /// `../foo/*.rs` → `../foo`, `/abs/file.txt` → `/abs`.
-fn glob_static_prefix(pattern: &str) -> &str {
+pub(crate) fn glob_static_prefix(pattern: &str) -> &str {
     let meta_idx = pattern.find(['*', '?', '[']).unwrap_or(pattern.len());
     let prefix = &pattern[..meta_idx];
     match prefix.rfind('/') {
@@ -305,7 +332,11 @@ impl PathGuard {
     /// within an allowed root.
     ///
     /// Returns `Ok(resolved)` with the fully resolved absolute path on
-    /// success, or `Err(message)` describing the violation.
+    /// success, or `Err(message)` describing the violation. Callers must use
+    /// the returned path rather than the raw argument: the raw string may be
+    /// relative, and a relative path means different things to this guard
+    /// (resolved against the workspace root) and to `std::fs` (resolved
+    /// against the process cwd).
     pub fn resolve_contained(&self, raw: &str) -> Result<PathBuf, String> {
         if raw.trim().is_empty() {
             return Err(self.violation_message(raw));
@@ -317,19 +348,20 @@ impl PathGuard {
         } else {
             self.root.join(candidate)
         };
-        let normalized = normalize_lexical(&joined);
 
-        // Lexical containment first — catches `..` traversal and absolute
-        // paths that point elsewhere without touching the filesystem.
-        if !self.covers(&normalized) {
+        // Fast path: a purely lexical rejection needs no filesystem access, and
+        // it is the common case for an obvious escape (`../x`, `/etc/passwd`).
+        let lexical = normalize_lexical(&joined);
+        if !self.covers(&lexical) {
             return Err(self.violation_message(raw));
         }
 
-        // Symlink containment: canonicalize the nearest existing ancestor,
-        // then re-append the (non-existent) tail. If the ancestor is a symlink
-        // pointing outside every allowed root, this detects it.
+        // Real resolution, in the order the kernel uses. The lexical check
+        // above is *not* sufficient: `<root>/link/../etc/passwd` with
+        // `link -> /usr` normalizes to `<root>/etc/passwd` (inside the root)
+        // but opens `/etc/passwd`.
         let resolved = self
-            .resolve_symlinks(&normalized)
+            .resolve_kernel_order(&joined)
             .ok_or_else(|| self.violation_message(raw))?;
 
         if !self.covers(&resolved) {
@@ -339,27 +371,73 @@ impl PathGuard {
         Ok(resolved)
     }
 
-    /// Canonicalize the nearest existing ancestor of `normalized` and re-attach
-    /// the missing tail. `None` if nothing along the way can be resolved —
-    /// callers treat that as a violation (fail closed).
-    fn resolve_symlinks(&self, normalized: &Path) -> Option<PathBuf> {
-        let mut ancestor = normalized;
-        let mut tail: Vec<&OsStr> = Vec::new();
-        while !ancestor.exists() {
-            match (ancestor.file_name(), ancestor.parent()) {
-                (Some(name), Some(parent)) if parent != ancestor => {
-                    tail.push(name);
-                    ancestor = parent;
+    /// Walk `joined` component by component, following symlinks as they are
+    /// encountered, so a `..` applies to the *link's target* rather than to
+    /// the textual path — the semantics `open(2)` uses.
+    ///
+    /// Components that do not exist yet are appended literally and the walk
+    /// continues (a `write` legitimately names a new file; its not-yet-existing
+    /// parents cannot be symlinks). Exceeding [`MAX_SYMLINK_HOPS`], or a
+    /// symlink that cannot be read, returns `None` — callers fail closed.
+    fn resolve_kernel_order(&self, joined: &Path) -> Option<PathBuf> {
+        debug_assert!(joined.is_absolute());
+
+        // The resolved component stack. Always begins with the root marker.
+        let mut out: Vec<OsString> = vec![OsString::from("/")];
+        // Components still to process; symlink targets are spliced at the front.
+        let mut rest: VecDeque<OsString> = joined
+            .components()
+            .filter(|c| !matches!(c, Component::RootDir))
+            .map(|c| OsString::from(c.as_os_str()))
+            .collect();
+
+        let mut hops = 0;
+        while let Some(comp) = rest.pop_front() {
+            match comp.to_str() {
+                Some(".") => continue,
+                Some("..") => {
+                    // Pop, but never past the root marker.
+                    if out.len() > 1 {
+                        out.pop();
+                    }
+                    continue;
                 }
-                _ => return None,
+                _ => {}
+            }
+
+            out.push(comp);
+            let candidate = join_components(&out);
+            let meta = match std::fs::symlink_metadata(&candidate) {
+                Ok(meta) => meta,
+                // Missing: nothing below it can exist either, so the remaining
+                // components are appended literally by subsequent iterations.
+                Err(_) => continue,
+            };
+            if !meta.file_type().is_symlink() {
+                continue;
+            }
+
+            hops += 1;
+            if hops > MAX_SYMLINK_HOPS {
+                return None;
+            }
+            let target = std::fs::read_link(&candidate).ok()?;
+            out.pop();
+            if target.is_absolute() {
+                out.clear();
+                out.push(OsString::from("/"));
+            }
+            let splice = target
+                .components()
+                .filter(|c| !matches!(c, Component::RootDir))
+                .map(|c| OsString::from(c.as_os_str()))
+                .collect::<Vec<_>>();
+            for item in splice.into_iter().rev() {
+                rest.push_front(item);
             }
         }
 
-        let mut resolved = ancestor.canonicalize().ok()?;
-        for name in tail.iter().rev() {
-            resolved.push(name);
-        }
-        Some(resolved)
+        Some(join_components(&out))
     }
 
     /// Returns `true` if `raw` resolves to a path inside an allowed root.
@@ -596,6 +674,86 @@ mod tests {
         assert!(sb.check_glob_pattern("src/**/*.toml").is_ok());
         assert!(sb.check_glob_pattern("/etc/**").is_err());
         assert!(sb.check_glob_pattern("../secret/*.txt").is_err());
+    }
+
+    /// The `link -> /usr` + `..` case: lexical normalization collapses
+    /// `<root>/link/../etc/passwd` to `<root>/etc/passwd`, which is *inside*
+    /// the root, while the kernel opens `/etc/passwd`. Resolution must follow
+    /// the kernel's order, not the textual one.
+    #[test]
+    fn rejects_symlink_then_dotdot_reaching_outside() {
+        let tmp = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(Path::new("/usr"), &link).unwrap();
+        let sb = guard_in(tmp.path());
+
+        assert!(!sb.contains("link/../etc/passwd"));
+        assert!(!sb.contains(&format!("{}/link/../etc/passwd", tmp.path().display())));
+        assert!(!sb.contains("link/../outside_me.txt"));
+    }
+
+    /// Same shape, but the symlink points at a *sibling* directory rather than
+    /// a system path — the escape is the traversal, not the target.
+    #[test]
+    fn rejects_symlink_then_dotdot_into_sibling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().parent().unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(parent, &link).unwrap();
+        let sb = guard_in(tmp.path());
+
+        // `<root>/link/..` is `<root>` lexically, but the kernel resolves the
+        // link first, making it the workspace's *parent*.
+        assert!(!sb.contains("link/../sibling-secret.txt"));
+    }
+
+    /// A single in-workspace symlink must not defeat `DEFAULT_BLOCKED_PREFIXES`
+    /// by way of `..` — the blocked list is the last line of defence for an
+    /// over-broad `allowed_paths`, so it has to hold here too.
+    #[test]
+    fn symlink_dotdot_cannot_reach_a_blocked_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(Path::new("/usr"), tmp.path().join("link")).unwrap();
+        let sb = PathGuard::configured(tmp.path(), &["/".to_string()], None, &[]).unwrap();
+
+        assert!(!sb.contains("link/../etc/passwd"));
+        assert!(!sb.contains("link/../usr/lib"));
+    }
+
+    /// Chains of relative symlinks resolve in the same order the kernel uses.
+    #[test]
+    fn follows_relative_symlink_chains_in_kernel_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("a")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("b")).unwrap();
+        std::fs::write(tmp.path().join("b/target.txt"), "x").unwrap();
+        // a/one -> ../b, i.e. a *relative* link: its meaning depends on the
+        // directory it is reached through, so only kernel-order resolution can
+        // place it correctly.
+        std::os::unix::fs::symlink(Path::new("../b"), tmp.path().join("a/one")).unwrap();
+        let sb = guard_in(tmp.path());
+
+        // a/one resolves to <root>/b, so the target is reachable and in bounds.
+        assert!(sb.contains("a/one/target.txt"));
+        // a/one/.. is <root> for the kernel (the link is resolved first) but
+        // <root>/a for a lexical collapse — the two disagree, and the kernel
+        // is the one that will open the file.
+        let resolved = sb.resolve_contained("a/one/../target.txt").unwrap();
+        assert_eq!(resolved, sb.root().join("target.txt"));
+    }
+
+    /// A symlink loop must fail closed rather than hang or accept.
+    #[test]
+    fn rejects_symlink_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        let sb = guard_in(tmp.path());
+
+        assert!(!sb.contains("a/x.txt"));
+        assert!(!sb.contains("b/x.txt"));
     }
 
     #[test]

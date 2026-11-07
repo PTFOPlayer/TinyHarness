@@ -212,9 +212,14 @@ bounded separately, and neither mechanism adds a prompt.
   `edit`, `grep`, `glob`) are confined to the workspace root plus any
   `allowed_paths` entries. The check runs before the tool handler, so it holds
   under `/autoaccept all` and the `a` key. `..` traversal, absolute paths, and
-  symlink escapes are all rejected; system prefixes (`/etc`, `/usr`, `/proc`,
-  `/dev`, …) can never be allowed.
-- **Process sandbox (opt-in, Linux only)** — `--sandbox[=auto|bwrap|firejail|off]`
+  symlink escapes are all rejected — including a `..` that *follows* a symlink,
+  which is resolved in the order `open(2)` uses rather than lexically. System
+  prefixes (`/etc`, `/usr`, `/proc`, `/dev`, …) can never be allowed.
+  `grep` never descends into a symlinked directory and `glob` filters its
+  results through the guard, so neither can be walked out of the tree by a link
+  inside it. The guard hands each tool the **resolved** path, so a relative
+  argument is never re-opened against the harness's working directory.
+- **Process sandbox (on by default, Linux only)** — `--sandbox[=auto|bwrap|firejail]`
   or the `sandbox` setting runs `run` and custom tools inside bubblewrap or
   firejail. bubblewrap builds a private mount tree, so paths outside the
   workspace do not exist there at all, and the environment is cleared of API
@@ -231,7 +236,7 @@ same confirmation policy as an unsandboxed one.
 
 ### For Users
 
-1. **Enable the sandbox**: `--sandbox` (or `sandbox.backend` in `settings.json`) confines shell commands; the path guard already confines the file tools. For untrusted models, add a container or VM on top
+1. **Keep the sandbox on**: it is the default, and a missing backend is a startup error — install bubblewrap rather than reaching for `--no-sandbox`. The path guard confines the file tools regardless. For untrusted models, add a container or VM on top
 2. **Review before confirming**: Always read the proposed command before pressing `Y`
 3. **Use the deny list**: Block commands you never want auto-executed: `/command deny "git push --force"`
 4. **Per-project settings**: Set `auto_accept_mode: "off"` for sensitive projects

@@ -92,21 +92,35 @@ struct Args {
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
 
-    /// Run shell commands (`run`, custom tools) inside an OS-level sandbox.
+    /// Pin the OS-level sandbox backend for shell commands.
     ///
-    /// Bare `--sandbox` auto-detects the best installed backend; pin one with
-    /// `--sandbox=bwrap` or `--sandbox=firejail`, or force it off for one
-    /// session with `--sandbox=off` (overriding `sandbox.backend` in
-    /// settings.json). bubblewrap is preferred: it builds a private mount tree
-    /// so files outside the workspace don't exist at all, whereas firejail
-    /// mounts the host filesystem read-only (writes blocked, reads still
-    /// possible) and normally needs a setuid helper.
+    /// Sandboxing is **on by default** with auto-detection, so this flag is
+    /// only needed to force a particular backend: `--sandbox=bwrap` or
+    /// `--sandbox=firejail`. A bare `--sandbox` means auto-detect, and
+    /// `--sandbox=off` is equivalent to `--no-sandbox`.
+    ///
+    /// bubblewrap is preferred: it builds a private mount tree so files outside
+    /// the workspace don't exist at all, whereas firejail mounts the host
+    /// filesystem read-only (writes blocked, reads still possible) and normally
+    /// needs a setuid helper.
     ///
     /// The built-in file tools are confined to the workspace regardless of
     /// this flag — see the `allowed_paths` setting to widen that.
     /// Linux only: on Windows and macOS this flag is rejected at startup.
     #[arg(long, num_args = 0..=1, require_equals = true, value_name = "BACKEND")]
     sandbox: Option<Option<String>>,
+
+    /// Run without the OS-level sandbox for shell commands.
+    ///
+    /// The sandbox is on by default and a missing backend is a startup error,
+    /// so this is the only way to run `run` and custom tools unsandboxed.
+    /// Prefer installing bubblewrap (`bwrap`) over reaching for this flag.
+    ///
+    /// The built-in file tools stay confined to the workspace either way —
+    /// that layer has no off switch. Linux only: on Windows and macOS no
+    /// process sandbox exists at all and this flag is the norm.
+    #[arg(long)]
+    no_sandbox: bool,
 }
 
 /// Determine the provider kind from CLI flags or saved settings.
@@ -311,6 +325,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // ── --sandbox is Linux-only: reject early on Windows/macOS ────────────
+    // `--no-sandbox` is *not* rejected there: it is the only spelling that
+    // matches reality on those platforms.
     #[cfg(not(target_os = "linux"))]
     if args.sandbox.is_some() {
         let mut err_out = Output::stderr();
@@ -455,10 +471,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // ── Ensure prompt files exist (seeded from hardcoded defaults on first launch)
     ensure_prompts_initialized_in(&paths.prompts_dir());
 
-    // ── Containment: path guard (always) + process sandbox (opt-in) ──────
+    // ── Containment: path guard (always) + process sandbox (on by default) ──
     // Both are configured *before* the tools are registered: tool handlers are
     // opaque closures, so the process sandbox is cloned into `run` and the
     // custom tools at construction time.
+    //
     // The process sandbox is Linux-only. On other platforms it is forced off
     // — not just the flag, but the settings too, so a shared `settings.json`
     // with `sandbox.backend` set degrades silently instead of warning on
@@ -468,16 +485,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     #[cfg(not(target_os = "linux"))]
     let cli_sandbox = sandbox_setup::CliSandbox::Named("off".to_string());
+    #[cfg(target_os = "linux")]
+    let cli_sandbox = if args.no_sandbox {
+        sandbox_setup::CliSandbox::Named("off".to_string())
+    } else {
+        sandbox_setup::CliSandbox::from_arg(&args.sandbox)
+    };
+
+    // Sandboxing is the default, so anything short of an explicit opt-out is
+    // a hard requirement: a missing or broken backend must stop the session
+    // rather than quietly degrade to running shell commands unsandboxed.
     #[cfg(not(target_os = "linux"))]
-    let sandbox_requested = false;
-
+    let sandbox_opt_out = true;
     #[cfg(target_os = "linux")]
-    let cli_sandbox = sandbox_setup::CliSandbox::from_arg(&args.sandbox);
-    #[cfg(target_os = "linux")]
-    let sandbox_requested = !matches!(cli_sandbox, sandbox_setup::CliSandbox::Unspecified);
+    let sandbox_opt_out = args.no_sandbox;
 
-    let resolution = match sandbox_setup::resolve(&cli_sandbox, &merged, &paths, sandbox_requested)
-    {
+    let resolution = match sandbox_setup::resolve(&cli_sandbox, &merged, &paths, !sandbox_opt_out) {
         Ok(resolution) => resolution,
         Err(e) => {
             let mut err_out = Output::stderr();
@@ -485,10 +508,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 err_out,
                 "{BOLD}Error:{RESET} could not set up containment: {e}"
             );
-            if sandbox_requested {
+            if !sandbox_opt_out {
                 let _ = writeln!(
                     err_out,
-                    "{DIM}Install bubblewrap or firejail, or drop the --sandbox flag.{RESET}"
+                    "{DIM}Install bubblewrap (`bwrap`), or pass --no-sandbox to run shell commands unsandboxed.{RESET}"
                 );
             }
             std::process::exit(1);
