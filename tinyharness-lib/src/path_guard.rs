@@ -95,6 +95,32 @@ pub(crate) fn glob_static_prefix(pattern: &str) -> &str {
     }
 }
 
+/// Canonicalize the existing prefix of `p` and re-attach the non-existent
+/// tail, so a path spelled through a symlink (macOS `/var` -> `/private/var`)
+/// matches the canonical forms `resolve_contained` produces even when the
+/// final components do not exist yet (an `allowed_paths` entry naming a
+/// directory the user has not created).
+fn canonicalize_prefix(p: &Path) -> PathBuf {
+    let mut tail: Vec<OsString> = Vec::new();
+    let mut ancestor = p;
+    while !ancestor.exists() {
+        match (ancestor.file_name(), ancestor.parent()) {
+            (Some(name), Some(parent)) if parent != ancestor => {
+                tail.push(name.to_os_string());
+                ancestor = parent;
+            }
+            _ => return normalize_lexical(p),
+        }
+    }
+    let mut out = ancestor
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_lexical(ancestor));
+    for comp in tail.iter().rev() {
+        out.push(comp);
+    }
+    out
+}
+
 /// Expand a leading `~` using the injected home directory.
 ///
 /// Only `~` and `~/…` are supported — a `~user` form would need a passwd
@@ -229,23 +255,34 @@ impl PathGuardBuilder {
                 canonical_root.join(trimmed)
             };
             let normalized = normalize_lexical(&expanded);
+            // Canonicalize entries (including their existing prefix), so a
+            // path reached through a symlink (macOS: `/var` -> `/private/var`,
+            // `/tmp` -> `/private/tmp`) is stored in the same form
+            // `resolve_contained` produces and `covers` can match against the
+            // canonical root. Non-existent tails stay lexical — they are
+            // prefixes for files a tool may create.
+            let resolved_entry = canonicalize_prefix(&expanded);
             // Reject in both directions: an entry *inside* a blocked prefix
             // (`/etc/ssl`) is pointless, and an entry that *contains* one
             // (`/`, `/var`) would let the blocked paths through the back
             // door, because `covers()` only checks the blocked list against
             // paths outside the workspace root. `starts_with` is
-            // component-wise, so `/root` does not match `/rootfoo`.
-            if blocked
-                .iter()
-                .any(|b| normalized.starts_with(b) || b.starts_with(&normalized))
-            {
+            // component-wise, so `/root` does not match `/rootfoo`. Check
+            // both the lexical and the canonical form — a symlink entry
+            // pointing into a blocked prefix must not slip through either.
+            if blocked.iter().any(|b| {
+                normalized.starts_with(b)
+                    || b.starts_with(&normalized)
+                    || resolved_entry.starts_with(b)
+                    || b.starts_with(&resolved_entry)
+            }) {
                 tracing::warn!(
                     "allowed_paths entry '{}' overlaps a blocked prefix — ignoring it",
                     entry
                 );
                 continue;
             }
-            allowed.push(normalized);
+            allowed.push(resolved_entry);
         }
 
         Ok(PathGuard {
@@ -360,9 +397,19 @@ impl PathGuard {
 
         // Fast path: a purely lexical rejection needs no filesystem access, and
         // it is the common case for an obvious escape (`../x`, `/etc/passwd`).
+        // But when the root itself passes through a symlink (macOS:
+        // `/var` -> `/private/var`), the lexical form of an in-root path does
+        // not start with the canonical root, so a lexical miss is not yet a
+        // rejection — resolve in kernel order first and only then fail.
         let lexical = normalize_lexical(&joined);
         if !self.covers(&lexical) {
-            return Err(self.violation_message(raw));
+            let resolved = self
+                .resolve_kernel_order(&joined)
+                .ok_or_else(|| self.violation_message(raw))?;
+            if !self.covers(&resolved) {
+                return Err(self.violation_message(raw));
+            }
+            return Ok(resolved);
         }
 
         // Real resolution, in the order the kernel uses. The lexical check
@@ -994,6 +1041,44 @@ mod tests {
 
         assert!(!sb.contains("a/x.txt"));
         assert!(!sb.contains("b/x.txt"));
+    }
+
+    /// macOS spells temp dirs `/var/folders/...` while `/var` is a symlink to
+    /// `/private/var`, so the workspace root as *spelled* passes through a
+    /// symlink but canonicalizes elsewhere. Absolute arguments and allowed
+    /// entries spelled through that symlink must still match the canonical
+    /// root. Simulated here with an explicit link.
+    #[test]
+    fn root_and_allowed_entries_reached_through_a_symlink_still_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("proj")).unwrap();
+        std::fs::create_dir_all(real.join("extra")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let spelled_root = link.join("proj");
+        let spelled_extra = link.join("extra");
+        let sb = PathGuard::configured(
+            &spelled_root,
+            &[spelled_extra.to_string_lossy().to_string()],
+            None,
+            &[],
+        )
+        .unwrap();
+        // The root is stored canonical.
+        assert_eq!(sb.root(), real.join("proj").canonicalize().unwrap());
+
+        // Absolute arguments spelled through the symlink resolve to the
+        // canonical form and are contained.
+        assert!(sb.contains(spelled_root.join("file.txt").to_str().unwrap()));
+        assert!(sb.contains(spelled_extra.join("f.txt").to_str().unwrap()));
+        // The canonical spelling works too.
+        assert!(sb.contains(real.join("proj/file.txt").to_str().unwrap()));
+        assert!(sb.contains(real.join("extra/f.txt").to_str().unwrap()));
+        // And something genuinely outside is still rejected.
+        assert!(!sb.contains("/etc/passwd"));
+        assert!(!sb.contains(link.join("../outside.txt").to_str().unwrap()));
     }
 
     #[test]

@@ -606,9 +606,14 @@ mod fs_tests {
         assert!(joined.contains("bwrap"), "{joined}");
         // The banner must state the network limitation, not imply isolation.
         assert!(joined.contains("not isolated"), "{joined}");
-        assert!(
-            joined.contains(&extra.path().to_string_lossy().to_string()),
-            "{joined}"
-        );
+        // Extra bind paths are canonicalized (macOS /var -> /private/var), so
+        // compare against the canonical spelling.
+        let extra_s = extra
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(joined.contains(&extra_s), "{joined}");
     }
 }

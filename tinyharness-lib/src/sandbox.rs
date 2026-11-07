@@ -203,9 +203,11 @@ fn resolv_conf_target_at(link_path: &Path) -> Option<PathBuf> {
         link_path.parent()?.join(target)
     };
     let resolved = normalize_existing(&absolute)?;
-    // A target still inside `/etc` needs no extra bind.
-    let etc = link_path.parent()?;
-    if resolved.starts_with(etc) || !resolved.is_file() {
+    // A target still inside `/etc` needs no extra bind. Compare against the
+    // *canonical* `/etc`: on macOS `/etc` is a symlink to `/private/etc`, and
+    // `resolved` is canonical, so a lexical parent would never match.
+    let etc = link_path.parent()?.canonicalize().ok()?;
+    if resolved.starts_with(&etc) || !resolved.is_file() {
         return None;
     }
     Some(resolved)
@@ -276,6 +278,22 @@ impl Sandbox {
             SandboxBackend::Bwrap => resolv_conf_target(),
             SandboxBackend::Firejail => None,
         };
+
+        // Canonicalize the extra bind paths, like the workspace: on macOS a
+        // `/var/...` or `/tmp/...` spelling must bind the real
+        // `/private/var/...` target so the bind matches what the guard
+        // resolved.
+        let mut options = options;
+        options.read_only_paths = options
+            .read_only_paths
+            .iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
+        options.read_write_paths = options
+            .read_write_paths
+            .iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
 
         Ok(Self {
             backend,
@@ -716,7 +734,12 @@ mod tests {
         std::fs::write(&real, "nameserver 127.0.0.53\n").unwrap();
         std::os::unix::fs::symlink(&real, etc.join("resolv.conf")).unwrap();
 
-        assert_eq!(resolv_conf_target_at(&etc.join("resolv.conf")), Some(real));
+        // The returned target is canonicalized, which on macOS resolves
+        // `/var` -> `/private/var` in the tempdir path.
+        assert_eq!(
+            resolv_conf_target_at(&etc.join("resolv.conf")),
+            Some(real.canonicalize().unwrap())
+        );
     }
 
     /// A relative link (`-> ../run/...`) resolves against `/etc`, not the CWD.
@@ -1094,8 +1117,14 @@ mod tests {
             "$HOME itself must never be bound: {flat:?}"
         );
 
-        // The nested path is bound, and only it.
-        let nested_s = nested.to_string_lossy().into_owned();
+        // The nested path is bound, and only it. Binds are canonicalized (on
+        // macOS `/var` -> `/private/var`), so compare against the canonical
+        // spelling.
+        let nested_s = nested
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert!(
             flat.windows(3)
                 .any(|w| w[0] == "--ro-bind" && w[1] == nested_s),

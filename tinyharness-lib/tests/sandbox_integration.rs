@@ -226,7 +226,9 @@ async fn allowed_paths_make_outside_dirs_readable() {
     }
 
     let manager = sandboxed_manager(sandbox);
-    let target = extra.path().join("dep.txt");
+    // Binds are canonicalized, so inside the sandbox the file lives at the
+    // canonical spelling (the symlinked `/tmp` prefix does not exist there).
+    let target = extra.path().canonicalize().unwrap().join("dep.txt");
     let result = manager
         .execute_tool_call(
             "run",
@@ -315,7 +317,9 @@ async fn nested_allowed_path_binds_without_binding_home() {
         .execute_tool_call(
             "run",
             &serde_json::json!({
-                "command": format!("cat {}", nested.join("dep.txt").display())
+                // Canonical spelling: the bind is canonicalized, and the
+                // symlinked tempdir prefix does not exist inside the sandbox.
+                "command": format!("cat {}", nested.canonicalize().unwrap().join("dep.txt").display())
             }),
         )
         .await;
