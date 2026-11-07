@@ -62,20 +62,14 @@ pub(crate) fn read_bytes_guarded(path: &str, guard: Option<&PathGuard>) -> Resul
 }
 
 /// Same as [`read_bytes_guarded`] for text.
-pub(crate) fn read_string_guarded(
-    path: &str,
-    guard: Option<&PathGuard>,
-) -> Result<String, String> {
+pub(crate) fn read_string_guarded(path: &str, guard: Option<&PathGuard>) -> Result<String, String> {
     match guard {
         Some(g) => g.read_contained(Path::new(path)),
         None => fs::read_to_string(path).map_err(|e| e.to_string()),
     }
 }
 
-async fn read_tool_inner(
-    args: HashMap<String, String>,
-    guard: Option<PathGuard>,
-) -> String {
+async fn read_tool_inner(args: HashMap<String, String>, guard: Option<PathGuard>) -> String {
     extract_args!(args, path);
 
     // Check if this is an image file — skip binary read, return description only.
@@ -627,7 +621,12 @@ mod tests {
         );
         assert!(tail.contains("\"nbformat_minor\": 5"));
 
-        let empty = read_notebook(&path.to_string_lossy(), Some(body.len() + 10), Some(5), None);
+        let empty = read_notebook(
+            &path.to_string_lossy(),
+            Some(body.len() + 10),
+            Some(5),
+            None,
+        );
         assert!(empty.starts_with("Error: No lines to read"));
     }
 

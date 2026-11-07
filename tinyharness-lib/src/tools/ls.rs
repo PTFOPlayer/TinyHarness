@@ -46,25 +46,25 @@ async fn ls_tool_inner(args: HashMap<String, String>, guard: Option<PathGuard>) 
     }
 
     let entries = match fs::read_dir(&path) {
-            Ok(e) => e,
-            Err(e) => return format!("Error: Failed to read directory: {}", e),
-        };
+        Ok(e) => e,
+        Err(e) => return format!("Error: Failed to read directory: {}", e),
+    };
 
-        let mut files: Vec<String> = entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| {
-                let file_name = entry.file_name();
-                let name = file_name.to_string_lossy().to_string();
-                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                if is_dir { format!("{}/", name) } else { name }
-            })
-            .collect();
+    let mut files: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy().to_string();
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+            if is_dir { format!("{}/", name) } else { name }
+        })
+        .collect();
 
-        files.sort();
+    files.sort();
 
-        if files.is_empty() {
-            return "Directory is empty".to_string();
-        }
+    if files.is_empty() {
+        return "Directory is empty".to_string();
+    }
 
-        files.join("\n")
+    files.join("\n")
 }

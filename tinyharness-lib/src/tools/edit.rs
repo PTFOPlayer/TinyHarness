@@ -34,10 +34,7 @@ pub fn edit_tool(args: HashMap<String, String>) -> BoxFuture<'static, String> {
     Box::pin(edit_tool_inner(args, None))
 }
 
-async fn edit_tool_inner(
-    args: HashMap<String, String>,
-    guard: Option<PathGuard>,
-) -> String {
+async fn edit_tool_inner(args: HashMap<String, String>, guard: Option<PathGuard>) -> String {
     extract_args!(args, path, old_str, new_str);
 
     // Read the file (through the guard's verified descriptor when active)

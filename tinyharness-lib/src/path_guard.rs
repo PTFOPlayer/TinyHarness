@@ -530,9 +530,11 @@ impl PathGuard {
             }
         }
         // Verify the existing ancestor itself, then build downward.
-        self.verify_open_file(&std::fs::File::open(ancestor).map_err(|e| {
-            format!("Error opening directory '{}': {}", ancestor.display(), e)
-        })?, dir)?;
+        self.verify_open_file(
+            &std::fs::File::open(ancestor)
+                .map_err(|e| format!("Error opening directory '{}': {}", ancestor.display(), e))?,
+            dir,
+        )?;
         let mut cur = ancestor.to_path_buf();
         for comp in missing.iter().rev() {
             cur.push(comp);
@@ -540,9 +542,8 @@ impl PathGuard {
             // racing process created it) — that is fine, the descriptor
             // check below is what decides whether it is safe to use.
             let _ = std::fs::create_dir(&cur);
-            let f = std::fs::File::open(&cur).map_err(|e| {
-                format!("Error opening directory '{}': {}", cur.display(), e)
-            })?;
+            let f = std::fs::File::open(&cur)
+                .map_err(|e| format!("Error opening directory '{}': {}", cur.display(), e))?;
             self.verify_open_file(&f, dir)?;
         }
         Ok(())
