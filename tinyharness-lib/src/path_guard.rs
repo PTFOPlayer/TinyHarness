@@ -570,6 +570,7 @@ impl PathGuard {
     /// macOS has no `/proc`; `F_GETPATH` returns the descriptor's real path.
     #[cfg(target_os = "macos")]
     fn verify_open_file(&self, file: &std::fs::File, display: &Path) -> Result<(), String> {
+        use std::os::unix::ffi::OsStringExt;
         use std::os::unix::io::AsRawFd;
         let mut buf = vec![0u8; libc::PATH_MAX as usize];
         let ret = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
