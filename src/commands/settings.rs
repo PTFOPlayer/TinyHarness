@@ -51,19 +51,6 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
         settings.preferred_mode,
     );
 
-    match &settings.ollama_api_key {
-        Some(key) => {
-            let _ = writeln!(
-                out,
-                "{BOLD}│{RESET} API Key:   {BLUE}{}{RESET}",
-                key.masked()
-            );
-        }
-        None => {
-            let _ = writeln!(out, "{BOLD}│{RESET} API Key:   {ORANGE}not set{RESET}");
-        }
-    }
-
     let _ = writeln!(
         out,
         "{BOLD}│{RESET} Timeout:   {BLUE}{}s{RESET}",
@@ -73,12 +60,6 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
         out,
         "{BOLD}│{RESET} Retries:   {BLUE}{}{RESET}",
         settings.effective_max_retries(),
-    );
-
-    let _ = writeln!(
-        out,
-        "{BOLD}│{RESET} Think:     {BLUE}{}{RESET}",
-        settings.ollama_think_type,
     );
 
     let (st_str, st_color) = if settings.show_thinking {

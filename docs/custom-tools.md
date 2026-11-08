@@ -101,5 +101,53 @@ Parameters are also available as environment variables in two forms:
 ## Safety
 
 - Custom tools with `category: "destructive"` always require user confirmation (same as built-in `write`/`edit`/`run` tools)
-- Custom tools are subject to mode filtering: `readonly` tools appear in planning/research/agent modes; `destructive` tools only in agent mode. Custom tools are **not** available in casual mode (only `web_search` and `web_fetch` are)
+- Custom tools are subject to mode filtering: `readonly` tools appear in planning/research/agent modes; `destructive` tools only in agent mode. Custom tools are **not** available in casual mode (which has no tools at all)
+
+## Example: Web Search via curl (Ollama API)
+
+The built-in Ollama web tools were removed; if you want web search, define it as a
+custom tool that shells out to `curl`. This example calls Ollama's
+[`web_search` API](https://docs.ollama.com/capabilities/web-search#examples) and is
+illustrative — it is not wired into any test:
+
+```jsonc
+// ~/.config/tinyharness/custom_tools.json
+{
+  "custom_tools": [
+    {
+      "name": "web_search",
+      "description": "Search the web using Ollama's web search API. Returns titles, URLs, and content snippets.",
+      "category": "readonly",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "The search query" },
+          "max_results": { "type": "string", "description": "Maximum results to return (default 5, max 10)" }
+        },
+        "required": ["query"]
+      },
+      // Mirrors the docs example:
+      //   curl https://ollama.com/api/web_search \
+      //     --header "Authorization: Bearer $OLLAMA_API_KEY" \
+      //     -d '{ "query": "what is ollama?" }'
+      // The query goes in via $TH_QUERY (not {query}) so it lands inside the
+      // JSON body without extra shell quoting.
+      "command": "curl -s https://ollama.com/api/web_search --header \"Authorization: Bearer $OLLAMA_API_KEY\" -d \"{\\\"query\\\": \\\"$TH_QUERY\\\", \\\"max_results\\\": ${TH_MAX_RESULTS:-5}}\"",
+      "timeout_secs": 30
+    }
+  ]
+}
+```
+
+Notes:
+
+- Custom tools run inside the process sandbox when `--sandbox` is on; the
+  environment is cleared there, but tool parameters are re-injected as
+  `TH_<NAME>` variables, which is why the template uses `$TH_QUERY` /
+  `$TH_MAX_RESULTS`. `$OLLAMA_API_KEY` is **not** re-injected — with the
+  sandbox on, inline the key in the template (not recommended) or run without
+  `--sandbox` so the variable passes through.
+- The network is intentionally left available in the sandbox so `curl` works.
+- There is no built-in `/apikey` command anymore; the key lives in your shell
+  environment (`export OLLAMA_API_KEY=...`).
 - Custom tool names that collide with built-in tools are silently skipped (a warning is logged)

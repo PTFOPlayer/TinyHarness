@@ -113,24 +113,34 @@ async fn grep_tool_searches_pattern() {
 
 #[tokio::test]
 async fn glob_tool_finds_files() {
-    let tmp = TempDir::new().unwrap();
+    // The glob handler only takes `pattern` (it ignores `path`). Create the
+    // fixture inside the test process CWD (the crate root) and use a relative
+    // pattern: absolute patterns with drive letters (`C:/.../**`) are
+    // unreliable in the `glob` crate on Windows.
+    let tmp = TempDir::new_in(".").unwrap();
     std::fs::write(tmp.path().join("a.rs"), "").unwrap();
     std::fs::write(tmp.path().join("b.rs"), "").unwrap();
     std::fs::write(tmp.path().join("c.txt"), "").unwrap();
+    let dir = tmp
+        .path()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .replace('\\', "/");
 
     let manager = make_manager();
     let result = manager
         .execute_tool_call(
             "glob",
             &serde_json::json!({
-                "pattern": "**/*.rs",
-                "path": tmp.path().to_str().unwrap()
+                "pattern": format!("./{dir}/*.rs")
             }),
         )
         .await;
-    assert!(result.contains("a.rs"));
-    assert!(result.contains("b.rs"));
-    assert!(!result.contains("c.txt"));
+    assert!(result.contains("a.rs"), "result was: {result}");
+    assert!(result.contains("b.rs"), "result was: {result}");
+    assert!(!result.contains("c.txt"), "result was: {result}");
 }
 
 #[tokio::test]
@@ -179,11 +189,8 @@ async fn tools_for_casual_mode_limited() {
         ToolAvailability::all(),
     );
     let names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
-    // Casual mode only has web_search and web_fetch
-    assert!(names.contains(&"web_search".to_string()));
-    assert!(names.contains(&"web_fetch".to_string()));
-    assert!(!names.contains(&"write".to_string()));
-    assert!(!names.contains(&"run".to_string()));
+    // Casual mode is pure chat — no tools at all
+    assert!(names.is_empty());
 }
 
 #[tokio::test]

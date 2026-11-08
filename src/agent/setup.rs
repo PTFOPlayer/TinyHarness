@@ -6,7 +6,7 @@
 //!
 //! There is intentionally no interactive setup wizard: configuration is covered
 //! by `docs/configuration.md`, and every setting is reachable via CLI flags or
-//! in-app slash commands (`/model`, `/apikey`, `/timeout`, `/retries`,
+//! in-app slash commands (`/model`, `/timeout`, `/retries`,
 //! `/contextlimit`, …). Sockudo credentials are settings-file-only.
 //!
 //! `prompt_for_url` reads directly from stdin and writes user-facing messages to

@@ -39,8 +39,6 @@ use crate::style::*;
 const MAX_OUTPUT_LINES: usize = 10;
 /// Maximum content lines shown after a `read` meta line.
 const MAX_READ_LINES: usize = 3;
-/// Maximum entries shown for parsed `web_search` output.
-const MAX_SEARCH_RESULTS: usize = 5;
 /// Columns left for body text inside a gutter row.
 const BODY_WIDTH: usize = MAX_LINE_WIDTH - GUTTER_WIDTH;
 /// Maximum characters for the one-line subject on the title band. The band
@@ -121,7 +119,7 @@ pub fn format_duration(ms: u64) -> String {
 /// Render one tool card: a status title band plus a capped, tool-specific
 /// gutter body.
 ///
-/// - `tool`: tool name (e.g. `read`, `run`, `web_search`).
+/// - `tool`: tool name (e.g. `read`, `run`).
 /// - `subject`: what the call acted on — the command, the path, the query.
 ///   Pass `None` when it can't be determined (history replay, argument-less
 ///   tools) and the band degrades to just the tool name.
@@ -206,8 +204,6 @@ fn write_card_header<W: Write>(
 enum BodyLine {
     /// Plain text, painted in a single color.
     Text(String, &'static str),
-    /// Pre-styled content with its own inline colors (search entries).
-    Rich(String),
 }
 
 /// Frame and write body lines: every line but the last uses the [`GUTTER`]
@@ -218,7 +214,6 @@ fn write_body_lines<W: Write>(w: &mut W, lines: &[BodyLine]) -> io::Result<()> {
         let glyph = if i == last { FOOT } else { GUTTER };
         match line {
             BodyLine::Text(text, color) => gutter_line(w, glyph, &format!("{color}{text}{RESET}"))?,
-            BodyLine::Rich(styled) => gutter_line(w, glyph, styled)?,
         }
     }
     Ok(())
@@ -245,11 +240,10 @@ fn push_more(lines: &mut Vec<BodyLine>, hidden: usize, noun: &'static str) {
     }
 }
 
-/// `"lines"` → `"line"`, `"results"` → `"result"`.
+/// `"lines"` → `"line"`.
 fn singular(noun: &str) -> &'static str {
     match noun {
         "lines" => "line",
-        "results" => "result",
         _ => "line",
     }
 }
@@ -286,11 +280,6 @@ fn card_lines(tool: &str, body: &str, status: ToolStatus) -> Vec<BodyLine> {
             &truncate_ellipsis(&summarize_listing_result(body, tool), BODY_WIDTH),
             FG_MUTED,
         ),
-        // Structured search results render as a link-styled list.
-        "web_search" => match parse_web_search(body) {
-            Some(entries) => search_lines(&mut lines, &entries),
-            None => capped_lines(&mut lines, body.lines(), MAX_OUTPUT_LINES),
-        },
         // File reads show the line-count meta line, then a small preview.
         "read" => read_lines(&mut lines, body),
         // Conversational meta-results collapse to one dim line.
@@ -337,87 +326,6 @@ fn read_lines(out: &mut Vec<BodyLine>, body: &str) {
         push_wrapped(out, &truncate_ellipsis(line, BODY_WIDTH), FG_MUTED);
     }
     push_more(out, content.len().saturating_sub(MAX_READ_LINES), "lines");
-}
-
-/// Render parsed search entries as a link-styled list (matching the markdown
-/// renderer's link treatment: accent title, faint URL).
-fn search_lines(out: &mut Vec<BodyLine>, entries: &[SearchEntry]) {
-    for entry in entries.iter().take(MAX_SEARCH_RESULTS) {
-        out.push(BodyLine::Rich(format!(
-            "{FG_FAINT}•{RESET} {FG_ACCENT}{}{RESET} {FG_FAINT}{}{RESET}",
-            truncate_ellipsis(&entry.title, 60),
-            truncate_ellipsis(&format!("({})", entry.url), 60),
-        )));
-        let snippet = entry.content.lines().next().unwrap_or("");
-        if !snippet.is_empty() {
-            push_wrapped(
-                out,
-                &format!("  {}", truncate_ellipsis(snippet, 100)),
-                FG_FAINT,
-            );
-        }
-    }
-    push_more(
-        out,
-        entries.len().saturating_sub(MAX_SEARCH_RESULTS),
-        "results",
-    );
-}
-
-/// One parsed `web_search` entry.
-struct SearchEntry {
-    title: String,
-    url: String,
-    content: String,
-}
-
-/// Parse the `web_search` tool's textual output format:
-///
-/// ```text
-/// [1] Title
-///     URL: https://…
-///     content…
-/// ```
-///
-/// Returns `None` when the body doesn't match the format at all, so callers
-/// can fall back to raw capped output.
-fn parse_web_search(body: &str) -> Option<Vec<SearchEntry>> {
-    let mut entries: Vec<SearchEntry> = Vec::new();
-
-    for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("    URL: ") {
-            // URL line completes the most recently started entry.
-            let last = entries.last_mut()?;
-            last.url = rest.trim().to_string();
-        } else if line.starts_with('[')
-            && let Some(close) = line.find("] ")
-            && close > 1
-            && line[1..close].chars().all(|c| c.is_ascii_digit())
-        {
-            entries.push(SearchEntry {
-                title: line[close + 2..].trim().to_string(),
-                url: String::new(),
-                content: String::new(),
-            });
-        } else if let Some(last) = entries.last_mut() {
-            // Continuation (snippet) lines accumulate into the open entry.
-            // Blank separator lines between entries are skipped — otherwise
-            // they leave a trailing space on the previous snippet.
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if !last.content.is_empty() {
-                last.content.push(' ');
-            }
-            last.content.push_str(trimmed);
-        }
-    }
-
-    if entries.is_empty() || entries.iter().any(|e| e.url.is_empty()) {
-        return None;
-    }
-    Some(entries)
 }
 
 /// Produce a one-line summary for listing tools (ls, grep, glob).
@@ -763,54 +671,6 @@ mod tests {
     fn short_output_not_capped() {
         let out = render("run", "one\ntwo", false, None);
         assert!(!plain(&out).contains("more lines"));
-    }
-
-    // ── web_search ──
-
-    fn search_body(n: usize) -> String {
-        (1..=n)
-            .map(|i| format!("[{i}] Title {i}\n    URL: https://x.dev/{i}\n    Snippet {i} text\n"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn web_search_renders_link_styled_list() {
-        let out = render("web_search", &search_body(3), false, None);
-        let p = plain(&out);
-        assert!(p.contains("• Title 1"));
-        assert!(p.contains("(https://x.dev/1)"));
-        assert!(p.contains("Snippet 1 text"));
-        assert!(out.contains(FG_ACCENT), "titles should be link-colored");
-        assert!(!p.contains("more results"), "3 entries fit under the cap");
-    }
-
-    #[test]
-    fn web_search_caps_results_with_footer() {
-        let out = render("web_search", &search_body(8), false, None);
-        let p = plain(&out);
-        assert!(p.contains("Title 1"));
-        assert!(p.contains("Title 5"));
-        assert!(!p.contains("Title 6"));
-        assert!(p.contains("╰ +3 more results"));
-    }
-
-    #[test]
-    fn web_search_unparseable_falls_back_to_raw() {
-        let out = render("web_search", "No results found.", false, None);
-        assert!(plain(&out).contains("No results found."));
-    }
-
-    #[test]
-    fn web_search_prose_starting_with_bracket_falls_back() {
-        // `[1] x` without a following URL line is prose, not a result list.
-        let out = render(
-            "web_search",
-            "[1] see section one of the manual",
-            false,
-            None,
-        );
-        assert!(plain(&out).contains("see section one"));
     }
 
     // ── signal tools ──

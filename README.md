@@ -5,9 +5,9 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 ## Features
 
 - **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
-- **Tool System**: 15 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `web_search`, `web_fetch`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, `screenshot`, plus the built-in `read` image loader for multimodal models).
+- **Tool System**: 11 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, plus the built-in `read` image loader for multimodal models). Ollama talks through its OpenAI-compatible `/v1` API, so there is no Ollama-specific provider code.
 - **Custom Tools**: Extend TinyHarness with shell-command-based tools the LLM can call — defined in `custom_tools.json` (`~/.config/tinyharness/custom_tools.json` global only; project-level files are not loaded, since a cloned repo must not register shell commands on your machine), no Rust code or recompilation required. Supports `{param}` template substitution, `TH_*` env vars, `readonly`/`destructive` categories, and timeouts.
-- **Agent Modes**: Four modes — `casual` (web-only), `planning` (read-only + signals), `agent` (full access), and `research` (web-focused) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
+- **Agent Modes**: Four modes — `casual` (pure chat, no tools), `planning` (read-only + signals), `agent` (full access), and `research` (read-only + signals, research prompt) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
 - **Skills**: Pluggable SKILL.md modules discovered from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`. Invokable by the AI via `invoke_skill` or by the user via `/use <name>`. Supports YAML frontmatter with name, description, compatibility, licensing, and model-invocation controls.
 - **Context Management**: Token estimation with per-model context window sizes (8K–256K), load warnings at 70%/90% thresholds, and cascading conversation compaction via `/compact`.
 - **Session Persistence**: JSONL-based sessions with UUIDs, saved in `~/.local/share/tinyharness/sessions/`. Supports session listing, switching by prefix, renaming, deletion, and auto-save every 5 messages.
@@ -159,10 +159,10 @@ Sends an initial prompt and then drops into the interactive loop for follow-up t
 
 | Mode | Tools Available | Purpose |
 |------|----------------|---------|
-| **casual** | `web_search`, `web_fetch` | Pure chat with web access, no filesystem access |
+| **casual** | (none) | Pure chat, no filesystem access |
 | **planning** | All read-only tools + signal tools | Analyze & plan, then escalate to agent |
-| **agent** | All 15 tools | Full development access — code, commands, web |
-| **research** | All read-only tools + signal tools | Web research, then escalate for execution |
+| **agent** | All tools | Full development access — code and commands |
+| **research** | All read-only tools + signal tools | Research, then escalate for execution |
 
 Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/research`, `/casual`), or let the AI request escalation via `switch_mode`.
 
@@ -174,8 +174,6 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 | `read` | ReadOnly | Read file content (loads images for multimodal models; renders `.ipynb` with base64 outputs stripped) |
 | `grep` | ReadOnly | Search with regex across files |
 | `glob` | ReadOnly | Find files by glob pattern |
-| `web_search` | ReadOnly | Search the web (requires Ollama API key) |
-| `web_fetch` | ReadOnly | Fetch a web page by URL |
 | `write` | Destructive | Write content to a file |
 | `edit` | Destructive | Edit a file by find-and-replace |
 | `run` | Destructive | Execute shell commands with timeout & working directory |
@@ -183,7 +181,6 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 | `question` | Signal | Ask the user a question with options |
 | `auto_compact` | Signal | Request conversation compaction |
 | `invoke_skill` | Signal | Activate a skill by name |
-| `screenshot` | Signal | Request a screenshot from the user |
 
 ## Slash Commands
 
@@ -233,7 +230,6 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 |---------|-------------|
 | `/settings [all]` | Show current configuration |
 | `/command [list\|add\|rm\|deny\|undeny\|reset\|resetdeny]` | Manage auto-accepted and denied commands |
-| `/apikey [key\|clear]` | Set, show, or clear the Ollama API key (needed for `web_search`) |
 | `/contextlimit [tokens]` | Show or set the context warning threshold |
 | `/autoaccept [all\|safe\|off]` | Show or set auto-accept mode (`off`, `safe` = read-only, `all` = all tools except `run`) |
 | `/autocompact [on\|off]` | Toggle the auto_compact tool (when off, the model cannot request compaction) |
@@ -335,7 +331,6 @@ tinyharness-lib/src/
 ├── lib.rs               Re-exports all public types
 ├── provider/             Provider trait + implementations
 │   ├── mod.rs            Provider trait, Message types, ToolDefinition, ToolCall (with id)
-│   ├── ollama.rs         OllamaProvider — raw SSE streaming, retries, Gemini signatures
 │   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
 │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
 │   └── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
@@ -352,7 +347,7 @@ tinyharness-lib/src/
 │   ├── custom_tool.rs    CustomToolDefinition, CustomToolCategory, build_tool()
 │   └── shell.rs          ShellCommand — template substitution, timeout, env vars
 ├── prompts/              Hardcoded default system prompts (header.md, casual.md, planning.md, agent.md, research.md)
-└── tools/                15 tool implementations
+└── tools/                12 tool implementations
     ├── mod.rs            ToolManager with mode-based filtering, signal event parsing
     ├── tool.rs           Tool struct, ToolCategory enum, schema builders, extract_args! macro
     ├── ls.rs             Directory listing
@@ -362,12 +357,10 @@ tinyharness-lib/src/
     ├── grep.rs           Regex search across files
     ├── glob.rs           File glob pattern matching
     ├── run.rs            Shell command execution with timeout
-    ├── web_search.rs     Web search + web fetch (Ollama cloud API)
     ├── switch_mode.rs    Mode switch signal
     ├── question.rs       User question signal
     ├── auto_compact.rs   Compaction signal
-    ├── invoke_skill.rs   Skill activation signal
-    └── screenshot.rs     Screenshot request signal
+    └── invoke_skill.rs   Skill activation signal
 ```
 
 ### UI library (`tinyharness-ui/`)
@@ -433,7 +426,6 @@ src/
 └── commands/
     ├── mod.rs            CommandRegistry, CommandDispatcher, build_registry() — 24+ commands
     ├── registry.rs       CommandContext, CommandResult, AsyncCommand trait, async_command! macro
-    ├── apikey.rs         /apikey — Ollama API key management
     ├── audit.rs          /audit — command execution audit log
     ├── clear.rs          /clear — terminal clear
     ├── command.rs        /command — safe/denied command management

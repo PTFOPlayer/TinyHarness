@@ -1,14 +1,14 @@
 # Tools Reference
 
-TinyHarness provides 15 tools across three categories. Each tool has a JSON Schema that the AI uses to construct valid calls.
+TinyHarness provides 11 built-in tools across three categories. Each tool has a JSON Schema that the AI uses to construct valid calls.
 
 ## Tool Categories
 
 | Category | Behavior | Tools |
 |----------|----------|-------|
-| **ReadOnly** | Execute immediately, no confirmation needed | `ls`, `read`, `grep`, `glob`, `web_search`, `web_fetch` |
+| **ReadOnly** | Execute immediately, no confirmation needed | `ls`, `read`, `grep`, `glob` |
 | **Destructive** | Require user confirmation before execution | `write`, `edit`, `run` |
-| **Signal** | Handled specially by the agent loop (not generic execution) | `switch_mode`, `question`, `auto_compact`, `invoke_skill`, `screenshot` |
+| **Signal** | Handled specially by the agent loop (not generic execution) | `switch_mode`, `question`, `auto_compact`, `invoke_skill` |
 
 ### Auto-Execution Rules
 
@@ -31,9 +31,9 @@ OS-level sandbox with `--sandbox` / `sandbox.backend`. See
 
 | Mode | Available Tools |
 |------|----------------|
-| **casual** | `web_search`, `web_fetch` |
+| **casual** | (none) — pure chat |
 | **planning** | All ReadOnly + all Signal tools (no destructive) |
-| **agent** | All 15 tools |
+| **agent** | All tools |
 | **research** | All ReadOnly + all Signal tools (same as planning, different prompt) |
 
 ---
@@ -143,31 +143,6 @@ API keys, and `cwd` must lie inside it. The network is left available so
 
 ---
 
-## Web Tools
-
-### `web_search` — Search the Web
-
-**Category**: ReadOnly | **Auto-executes**: Yes
-
-Searches the web using Ollama's cloud API. Requires an Ollama API key set via `/apikey`. Returns titles, URLs, and content snippets.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `query` | Yes | The search query string |
-| `max_results` | No | Maximum results (default: 5, max: 10) |
-
-### `web_fetch` — Fetch Web Page
-
-**Category**: ReadOnly | **Auto-executes**: Yes
-
-Fetches a specific web page by URL. Returns the page title, main content, and links found on the page.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `url` | Yes | The URL to fetch |
-
----
-
 ## Signal Tools
 
 Signal tools are **not executed generically**. The agent loop intercepts them and handles them inline.
@@ -214,14 +189,6 @@ Activates a skill by name, injecting its instructions into the system prompt.
 | `skill_name` | Yes | The exact skill name from the available skills list |
 
 The skill stays active until unloaded with `/unload <name>`. Skills with `disable-model-invocation: true` are marked as "manual invocation only".
-
-### `screenshot` — Request Screenshot
-
-Requests the user to take a screenshot and attach it.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `description` | Yes | What you want the user to capture |
 
 The agent loop prompts the user to attach an image with `/image` and reply. User can skip if unable.
 

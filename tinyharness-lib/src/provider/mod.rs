@@ -1,7 +1,6 @@
 #[cfg(feature = "test-util")]
 pub mod mock;
 pub mod model_variants;
-pub mod ollama;
 pub mod openai_compat;
 pub mod openai_compat_provider;
 pub mod sockudo;
@@ -13,9 +12,8 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 
 use crate::SecretString;
-use crate::config::{OllamaThinkType, Settings};
+use crate::config::Settings;
 use crate::image::ImageAttachment;
-use crate::provider::ollama::OllamaProvider;
 use crate::provider::openai_compat_provider::OpenAiCompatProvider;
 use crate::provider::sockudo::SockudoProvider;
 
@@ -153,7 +151,7 @@ impl Message {
     }
 }
 
-/// Trait for LLM provider backends (Ollama, OpenAI-compatible, Sockudo).
+/// Trait for LLM provider backends (OpenAI-compatible endpoints, Sockudo).
 ///
 /// Async methods return `impl Future<...> + Send` (RPITIT) rather than
 /// `Pin<Box<dyn Future>>`: no allocation, no extra crates. The trade-off is
@@ -204,9 +202,6 @@ pub trait Provider: Send + Sync {
 
     /// Set the maximum number of retries. Only meaningful for providers that use retries.
     fn set_retries(&mut self, _max_retries: u32) {}
-
-    /// Set the think/reasoning level. Only meaningful for Ollama.
-    fn set_think_type(&mut self, _think_type: OllamaThinkType) {}
 }
 
 /// Concrete wrapper over all built-in provider backends.
@@ -216,7 +211,6 @@ pub trait Provider: Send + Sync {
 /// backend goes through this enum instead of `Arc<Mutex<dyn Provider>>`.
 /// Commands and the agent loop share an `Arc<Mutex<AnyProvider>>`.
 pub enum AnyProvider {
-    Ollama(crate::provider::ollama::OllamaProvider),
     OpenAiCompat(crate::provider::openai_compat_provider::OpenAiCompatProvider),
     Sockudo(crate::provider::sockudo::SockudoProvider),
     /// Test-only variant. Constructed via `MockProviderHandle` (feature
@@ -238,16 +232,14 @@ impl AnyProvider {
         api_key: Option<SecretString>,
         timeout_secs: u64,
         max_retries: u32,
-        think_type: OllamaThinkType,
         sockudo: SockudoCredentials,
     ) -> Result<Self, String> {
         Ok(match kind {
-            crate::config::ProviderKind::Ollama => AnyProvider::Ollama(OllamaProvider::new(
-                base_url,
-                timeout_secs,
-                max_retries,
-                think_type,
-            )?),
+            // Ollama serves the OpenAI-compatible API at `/v1`, so it goes
+            // through the same provider as llama.cpp / vLLM / hosted gateways.
+            crate::config::ProviderKind::Ollama => AnyProvider::OpenAiCompat(
+                OpenAiCompatProvider::with_options(base_url, None, timeout_secs, max_retries),
+            ),
             crate::config::ProviderKind::LlamaCpp => AnyProvider::OpenAiCompat(
                 OpenAiCompatProvider::with_options(base_url, None, timeout_secs, max_retries)
                     .with_static_models(vec!["llama-cpp".to_string()]),
@@ -273,22 +265,6 @@ impl AnyProvider {
             )),
         })
     }
-
-    /// The provider kind this instance wraps.
-    ///
-    /// Note: `LlamaCpp`/`Vllm` are both backed by `OpenAiCompatProvider`,
-    /// so `kind()` cannot distinguish them — it reports `OpenAiCompat` for
-    /// both. Use `build()`'s input `ProviderKind` where the exact kind
-    /// matters.
-    pub fn kind(&self) -> crate::config::ProviderKind {
-        match self {
-            AnyProvider::Ollama(_) => crate::config::ProviderKind::Ollama,
-            AnyProvider::OpenAiCompat(_) => crate::config::ProviderKind::OpenAiCompat,
-            AnyProvider::Sockudo(_) => crate::config::ProviderKind::Sockudo,
-            #[cfg(feature = "test-util")]
-            AnyProvider::Mock(_) => crate::config::ProviderKind::Ollama,
-        }
-    }
 }
 
 /// Credentials needed to construct the Sockudo provider.
@@ -312,7 +288,6 @@ impl From<&Settings> for SockudoCredentials {
 impl Provider for AnyProvider {
     async fn health_check(&self) -> Result<(), String> {
         match self {
-            AnyProvider::Ollama(p) => p.health_check().await,
             AnyProvider::OpenAiCompat(p) => p.health_check().await,
             AnyProvider::Sockudo(p) => p.health_check().await,
             #[cfg(feature = "test-util")]
@@ -322,7 +297,6 @@ impl Provider for AnyProvider {
 
     async fn list_models(&self) -> Vec<String> {
         match self {
-            AnyProvider::Ollama(p) => p.list_models().await,
             AnyProvider::OpenAiCompat(p) => p.list_models().await,
             AnyProvider::Sockudo(p) => p.list_models().await,
             #[cfg(feature = "test-util")]
@@ -332,7 +306,6 @@ impl Provider for AnyProvider {
 
     fn select_model(&mut self, name: String) {
         match self {
-            AnyProvider::Ollama(p) => p.select_model(name),
             AnyProvider::OpenAiCompat(p) => p.select_model(name),
             AnyProvider::Sockudo(p) => p.select_model(name),
             #[cfg(feature = "test-util")]
@@ -342,7 +315,6 @@ impl Provider for AnyProvider {
 
     fn current_model(&self) -> Option<String> {
         match self {
-            AnyProvider::Ollama(p) => p.current_model(),
             AnyProvider::OpenAiCompat(p) => p.current_model(),
             AnyProvider::Sockudo(p) => p.current_model(),
             #[cfg(feature = "test-util")]
@@ -356,7 +328,6 @@ impl Provider for AnyProvider {
         tools: Vec<ToolDefinition>,
     ) -> Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String> {
         match self {
-            AnyProvider::Ollama(p) => p.chat(messages, tools).await,
             AnyProvider::OpenAiCompat(p) => p.chat(messages, tools).await,
             AnyProvider::Sockudo(p) => p.chat(messages, tools).await,
             #[cfg(feature = "test-util")]
@@ -366,7 +337,6 @@ impl Provider for AnyProvider {
 
     fn set_timeout(&mut self, timeout_secs: u64) {
         match self {
-            AnyProvider::Ollama(p) => p.set_timeout(timeout_secs),
             AnyProvider::OpenAiCompat(p) => p.set_timeout(timeout_secs),
             AnyProvider::Sockudo(p) => p.set_timeout(timeout_secs),
             #[cfg(feature = "test-util")]
@@ -376,21 +346,10 @@ impl Provider for AnyProvider {
 
     fn set_retries(&mut self, max_retries: u32) {
         match self {
-            AnyProvider::Ollama(p) => p.set_retries(max_retries),
             AnyProvider::OpenAiCompat(p) => p.set_retries(max_retries),
             AnyProvider::Sockudo(p) => p.set_retries(max_retries),
             #[cfg(feature = "test-util")]
             AnyProvider::Mock(p) => p.set_retries(max_retries),
-        }
-    }
-
-    fn set_think_type(&mut self, think_type: OllamaThinkType) {
-        match self {
-            AnyProvider::Ollama(p) => p.set_think_type(think_type),
-            AnyProvider::OpenAiCompat(p) => p.set_think_type(think_type),
-            AnyProvider::Sockudo(p) => p.set_think_type(think_type),
-            #[cfg(feature = "test-util")]
-            AnyProvider::Mock(p) => p.set_think_type(think_type),
         }
     }
 }
@@ -417,27 +376,11 @@ mod tests {
                 Some(SecretString::new("k")),
                 30,
                 0,
-                OllamaThinkType::Medium,
                 creds.clone(),
             )
             .unwrap_or_else(|e| panic!("build({kind}) failed: {e}"));
             let _ = provider.current_model();
         }
-    }
-
-    #[test]
-    fn build_ollama_invalid_url_is_an_error() {
-        let creds = SockudoCredentials::default();
-        let result = AnyProvider::build(
-            crate::config::ProviderKind::Ollama,
-            "::not a url::".to_string(),
-            None,
-            5,
-            0,
-            OllamaThinkType::Medium,
-            creds,
-        );
-        assert!(result.is_err(), "invalid Ollama URL should be rejected");
     }
 
     #[tokio::test]

@@ -42,12 +42,11 @@ TinyHarness/                  Binary crate — CLI, agent loop, slash commands
 tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rustyline
 ├── src/
 │   ├── lib.rs                Re-exports all public types
-│   ├── provider/             Provider trait + Ollama/OpenAI-compat/Sockudo impls
-│   │   ├── ollama.rs             OllamaProvider — raw SSE streaming, retries, Gemini signatures
-│   │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
+│   ├── provider/             Provider trait + OpenAI-compat/Sockudo impls
+│   │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends (Ollama included, via `/v1`)
 │   │   ├── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
 │   │   └── sockudo.rs            SockudoProvider — AI Transport via WebSocket (⚠️ experimental)
-│   ├── tools/                15 tools + ToolManager with mode filtering
+│   ├── tools/                11 tools + ToolManager with mode filtering
 │   ├── custom_tools/         Custom-tools system — shell-command tools via custom_tools.json
 │   │   ├── mod.rs            CustomToolManager — load, merge
 │   │   ├── custom_tool.rs    CustomToolDefinition, CustomToolCategory
@@ -297,7 +296,7 @@ diverges from the profile the rest of the session uses. Instead:
   still works there.
 - Handler takes only `out: &mut Output` → add a `paths: &Paths` parameter and
   pass `&ctx.paths` from the registration closure in `src/commands/mod.rs`
-  (precedent: `apikey.rs`, `settings.rs`, `command.rs`, `config_settings.rs`,
+  (precedent: `settings.rs`, `command.rs`, `config_settings.rs`,
   `project_settings.rs`, `audit.rs`, `sessions.rs`).
 - Code that runs before a `CommandContext` exists (`src/agent/setup.rs`) →
   thread `&Paths` from `main.rs`, which owns the single startup instance.
@@ -364,12 +363,9 @@ Every path TinyHarness reads or writes resolves through
    the `paths_injection` integration test is the guard.
    Three documented exceptions exist today, all in `tinyharness-lib`:
    `resolve_project_md_files()` reads the `TINYHARNESS_MD_FILES` override knob
-   (an env var, not a storage location); `ImageAttachment::load_from_str()`
+   (an env var, not a storage location); and `ImageAttachment::load_from_str()`
    resolves relative paths against the process CWD — `load_from_str_in()` is the
-   injectable form; and `tools/web_search.rs` still calls `load_settings()` for
-   the Ollama API key, so a host driving the lib with an isolated `Paths` must
-   know the web tools read the ambient profile. Making that last one injectable
-   requires changing `ToolManager::register_defaults()`'s public signature.
+   injectable form.
 
 ### Using tinyharness-lib Standalone
 
