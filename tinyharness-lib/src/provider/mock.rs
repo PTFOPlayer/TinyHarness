@@ -7,7 +7,6 @@
 
 use std::sync::Mutex;
 
-use crate::config::OllamaThinkType;
 use crate::provider::{
     AnyProvider, ChatMessage, ChatMessageResponse, Message, Provider, TokenUsage, ToolDefinition,
 };
@@ -24,7 +23,6 @@ pub struct MockProvider {
     responses: Mutex<Vec<Vec<ChatMessageResponse>>>,
     pub timeout: u64,
     pub retries: u32,
-    pub think_type: OllamaThinkType,
     health_ok: bool,
 }
 
@@ -42,7 +40,6 @@ impl MockProvider {
             responses: Mutex::new(Vec::new()),
             timeout: 5,
             retries: 3,
-            think_type: OllamaThinkType::Off,
             health_ok: true,
         }
     }
@@ -179,10 +176,6 @@ impl Provider for MockProvider {
     fn set_retries(&mut self, max_retries: u32) {
         self.retries = max_retries;
     }
-
-    fn set_think_type(&mut self, think_type: OllamaThinkType) {
-        self.think_type = think_type;
-    }
 }
 
 /// Convenience wrapper so tests can hold an `Arc<Mutex<MockProvider>>`
@@ -268,10 +261,6 @@ impl Provider for MockProviderHandle {
 
     fn set_retries(&mut self, max_retries: u32) {
         self.0.lock().unwrap().set_retries(max_retries);
-    }
-
-    fn set_think_type(&mut self, think_type: OllamaThinkType) {
-        self.0.lock().unwrap().set_think_type(think_type);
     }
 }
 

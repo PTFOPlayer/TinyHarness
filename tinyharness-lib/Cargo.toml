@@ -7,11 +7,10 @@ edition = "2024"
 repository = "https://github.com/PTFOPlayer/TinyHarness"
 homepage = "https://github.com/PTFOPlayer/TinyHarness"
 documentation = "https://docs.rs/tinyharness-lib"
-keywords = ["llm", "ai", "agent", "ollama", "tool-calling"]
+keywords = ["llm", "ai", "agent", "tool-calling"]
 categories = ["api-bindings", "asynchronous"]
 
 [dependencies]
-ollama-rs = { version = "0.3.4", features = ["stream"] }
 tokio = { version = "1.52.1", features = ["full"] }
 tokio-stream = "0.1.18"
 serde = { version = "1.0.228", features = ["derive"] }

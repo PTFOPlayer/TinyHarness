@@ -62,12 +62,6 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
         settings.effective_max_retries(),
     );
 
-    let _ = writeln!(
-        out,
-        "{BOLD}│{RESET} Think:     {BLUE}{}{RESET}",
-        settings.ollama_think_type,
-    );
-
     let (st_str, st_color) = if settings.show_thinking {
         ("on", GREEN)
     } else {

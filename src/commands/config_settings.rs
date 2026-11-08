@@ -314,50 +314,7 @@ pub fn execute_questions(
     Ok(CommandResult::Ok)
 }
 
-// ── Think Type (async — needs provider.lock().await) ───────────────────────
 
-async_command!(
-    ThinkCommand,
-    "/think",
-    "Show or set the Ollama think/reasoning level (off, low, medium, high)",
-    "/think [off|low|medium|high]",
-    |raw_arg, ctx, _messages| {
-        let arg = raw_arg.unwrap_or("").to_string();
-        let provider = ctx.provider.clone();
-        async move {
-            if arg.is_empty() {
-                let settings = load_settings_from(&ctx.paths);
-                let _ = writeln!(
-                    ctx.output,
-                    "{BOLD}Current think level: {BLUE}{}{RESET}",
-                    settings.ollama_think_type,
-                );
-                return Ok(CommandResult::Ok);
-            }
-
-            let think_type = match arg.parse::<tinyharness_lib::config::OllamaThinkType>() {
-                Ok(tt) => tt,
-                Err(e) => return Err(e),
-            };
-
-            let mut settings = load_settings_from(&ctx.paths);
-            settings.ollama_think_type = think_type;
-            if let Err(e) = save_settings_to(&ctx.paths, &settings) {
-                tracing::warn!("Failed to save settings: {e}");
-            }
-
-            let mut p = provider.lock().await;
-            p.set_think_type(think_type);
-
-            let _ = writeln!(
-                ctx.output,
-                "{BOLD}Think level set to {BLUE}{think_type}.{RESET}",
-            );
-
-            Ok(CommandResult::Ok)
-        }
-    }
-);
 
 // ── Show Think (sync — no provider access needed) ─────────────────────────────
 

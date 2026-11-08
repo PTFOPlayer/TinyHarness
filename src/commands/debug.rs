@@ -383,7 +383,6 @@ fn build_json_dump(ctx: &CommandContext, messages: &[Message]) -> Value {
         "current_model": settings.get_current_model(),
         "timeout_secs": settings.effective_timeout_secs(),
         "max_retries": settings.effective_max_retries(),
-        "think_type": settings.ollama_think_type.to_string(),
     });
 
     // ── Token usage ────────────────────────────────────────────────────────
@@ -684,7 +683,6 @@ fn dump_provider_diagnostics(file: &mut std::fs::File, ctx: &CommandContext) {
 
     writeln!(file, "Timeout: {}s", settings.effective_timeout_secs()).unwrap();
     writeln!(file, "Max retries: {}", settings.effective_max_retries()).unwrap();
-    writeln!(file, "Think type: {}", settings.ollama_think_type).unwrap();
 }
 
 fn dump_token_usage(file: &mut std::fs::File, ctx: &CommandContext, messages: &[Message]) {

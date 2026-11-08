@@ -29,7 +29,7 @@ use tokio::sync::Mutex;
 
 use crate::commands::{
     compact::CompactCommand,
-    config_settings::{RetriesCommand, ThinkCommand, TimeoutCommand},
+    config_settings::{RetriesCommand, TimeoutCommand},
     init::InitCommand,
     models::ModelCommand,
 };
@@ -407,7 +407,6 @@ pub fn build_registry() -> CommandRegistry {
     reg.register(InitCommand);
     reg.register(TimeoutCommand);
     reg.register(RetriesCommand);
-    reg.register(ThinkCommand);
 
     // ── Aliases ───────────────────────────────────────────────────────────
 
@@ -462,7 +461,6 @@ pub fn build_registry() -> CommandRegistry {
     reg.register_subcommands("/autocompact", vec!["off", "on"]);
     reg.register_subcommands("/questions", vec!["off", "on"]);
     reg.register_subcommands("/showthink", vec!["off", "on"]);
-    reg.register_subcommands("/think", vec!["high", "low", "medium", "off"]);
 
     // ── Help (registered last, after descriptions are frozen) ─────────────
 

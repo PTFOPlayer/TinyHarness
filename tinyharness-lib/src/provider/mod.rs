@@ -12,7 +12,7 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 
 use crate::SecretString;
-use crate::config::{OllamaThinkType, Settings};
+use crate::config::Settings;
 use crate::image::ImageAttachment;
 use crate::provider::openai_compat_provider::OpenAiCompatProvider;
 use crate::provider::sockudo::SockudoProvider;
@@ -202,10 +202,6 @@ pub trait Provider: Send + Sync {
 
     /// Set the maximum number of retries. Only meaningful for providers that use retries.
     fn set_retries(&mut self, _max_retries: u32) {}
-
-    /// Set the think/reasoning level. Only meaningful for providers that
-    /// support it natively; a no-op for OpenAI-compatible endpoints.
-    fn set_think_type(&mut self, _think_type: OllamaThinkType) {}
 }
 
 /// Concrete wrapper over all built-in provider backends.
@@ -268,21 +264,6 @@ impl AnyProvider {
                 sockudo.app_secret.unwrap_or_default(),
             )),
         })
-    }
-
-    /// The provider kind this instance wraps.
-    ///
-    /// Note: `Ollama`/`LlamaCpp`/`Vllm` are all backed by
-    /// `OpenAiCompatProvider`, so `kind()` cannot distinguish them — it
-    /// reports `OpenAiCompat` for all of them. Use `build()`'s input
-    /// `ProviderKind` where the exact kind matters.
-    pub fn kind(&self) -> crate::config::ProviderKind {
-        match self {
-            AnyProvider::OpenAiCompat(_) => crate::config::ProviderKind::OpenAiCompat,
-            AnyProvider::Sockudo(_) => crate::config::ProviderKind::Sockudo,
-            #[cfg(feature = "test-util")]
-            AnyProvider::Mock(_) => crate::config::ProviderKind::Ollama,
-        }
     }
 }
 
@@ -369,15 +350,6 @@ impl Provider for AnyProvider {
             AnyProvider::Sockudo(p) => p.set_retries(max_retries),
             #[cfg(feature = "test-util")]
             AnyProvider::Mock(p) => p.set_retries(max_retries),
-        }
-    }
-
-    fn set_think_type(&mut self, think_type: OllamaThinkType) {
-        match self {
-            AnyProvider::OpenAiCompat(p) => p.set_think_type(think_type),
-            AnyProvider::Sockudo(p) => p.set_think_type(think_type),
-            #[cfg(feature = "test-util")]
-            AnyProvider::Mock(p) => p.set_think_type(think_type),
         }
     }
 }

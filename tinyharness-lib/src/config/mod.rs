@@ -569,53 +569,6 @@ impl FromStr for ProviderKind {
     }
 }
 
-/// Controls the "think" (reasoning) level for Ollama models that support it
-/// (e.g. qwen2.5 variants). Affects how much internal reasoning the model does
-/// before responding.
-///
-/// Corresponds to Ollama's `think` parameter. Only meaningful for Ollama;
-/// other providers ignore this setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum OllamaThinkType {
-    /// Disable thinking entirely (fastest, lowest quality).
-    Off,
-    /// Minimal reasoning (faster, lower latency).
-    Low,
-    /// Balanced reasoning (good default).
-    #[default]
-    Medium,
-    /// Maximum reasoning (slowest, highest quality).
-    High,
-}
-
-impl fmt::Display for OllamaThinkType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OllamaThinkType::Off => f.write_str("off"),
-            OllamaThinkType::Low => f.write_str("low"),
-            OllamaThinkType::Medium => f.write_str("medium"),
-            OllamaThinkType::High => f.write_str("high"),
-        }
-    }
-}
-
-impl FromStr for OllamaThinkType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "off" | "false" | "0" => Ok(OllamaThinkType::Off),
-            "low" => Ok(OllamaThinkType::Low),
-            "medium" | "mid" => Ok(OllamaThinkType::Medium),
-            "high" => Ok(OllamaThinkType::High),
-            _ => Err(format!(
-                "Unknown think type '{}'. Valid values: off, low, medium, high",
-                s
-            )),
-        }
-    }
-}
-
 /// Persisted application settings — pure data type with no I/O.
 ///
 /// Use `SettingsStore` to load and save instances of this type.
@@ -660,9 +613,6 @@ pub struct Settings {
     /// Set via `/retries <count>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_max_retries: Option<u32>,
-    /// Controls the think/reasoning level for Ollama (default: Medium)
-    #[serde(default)]
-    pub ollama_think_type: OllamaThinkType,
     /// Show the model's thinking/reasoning chain inline during streaming (default: true)
     #[serde(default)]
     pub show_thinking: bool,
@@ -759,7 +709,6 @@ impl Default for Settings {
             sockudo_app_id: None,
             sockudo_app_key: None,
             sockudo_app_secret: None,
-            ollama_think_type: OllamaThinkType::Medium,
             request_timeout_secs: None,
             request_max_retries: None,
             show_thinking: true,
@@ -1337,7 +1286,6 @@ mod tests {
             "openai_compat_api_key": "sk-test",
             "request_timeout_secs": 5,
             "request_max_retries": 3,
-            "ollama_think_type": "High",
             "show_thinking": true,
             "context_limit": 256000,
             "auto_accept_mode": "all",
@@ -1350,7 +1298,6 @@ mod tests {
         assert_eq!(settings.preferred_mode, AgentMode::Agent);
         // Missing fields default gracefully:
         assert!(settings.skip_health_check);
-        assert_eq!(settings.ollama_think_type, OllamaThinkType::High);
     }
 
     /// An empty settings object should load with all defaults.

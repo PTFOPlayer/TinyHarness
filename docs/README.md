@@ -20,7 +20,7 @@
 
 | Provider | Status | Notes |
 |----------|--------|-------|
-| Ollama | Stable (default) | Raw SSE streaming, retries, think levels, API key for web tools |
+| Ollama | Stable (default) | OpenAI-compatible `/v1` API, retries, configurable timeout |
 | llama.cpp | Stable | OpenAI-compatible, shared HTTP/SSE logic, no auth (local servers) |
 | vLLM | Stable | OpenAI-compatible, shared HTTP/SSE logic, no auth (local servers) |
 | OpenAI-compat | Stable | Generic OpenAI-compatible gateways (OpenRouter, Together, etc.) with Bearer auth. Requires `--api-key` and `--url` |
