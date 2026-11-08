@@ -224,22 +224,24 @@ fn parse_toggle(s: &str) -> Option<bool> {
     }
 }
 
+/// Descriptor for a boolean settings toggle command.
+struct ToggleSpec {
+    label: &'static str,
+    cmd: &'static str,
+    off_color: &'static str,
+    get: fn(&tinyharness_lib::config::Settings) -> bool,
+    set: fn(&mut tinyharness_lib::config::Settings, bool),
+}
+
 /// Generic show/set toggle for a boolean setting field.
-///
-/// `label` is the display name (e.g. "Auto-compact"), `cmd` is the command
-/// name for error messages (e.g. "autocompact"), `off_color` is the ANSI
-/// color for the off state.
 fn toggle_bool_setting(
     out: &mut Output,
     paths: &Paths,
     arg: Option<&str>,
-    label: &str,
-    cmd: &str,
-    off_color: &str,
-    get: impl Fn(&tinyharness_lib::config::Settings) -> bool,
-    set: impl Fn(&mut tinyharness_lib::config::Settings, bool),
+    spec: &ToggleSpec,
 ) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
+    let ToggleSpec { label, cmd, off_color, get, set } = *spec;
 
     if a.is_empty() {
         let settings = load_settings_from(paths);
@@ -252,9 +254,8 @@ fn toggle_bool_setting(
         return Ok(CommandResult::Ok);
     }
 
-    let new_value = parse_toggle(a).ok_or_else(|| {
-        format!("Invalid value. Use 'on' or 'off', e.g. /{cmd} off")
-    })?;
+    let new_value = parse_toggle(a)
+        .ok_or_else(|| format!("Invalid value. Use 'on' or 'off', e.g. /{cmd} off"))?;
 
     update_settings_from(paths, |s| set(s, new_value));
 
@@ -280,11 +281,13 @@ pub fn execute_autocompact(
         out,
         paths,
         arg,
-        "Auto-compact",
-        "autocompact",
-        ORANGE,
-        |s| s.auto_compact_enabled,
-        |s, v| s.auto_compact_enabled = v,
+        &ToggleSpec {
+            label: "Auto-compact",
+            cmd: "autocompact",
+            off_color: ORANGE,
+            get: |s| s.auto_compact_enabled,
+            set: |s, v| s.auto_compact_enabled = v,
+        },
     )
 }
 
@@ -300,11 +303,13 @@ pub fn execute_questions(
         out,
         paths,
         arg,
-        "Questions",
-        "questions",
-        ORANGE,
-        |s| s.questions_enabled,
-        |s, v| s.questions_enabled = v,
+        &ToggleSpec {
+            label: "Questions",
+            cmd: "questions",
+            off_color: ORANGE,
+            get: |s| s.questions_enabled,
+            set: |s, v| s.questions_enabled = v,
+        },
     )
 }
 
@@ -320,11 +325,13 @@ pub fn execute_showthink(
         &mut ctx.output,
         &ctx.paths,
         arg,
-        "Show thinking chain",
-        "showthink",
-        GRAY,
-        |s| s.show_thinking,
-        |s, v| s.show_thinking = v,
+        &ToggleSpec {
+            label: "Show thinking chain",
+            cmd: "showthink",
+            off_color: GRAY,
+            get: |s| s.show_thinking,
+            set: |s, v| s.show_thinking = v,
+        },
     );
     // Sync the in-memory context flag with the parsed value.
     if let Some(v) = arg.and_then(parse_toggle) {

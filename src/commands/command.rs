@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::io::Write;
 
 use tinyharness_lib::Paths;
-use tinyharness_lib::config::{get_default_safe_commands, load_settings_from, update_settings_from};
+use tinyharness_lib::config::{
+    get_default_safe_commands, load_settings_from, update_settings_from,
+};
 use tinyharness_ui::output::Output;
 
 use crate::commands::registry::CommandResult;
@@ -278,7 +280,10 @@ pub fn render_command_boxes(
     };
 
     let _ = writeln!(out);
-    let _ = writeln!(out, "{BOLD}╭─ {safe_title} ─────────────────────────╮{RESET}");
+    let _ = writeln!(
+        out,
+        "{BOLD}╭─ {safe_title} ─────────────────────────╮{RESET}"
+    );
     if let Some(info) = safe_info {
         let _ = writeln!(out, "{BOLD}│{RESET} {info}");
     } else {
@@ -292,7 +297,13 @@ pub fn render_command_boxes(
     let cmds: Vec<&str> = safe_commands.iter().map(|s| s.as_str()).collect();
     let markers: Vec<char> = safe_commands
         .iter()
-        .map(|c| if default_set.contains(c.as_str()) { '·' } else { '+' })
+        .map(|c| {
+            if default_set.contains(c.as_str()) {
+                '·'
+            } else {
+                '+'
+            }
+        })
         .collect();
 
     let rows = format_command_rows(&cmds, &markers);
@@ -307,7 +318,10 @@ pub fn render_command_boxes(
         );
     }
 
-    let _ = writeln!(out, "{BOLD}╰──────────────────────────────────────────────╯{RESET}");
+    let _ = writeln!(
+        out,
+        "{BOLD}╰──────────────────────────────────────────────╯{RESET}"
+    );
 
     if !denied.is_empty() {
         let denied_refs: Vec<&str> = denied.iter().map(|s| s.as_str()).collect();
@@ -323,7 +337,10 @@ pub fn render_command_boxes(
         for row in &denied_rows {
             let _ = writeln!(out, "{BOLD}│{RESET}   {row}");
         }
-        let _ = writeln!(out, "{BOLD}╰──────────────────────────────────────────────╯{RESET}");
+        let _ = writeln!(
+            out,
+            "{BOLD}╰──────────────────────────────────────────────╯{RESET}"
+        );
     }
 
     let _ = writeln!(out);
@@ -335,7 +352,9 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
     let using_defaults = settings.safe_command_prefixes.is_none();
 
     let safe_info = if using_defaults {
-        Some(format!("{GRAY}Using defaults{RESET} ({safe_commands_count}) commands"))
+        Some(format!(
+            "{GRAY}Using defaults{RESET} ({safe_commands_count}) commands"
+        ))
     } else {
         // Let render_command_boxes compute custom_count and show the default line
         None

@@ -1242,11 +1242,7 @@ pub fn ensure_prompts_initialized_in(dir: &Path) -> PathBuf {
         }
     }
 
-    let modes = [
-        AgentMode::Casual,
-        AgentMode::Planning,
-        AgentMode::Agent,
-    ];
+    let modes = [AgentMode::Casual, AgentMode::Planning, AgentMode::Agent];
 
     for mode in &modes {
         let file_path = dir.join(mode.prompts_filename());

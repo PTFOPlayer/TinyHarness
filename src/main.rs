@@ -14,7 +14,8 @@ use std::{
 use tinyharness_lib::{
     Paths, SecretString,
     config::{
-        ProviderKind, Settings, ensure_prompts_initialized_in, load_settings_from, update_settings_from,
+        ProviderKind, Settings, ensure_prompts_initialized_in, load_settings_from,
+        update_settings_from,
     },
     context::WorkspaceContext,
     custom_tools::CustomToolManager,
