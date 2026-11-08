@@ -17,7 +17,7 @@
 use std::io::{IsTerminal, Write};
 
 use tinyharness_lib::SecretString;
-use tinyharness_lib::config::{ProviderKind, Settings, load_settings_from, save_settings_to};
+use tinyharness_lib::config::{ProviderKind, Settings, update_settings_from};
 use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
 
@@ -101,12 +101,10 @@ pub fn default_url_for(kind: ProviderKind) -> &'static str {
 /// environment.
 pub fn save_provider_settings(paths: &tinyharness_lib::Paths, kind: ProviderKind, url: &str) {
     // Load existing settings to preserve unrelated fields (mode, model, etc.)
-    let mut s = load_settings_from(paths);
-    s.last_provider = kind;
-    s.set_url_for(kind, url.to_string());
-    if let Err(e) = save_settings_to(paths, &s) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
+    update_settings_from(paths, |s| {
+        s.last_provider = kind;
+        s.set_url_for(kind, url.to_string());
+    });
 }
 
 /// Resolve the bearer token for the OpenAI-compatible provider using the
@@ -139,8 +137,7 @@ pub fn resolve_api_key(
     // the command line (cli_api_key is Some). The pure function is used in
     // tests to avoid touching the real settings file.
     if let Some(raw) = cli_api_key {
-        let mut s = load_settings_from(paths);
-        match raw {
+        update_settings_from(paths, |s| match raw {
             "-" | "" => {
                 // Both the clear sentinel and the explicit-empty opt-out
                 // remove any persisted key.
@@ -149,10 +146,7 @@ pub fn resolve_api_key(
             _ => {
                 s.openai_compat_api_key = Some(SecretString::new(raw));
             }
-        }
-        if let Err(e) = save_settings_to(paths, &s) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        });
     }
     result
 }
@@ -183,6 +177,7 @@ pub fn resolve_api_key_pure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tinyharness_lib::config::load_settings_from;
 
     #[test]
     fn default_url_for_each_provider() {

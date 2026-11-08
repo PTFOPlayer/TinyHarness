@@ -1148,6 +1148,21 @@ pub fn save_settings(settings: &Settings) {
     }
 }
 
+/// Load settings from `paths`, apply `mutate`, and save back.
+/// Logs a warning on save failure (matching the common call-site pattern).
+/// Returns the mutated settings so callers can read fields after the update.
+pub fn update_settings_from(
+    paths: &crate::paths::Paths,
+    mutate: impl FnOnce(&mut Settings),
+) -> Settings {
+    let mut settings = load_settings_from(paths);
+    mutate(&mut settings);
+    if let Err(e) = save_settings_to(paths, &settings) {
+        tracing::warn!("Failed to save settings: {e}");
+    }
+    settings
+}
+
 // ── Prompt file management ──────────────────────────────────────────────────
 
 /// Resolve the effective list of project instruction file names to discover.
@@ -1202,8 +1217,8 @@ pub fn prompts_dir_for(paths: &crate::paths::Paths) -> PathBuf {
 /// Ensure `dir` exists and is seeded with `.md` files containing the hardcoded
 /// defaults for each mode, plus the shared header.
 ///
-/// Writes `header.md`, `casual.md`, `planning.md`, `agent.md`, and
-/// `research.md`. Existing files are **never** overwritten — users can safely
+/// Writes `header.md`, `casual.md`, `planning.md`, and `agent.md`.
+/// Existing files are **never** overwritten — users can safely
 /// customize them.
 ///
 /// Returns `dir`, so callers can chain it into
@@ -1227,12 +1242,7 @@ pub fn ensure_prompts_initialized_in(dir: &Path) -> PathBuf {
         }
     }
 
-    let modes = [
-        AgentMode::Casual,
-        AgentMode::Planning,
-        AgentMode::Agent,
-        AgentMode::Research,
-    ];
+    let modes = [AgentMode::Casual, AgentMode::Planning, AgentMode::Agent];
 
     for mode in &modes {
         let file_path = dir.join(mode.prompts_filename());
@@ -1255,7 +1265,7 @@ pub fn ensure_prompts_initialized_in(dir: &Path) -> PathBuf {
 /// containing the hardcoded defaults for each mode, plus the shared header.
 ///
 /// On first launch, this creates `~/.config/tinyharness/prompts/` and writes
-/// `header.md`, `casual.md`, `planning.md`, `agent.md`, and `research.md`.
+/// `header.md`, `casual.md`, `planning.md`, and `agent.md`.
 /// Existing files are **never** overwritten — users can safely customize them.
 ///
 /// Returns the prompts directory path.

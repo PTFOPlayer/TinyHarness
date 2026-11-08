@@ -4,15 +4,15 @@ Lightweight AI assistant framework in Rust with pluggable LLM providers (Ollama,
 
 ## Features
 
-- **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff, configurable timeouts, and reasoning/think levels.
-- **Tool System**: 11 modular tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`, plus the built-in `read` image loader for multimodal models). Ollama talks through its OpenAI-compatible `/v1` API, so there is no Ollama-specific provider code.
+- **Pluggable Providers**: Ollama, llama.cpp, vLLM, any OpenAI-compatible API gateway (OpenRouter, Together, etc.) with Bearer auth, and ⚠️ Sockudo AI Transport as a highly experimental backend requiring a running Sockudo server and a worker bridge (see `docs/examples/sockudo-worker/`). Ollama supports retries with backoff and configurable timeouts.
+- **Tool System**: 11 built-in tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`, `run`, `auto_compact`, `invoke_skill`, `switch_mode`, `question`). The `read` tool also loads images for multimodal models. Ollama talks through its OpenAI-compatible `/v1` API, so there is no Ollama-specific provider code.
 - **Custom Tools**: Extend TinyHarness with shell-command-based tools the LLM can call — defined in `custom_tools.json` (`~/.config/tinyharness/custom_tools.json` global only; project-level files are not loaded, since a cloned repo must not register shell commands on your machine), no Rust code or recompilation required. Supports `{param}` template substitution, `TH_*` env vars, `readonly`/`destructive` categories, and timeouts.
-- **Agent Modes**: Four modes — `casual` (pure chat, no tools), `planning` (read-only + signals), `agent` (full access), and `research` (read-only + signals, research prompt) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
+- **Agent Modes**: Three modes — `casual` (pure chat, no tools), `planning` (read-only + signals, includes research), and `agent` (full access) — to control what the AI can do. Modes are backed by customizable `.md` prompt files.
 - **Skills**: Pluggable SKILL.md modules discovered from `~/.config/tinyharness/skills/` and `.tinyharness/skills/`. Invokable by the AI via `invoke_skill` or by the user via `/use <name>`. Supports YAML frontmatter with name, description, compatibility, licensing, and model-invocation controls.
 - **Context Management**: Token estimation with per-model context window sizes (8K–256K), load warnings at 70%/90% thresholds, and cascading conversation compaction via `/compact`.
 - **Session Persistence**: JSONL-based sessions with UUIDs, saved in `~/.local/share/tinyharness/sessions/`. Supports session listing, switching by prefix, renaming, deletion, and auto-save every 5 messages.
 - **Async Streaming**: Built on `tokio` for efficient streaming with all providers. Ctrl+C interrupts generation gracefully.
-- **Interactive CLI**: Color-coded terminal interface with 24+ slash commands for session management, configuration, file pinning, image attachment, audit logging, debug diagnostics, and tool control.
+- **Interactive CLI**: Color-coded terminal interface with 30+ slash commands for session management, configuration, file pinning, image attachment, audit logging, debug diagnostics, and tool control.
 - **Customizable Prompts**: System prompts are seeded from hardcoded defaults on first launch to `~/.config/tinyharness/prompts/` and can be freely edited.
 - **Command Safety**: Smart auto-accept for safe shell commands with prefix matching, deny lists, redirection stripping, and audit logging.
 - **Thinking Display**: Optionally render the model's reasoning chain inline during streaming (toggle via `/showthink`).
@@ -89,7 +89,7 @@ nix develop
 ```bash
 tinyharness
 ```
-Connects to `http://127.0.0.1:11434`. Supports configurable timeout, retries, and think/reasoning level.
+Connects to `http://127.0.0.1:11434`. Supports configurable timeout and retries.
 
 **llama.cpp**:
 ```bash
@@ -160,11 +160,10 @@ Sends an initial prompt and then drops into the interactive loop for follow-up t
 | Mode | Tools Available | Purpose |
 |------|----------------|---------|
 | **casual** | (none) | Pure chat, no filesystem access |
-| **planning** | All read-only tools + signal tools | Analyze & plan, then escalate to agent |
+| **planning** | All read-only tools + signal tools | Analyze, research & plan, then escalate to agent |
 | **agent** | All tools | Full development access — code and commands |
-| **research** | All read-only tools + signal tools | Research, then escalate for execution |
 
-Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/research`, `/casual`), or let the AI request escalation via `switch_mode`.
+Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/research`, `/casual` — `/research` maps to planning), or let the AI request escalation via `switch_mode`.
 
 ## Tools
 
@@ -195,8 +194,8 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 ### Mode & Model
 | Command | Description |
 |---------|-------------|
-| `/mode [casual\|planning\|agent\|research]` | Show or switch agent mode |
-| `/plan`, `/agent`, `/research`, `/casual` | Quick mode switch aliases |
+| `/mode [casual\|planning\|agent]` | Show or switch agent mode |
+| `/plan`, `/agent`, `/research`, `/casual` | Quick mode switch aliases (`/research` → planning) |
 | `/model [name]` | List available models or switch to one |
 
 ### Context & Files
@@ -235,9 +234,8 @@ Switch modes with `/mode <name>`, use shortcut aliases (`/plan`, `/agent`, `/res
 | `/autocompact [on\|off]` | Toggle the auto_compact tool (when off, the model cannot request compaction) |
 | `/questions [on\|off]` | Toggle the question tool (when off, the model cannot ask the user questions) |
 | `/showthink [on\|off]` | Toggle display of the model's thinking/reasoning chain |
-| `/timeout <seconds>` | Set Ollama request timeout (default: 5s) |
-| `/retries <count>` | Set Ollama max retries (default: 3) |
-| `/think [off\|low\|medium\|high]` | Set Ollama reasoning/think level |
+| `/timeout <seconds>` | Show or set request timeout in seconds (0 resets to per-provider default) |
+| `/retries <count>` | Show or set max request retries for the active provider |
 | `/audit [last\|session\|clear]` | View command execution audit log |
 
 ### General
@@ -330,24 +328,30 @@ Frontend-agnostic — no terminal I/O, no ANSI codes, no rustyline.
 tinyharness-lib/src/
 ├── lib.rs               Re-exports all public types
 ├── provider/             Provider trait + implementations
-│   ├── mod.rs            Provider trait, Message types, ToolDefinition, ToolCall (with id)
+│   ├── mod.rs            Provider trait, AnyProvider enum, Message types, ToolDefinition, ToolCall
 │   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
-│   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends
-│   └── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
-├── config/mod.rs         Settings persistence (provider, model, mode, API key, safe/denied commands, think type)
-├── mode.rs               AgentMode enum (casual/planning/agent/research) with customizable .md prompts
+│   ├── openai_compat.rs  Shared HTTP/SSE logic for OpenAI-compatible backends
+│   ├── openai_compat_provider.rs OpenAiCompatProvider — unified Ollama / llama.cpp / vLLM / gateway provider
+│   ├── model_variants.rs Model variant suffix stripping for model selection
+│   ├── tool_pairs.rs     Tool call/response pairing for multi-turn conversations
+│   └── mock.rs           MockProvider for testing (test-util feature)
+├── config/mod.rs         Settings persistence (provider, model, mode, API key, safe/denied commands)
+├── mode.rs               AgentMode enum (casual/planning/agent) with customizable .md prompts
 ├── context.rs            WorkspaceContext — auto-detected project metadata + instruction file discovery
 ├── session.rs            JSONL session persistence with UUIDs, auto-save, atomic writes
 ├── token.rs              Token estimation, context window sizes (8K–256K), usage warnings
 ├── skill.rs              Skill discovery, registry, frontmatter parsing, indexing
 ├── secret.rs             SecretString wrapper for API key redaction (custom Debug, serde support)
 ├── image.rs              Image attachment handling (base64 encoding, dimension detection)
+├── path_guard.rs         Always-on path confinement for in-process file tools
+├── paths.rs              Filesystem path resolution (config, data, prompts, sessions)
+└── sandbox.rs            OS-level sandbox (bubblewrap/firejail) for shell commands
 ├── custom_tools/         Custom-tools system — shell-command tools via custom_tools.json
 │   ├── mod.rs            CustomToolManager — loads the global custom_tools.json only
 │   ├── custom_tool.rs    CustomToolDefinition, CustomToolCategory, build_tool()
 │   └── shell.rs          ShellCommand — template substitution, timeout, env vars
-├── prompts/              Hardcoded default system prompts (header.md, casual.md, planning.md, agent.md, research.md)
-└── tools/                12 tool implementations
+├── prompts/              Hardcoded default system prompts (header.md, casual.md, planning.md, agent.md)
+└── tools/                11 tool implementations
     ├── mod.rs            ToolManager with mode-based filtering, signal event parsing
     ├── tool.rs           Tool struct, ToolCategory enum, schema builders, extract_args! macro
     ├── ls.rs             Directory listing
@@ -424,13 +428,13 @@ src/
 │   ├── tool_result.rs    Tool result formatting and batching
 │   └── command_result.rs CommandResult enum definition
 └── commands/
-    ├── mod.rs            CommandRegistry, CommandDispatcher, build_registry() — 24+ commands
+    ├── mod.rs            CommandRegistry, CommandDispatcher, build_registry() — 30+ commands
     ├── registry.rs       CommandContext, CommandResult, AsyncCommand trait, async_command! macro
     ├── audit.rs          /audit — command execution audit log
     ├── clear.rs          /clear — terminal clear
     ├── command.rs        /command — safe/denied command management
     ├── compact.rs        /compact — cascading conversation summarization
-    ├── config_settings.rs /contextlimit, /autoaccept, /autocompact, /showthink, /timeout, /retries, /think
+    ├── config_settings.rs /contextlimit, /autoaccept, /autocompact, /showthink, /timeout, /retries
     ├── context.rs        /context — workspace context display
     ├── debug.rs          /debug — full conversation context dump to log file
     ├── exit.rs           /exit — graceful shutdown

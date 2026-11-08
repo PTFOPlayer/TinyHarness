@@ -7,12 +7,12 @@ use crate::tools::tool::{BoxFuture, ToolCategory, build_string_params_schema, ma
 pub fn switch_mode_tool_entry() -> crate::tools::tool::Tool {
     make_tool(
         "switch_mode",
-        "Switch the assistant to a different operating mode. Use 'planning' to analyze and plan without making changes. Use 'agent' to write code and execute commands (escalate from planning). Use 'research' to search the web. Use 'casual' for general conversation.",
+        "Switch the assistant to a different operating mode. Use 'planning' to analyze, research, and plan without making changes. Use 'agent' to write code and execute commands (escalate from planning). Use 'casual' for general conversation.",
         ToolCategory::Signal,
         build_string_params_schema(
             &[(
                 "mode",
-                "The mode to switch to: 'casual', 'planning', 'agent', or 'research'",
+                "The mode to switch to: 'casual', 'planning', or 'agent'",
             )],
             &[],
         ),
@@ -33,10 +33,7 @@ pub fn switch_mode_tool(args: HashMap<String, String>) -> BoxFuture<'static, Str
                 parsed_mode, parsed_mode
             ),
             Err(e) => {
-                format!(
-                    "Error: {}. Valid modes: casual, planning, agent, research",
-                    e
-                )
+                format!("Error: {}. Valid modes: casual, planning, agent", e)
             }
         }
     })

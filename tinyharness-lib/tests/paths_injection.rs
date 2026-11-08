@@ -64,13 +64,7 @@ fn prompts_are_seeded_into_injected_dir_without_touching_home() {
     assert_eq!(dir, paths.prompts_dir());
     assert!(dir.starts_with(tmp.path()));
 
-    for name in [
-        "header.md",
-        "casual.md",
-        "planning.md",
-        "agent.md",
-        "research.md",
-    ] {
+    for name in ["header.md", "casual.md", "planning.md", "agent.md"] {
         let file = dir.join(name);
         assert!(file.is_file(), "missing seeded prompt {name}");
         assert!(

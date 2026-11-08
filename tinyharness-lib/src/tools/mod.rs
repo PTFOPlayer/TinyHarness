@@ -245,17 +245,8 @@ impl ToolManager {
                 .collect(),
             // Casual mode is pure chat — no tools are advertised.
             AgentMode::Casual => Vec::new(),
+            // Planning mode: read-only + signal tools only.
             AgentMode::Planning => self
-                .tools
-                .iter()
-                .filter(|t| {
-                    is_available(t)
-                        && (t.category == ToolCategory::ReadOnly
-                            || t.category == ToolCategory::Signal)
-                })
-                .map(|t| t.to_definition())
-                .collect(),
-            AgentMode::Research => self
                 .tools
                 .iter()
                 .filter(|t| {

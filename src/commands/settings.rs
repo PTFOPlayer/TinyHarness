@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::Write;
 
 use tinyharness_lib::Paths;
@@ -131,85 +130,20 @@ fn execute_summary(out: &mut Output, settings: &tinyharness_lib::config::Setting
 }
 
 fn execute_all(out: &mut Output, settings: &tinyharness_lib::config::Settings) {
-    let safe_commands = settings.get_safe_commands();
-    let denied_commands = settings.get_denied_commands();
+    let safe_commands_count = settings.get_safe_commands().len();
     let using_defaults = settings.safe_command_prefixes.is_none();
 
-    // Compute default set for markers
-    let defaults = tinyharness_lib::config::get_default_safe_commands();
-    let default_set: HashSet<&str> = defaults.iter().map(|s| s.as_str()).collect();
-    let custom_count = if using_defaults {
-        0
+    let safe_title = if using_defaults {
+        format!("All Safe Commands ({safe_commands_count} defaults)")
     } else {
-        safe_commands
-            .iter()
-            .filter(|c| !default_set.contains(c.as_str()))
-            .count()
+        format!("All Safe Commands ({safe_commands_count} configured)")
     };
 
-    let _ = writeln!(out);
-    if using_defaults {
-        let _ = writeln!(
-            out,
-            "{BOLD}╭─ All Safe Commands ({0} defaults) ────────────╮{RESET}",
-            safe_commands.len(),
-        );
-    } else {
-        let _ = writeln!(
-            out,
-            "{BOLD}╭─ All Safe Commands ({0} configured, {custom_count} custom) ─╮{RESET}",
-            safe_commands.len(),
-        );
-    }
-
-    // Build markers: · for defaults, + for custom
-    let cmds: Vec<&str> = safe_commands.iter().map(|s| s.as_str()).collect();
-    let markers: Vec<char> = safe_commands
-        .iter()
-        .map(|c| {
-            if default_set.contains(c.as_str()) {
-                '·'
-            } else {
-                '+'
-            }
-        })
-        .collect();
-
-    let rows = crate::commands::command::format_command_rows(&cmds, &markers);
-    for row in &rows {
-        let _ = writeln!(out, "{BOLD}│{RESET}   {row}");
-    }
-
-    if !using_defaults {
-        let _ = writeln!(
-            out,
-            "{BOLD}│{RESET}   {GRAY}· default{RESET}  {GREEN}+ custom{RESET}",
-        );
-    }
-
-    let _ = writeln!(
+    crate::commands::command::render_command_boxes(
         out,
-        "{BOLD}╰───────────────────────────────────────────────╯{RESET}",
+        settings,
+        &safe_title,
+        None,
+        "Always-Deny Commands",
     );
-
-    if !denied_commands.is_empty() {
-        let denied_refs: Vec<&str> = denied_commands.iter().map(|s| s.as_str()).collect();
-        let denied_rows = crate::commands::command::format_denied_command_rows(&denied_refs);
-
-        let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "{BOLD}╭─ Always-Deny Commands ({0} configured) ────────╮{RESET}",
-            denied_commands.len(),
-        );
-        for row in &denied_rows {
-            let _ = writeln!(out, "{BOLD}│{RESET}   {row}");
-        }
-        let _ = writeln!(
-            out,
-            "{BOLD}╰───────────────────────────────────────────────╯{RESET}",
-        );
-    }
-
-    let _ = writeln!(out);
 }

@@ -10,7 +10,6 @@ pub enum AgentMode {
     Casual,
     Planning,
     Agent,
-    Research,
 }
 
 impl AgentMode {
@@ -20,7 +19,6 @@ impl AgentMode {
             AgentMode::Casual => "casual.md",
             AgentMode::Planning => "planning.md",
             AgentMode::Agent => "agent.md",
-            AgentMode::Research => "research.md",
         }
     }
 
@@ -49,7 +47,7 @@ impl AgentMode {
 
     /// Load the system prompt for this mode from `.md` files in `prompts_dir`.
     ///
-    /// For Agent, Planning, and Research modes, the prompt is assembled as:
+    /// For Agent and Planning modes, the prompt is assembled as:
     ///   `header.md` + blank line + `<mode>.md`
     ///
     /// Casual mode uses only its own file (self-contained).
@@ -81,14 +79,13 @@ impl AgentMode {
     /// via `include_str!`). Used as fallback when no custom prompt file exists
     /// and as the seed for first-launch initialization.
     ///
-    /// For Agent, Planning, and Research modes, this returns only the
-    /// mode-specific section (the header is handled separately).
+    /// For Agent and Planning modes, this returns only the mode-specific
+    /// section (the header is handled separately).
     pub fn default_system_prompt(&self) -> &'static str {
         match self {
             AgentMode::Casual => include_str!("prompts/casual.md"),
             AgentMode::Planning => include_str!("prompts/planning.md"),
             AgentMode::Agent => include_str!("prompts/agent.md"),
-            AgentMode::Research => include_str!("prompts/research.md"),
         }
     }
 }
@@ -99,7 +96,6 @@ impl fmt::Display for AgentMode {
             AgentMode::Casual => f.write_str("casual"),
             AgentMode::Planning => f.write_str("planning"),
             AgentMode::Agent => f.write_str("agent"),
-            AgentMode::Research => f.write_str("research"),
         }
     }
 }
@@ -110,11 +106,10 @@ impl FromStr for AgentMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_lowercase().as_str() {
             "casual" => Ok(AgentMode::Casual),
-            "planning" | "plan" => Ok(AgentMode::Planning),
+            "planning" | "plan" | "research" | "researching" => Ok(AgentMode::Planning),
             "agent" | "dev" => Ok(AgentMode::Agent),
-            "research" | "researching" => Ok(AgentMode::Research),
             _ => Err(format!(
-                "Unknown mode '{}'. Valid modes: casual, planning, agent, research",
+                "Unknown mode '{}'. Valid modes: casual, planning, agent",
                 s
             )),
         }

@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::io::Write;
 
 use tinyharness_lib::Paths;
-use tinyharness_lib::config::{get_default_safe_commands, load_settings_from, save_settings_to};
+use tinyharness_lib::config::{
+    get_default_safe_commands, load_settings_from, update_settings_from,
+};
 use tinyharness_ui::output::Output;
 
 use crate::commands::registry::CommandResult;
@@ -66,7 +68,7 @@ pub fn execute_add(out: &mut Output, paths: &Paths, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings_from(paths);
+    let settings = load_settings_from(paths);
     let mut commands = settings.get_safe_commands();
 
     if commands.contains(&cmd.to_string()) {
@@ -87,10 +89,9 @@ pub fn execute_add(out: &mut Output, paths: &Paths, cmd: &str) {
     }
 
     commands.push(cmd.to_string());
-    settings.safe_command_prefixes = Some(commands);
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
+    update_settings_from(paths, |s| {
+        s.safe_command_prefixes = Some(commands);
+    });
     let _ = writeln!(
         out,
         "{GREEN}Added '{cmd}' to auto-accepted commands.{RESET}",
@@ -106,21 +107,20 @@ pub fn execute_remove(out: &mut Output, paths: &Paths, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings_from(paths);
+    let settings = load_settings_from(paths);
     let mut commands = settings.get_safe_commands();
     let initial_len = commands.len();
 
     commands.retain(|c| c != cmd);
 
     if commands.len() < initial_len {
-        settings.safe_command_prefixes = if commands.is_empty() {
-            None // Revert to defaults if empty
-        } else {
-            Some(commands)
-        };
-        if let Err(e) = save_settings_to(paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        update_settings_from(paths, |s| {
+            s.safe_command_prefixes = if commands.is_empty() {
+                None // Revert to defaults if empty
+            } else {
+                Some(commands.clone())
+            };
+        });
         let _ = writeln!(
             out,
             "{GREEN}Removed '{cmd}' from auto-accepted commands.{RESET}",
@@ -142,8 +142,8 @@ pub fn execute_deny(out: &mut Output, paths: &Paths, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings_from(paths);
-    let denied = settings.get_denied_commands();
+    let settings = load_settings_from(paths);
+    let mut denied = settings.get_denied_commands();
 
     if denied.contains(&cmd.to_string()) {
         let _ = writeln!(
@@ -168,12 +168,10 @@ pub fn execute_deny(out: &mut Output, paths: &Paths, cmd: &str) {
         );
     }
 
-    let mut denied = denied; // move out of &settings
     denied.push(cmd.to_string());
-    settings.denied_command_prefixes = Some(denied);
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
+    update_settings_from(paths, |s| {
+        s.denied_command_prefixes = Some(denied);
+    });
     let _ = writeln!(
         out,
         "{RED}Denied '{cmd}' — it will always require confirmation.{RESET}",
@@ -189,21 +187,20 @@ pub fn execute_undeny(out: &mut Output, paths: &Paths, cmd: &str) {
         return;
     }
 
-    let mut settings = load_settings_from(paths);
+    let settings = load_settings_from(paths);
     let mut denied = settings.get_denied_commands();
     let initial_len = denied.len();
 
     denied.retain(|c| c != cmd);
 
     if denied.len() < initial_len {
-        settings.denied_command_prefixes = if denied.is_empty() {
-            None
-        } else {
-            Some(denied)
-        };
-        if let Err(e) = save_settings_to(paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        update_settings_from(paths, |s| {
+            s.denied_command_prefixes = if denied.is_empty() {
+                None
+            } else {
+                Some(denied.clone())
+            };
+        });
         let _ = writeln!(out, "{GREEN}Removed '{cmd}' from the deny list.{RESET}",);
     } else {
         let _ = writeln!(
@@ -254,13 +251,22 @@ pub fn format_denied_command_rows(cmds: &[&str]) -> Vec<String> {
     rows
 }
 
-pub fn execute_list(out: &mut Output, paths: &Paths) {
-    let settings = load_settings_from(paths);
+/// Render the safe-commands and denied-commands boxes given the settings.
+///
+/// `safe_title` is the box header for the safe list (e.g. "Auto-Accepted Commands").
+/// `safe_info` is an optional extra info line shown inside the safe box
+/// (e.g. "Using defaults (N commands)"). When `None`, a generic count line is shown.
+pub fn render_command_boxes(
+    out: &mut Output,
+    settings: &tinyharness_lib::config::Settings,
+    safe_title: &str,
+    safe_info: Option<String>,
+    denied_title: &str,
+) {
     let safe_commands = settings.get_safe_commands();
     let denied = settings.get_denied_commands();
     let using_defaults = settings.safe_command_prefixes.is_none();
 
-    // Compute which safe commands are defaults vs custom
     let defaults = get_default_safe_commands();
     let default_set: HashSet<&str> = defaults.iter().map(|s| s.as_str()).collect();
 
@@ -276,14 +282,10 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{BOLD}╭─ Auto-Accepted Commands ─────────────────────╮{RESET}",
+        "{BOLD}╭─ {safe_title} ─────────────────────────╮{RESET}"
     );
-    if using_defaults {
-        let _ = writeln!(
-            out,
-            "{BOLD}│{RESET} {GRAY}Using defaults{RESET} ({}) commands",
-            safe_commands.len(),
-        );
+    if let Some(info) = safe_info {
+        let _ = writeln!(out, "{BOLD}│{RESET} {info}");
     } else {
         let _ = writeln!(
             out,
@@ -292,7 +294,6 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
         );
     }
 
-    // Build markers: · for defaults, + for custom
     let cmds: Vec<&str> = safe_commands.iter().map(|s| s.as_str()).collect();
     let markers: Vec<char> = safe_commands
         .iter()
@@ -304,15 +305,12 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
             }
         })
         .collect();
-    let cmd_refs: Vec<&str> = cmds.to_vec();
 
-    // Format and print rows
-    let rows = format_command_rows(&cmd_refs, &markers);
+    let rows = format_command_rows(&cmds, &markers);
     for row in &rows {
         let _ = writeln!(out, "{BOLD}│{RESET}   {row}");
     }
 
-    // Legend
     if !using_defaults {
         let _ = writeln!(
             out,
@@ -322,7 +320,7 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
 
     let _ = writeln!(
         out,
-        "{BOLD}╰──────────────────────────────────────────────╯{RESET}",
+        "{BOLD}╰──────────────────────────────────────────────╯{RESET}"
     );
 
     if !denied.is_empty() {
@@ -330,10 +328,7 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
         let denied_rows = format_denied_command_rows(&denied_refs);
 
         let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            "{BOLD}╭─ Always-Deny Commands ──────────────────────╮{RESET}",
-        );
+        let _ = writeln!(out, "{BOLD}╭─ {denied_title} ─────────────────────╮{RESET}");
         let _ = writeln!(
             out,
             "{BOLD}│{RESET} {RED}{}{RESET} commands denied (always require confirmation)",
@@ -344,11 +339,34 @@ pub fn execute_list(out: &mut Output, paths: &Paths) {
         }
         let _ = writeln!(
             out,
-            "{BOLD}╰──────────────────────────────────────────────╯{RESET}",
+            "{BOLD}╰──────────────────────────────────────────────╯{RESET}"
         );
     }
 
     let _ = writeln!(out);
+}
+
+pub fn execute_list(out: &mut Output, paths: &Paths) {
+    let settings = load_settings_from(paths);
+    let safe_commands_count = settings.get_safe_commands().len();
+    let using_defaults = settings.safe_command_prefixes.is_none();
+
+    let safe_info = if using_defaults {
+        Some(format!(
+            "{GRAY}Using defaults{RESET} ({safe_commands_count}) commands"
+        ))
+    } else {
+        // Let render_command_boxes compute custom_count and show the default line
+        None
+    };
+
+    render_command_boxes(
+        out,
+        &settings,
+        "Auto-Accepted Commands",
+        safe_info,
+        "Always-Deny Commands",
+    );
 }
 
 pub fn execute_help(out: &mut Output) {
@@ -400,13 +418,10 @@ pub fn execute_help(out: &mut Output) {
 }
 
 pub fn execute_reset(out: &mut Output, paths: &Paths) {
-    let mut settings = load_settings_from(paths);
-    let defaults = get_default_safe_commands();
-    let count = defaults.len();
-    settings.safe_command_prefixes = None;
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
+    let count = get_default_safe_commands().len();
+    update_settings_from(paths, |s| {
+        s.safe_command_prefixes = None;
+    });
     let _ = writeln!(
         out,
         "{GREEN}Reset auto-accepted commands to defaults ({count} commands).{RESET}",
@@ -414,16 +429,15 @@ pub fn execute_reset(out: &mut Output, paths: &Paths) {
 }
 
 pub fn execute_reset_deny(out: &mut Output, paths: &Paths) {
-    let mut settings = load_settings_from(paths);
+    let settings = load_settings_from(paths);
     if settings.get_denied_commands().is_empty() {
         let _ = writeln!(out, "{ORANGE}Deny list is already empty.{RESET}");
         return;
     }
     let count = settings.get_denied_commands().len();
-    settings.denied_command_prefixes = None;
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
+    update_settings_from(paths, |s| {
+        s.denied_command_prefixes = None;
+    });
     let _ = writeln!(
         out,
         "{GREEN}Cleared deny list (removed {count} command{}).{RESET}",

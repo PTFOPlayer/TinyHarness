@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use serde_json::{Value, json};
-use tinyharness_lib::config::{load_settings_from, save_settings_to};
+use tinyharness_lib::config::{load_settings_from, update_settings_from};
 use tinyharness_lib::provider::{Message, Role};
 use tinyharness_ui::style::*;
 
@@ -87,12 +87,10 @@ pub fn execute(
     }
 
     // Persist the current show_thinking state so it survives restarts.
-    let mut settings = load_settings_from(&ctx.paths);
-    if settings.show_thinking != ctx.show_thinking {
-        settings.show_thinking = ctx.show_thinking;
-        if let Err(e) = save_settings_to(&ctx.paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+    if load_settings_from(&ctx.paths).show_thinking != ctx.show_thinking {
+        update_settings_from(&ctx.paths, |s| {
+            s.show_thinking = ctx.show_thinking;
+        });
     }
 
     let _ = writeln!(
