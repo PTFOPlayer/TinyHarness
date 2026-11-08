@@ -314,8 +314,6 @@ pub fn execute_questions(
     Ok(CommandResult::Ok)
 }
 
-
-
 // ── Show Think (sync — no provider access needed) ─────────────────────────────
 
 /// Execute the /showthink command to toggle display of the model's thinking/reasoning chain.
