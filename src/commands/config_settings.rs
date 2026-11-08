@@ -2,7 +2,7 @@ use std::io::Write;
 
 use tinyharness_lib::Paths;
 use tinyharness_lib::config::{
-    AutoAcceptMode, load_settings_from, save_settings_to, timeout_default_for,
+    AutoAcceptMode, load_settings_from, timeout_default_for, update_settings_from,
 };
 use tinyharness_lib::provider::Provider;
 use tinyharness_ui::output::Output;
@@ -35,11 +35,9 @@ async_command!(
 
             match arg.parse::<u64>() {
                 Ok(0) => {
-                    let mut settings = load_settings_from(&ctx.paths);
-                    settings.request_timeout_secs = None;
-                    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
-                        tracing::warn!("Failed to save settings: {e}");
-                    }
+                    let settings = update_settings_from(&ctx.paths, |s| {
+                        s.request_timeout_secs = None;
+                    });
                     let default_secs = timeout_default_for(settings.last_provider);
                     let mut p = provider.lock().await;
                     p.set_timeout(default_secs);
@@ -51,11 +49,9 @@ async_command!(
                     Ok(CommandResult::Ok)
                 }
                 Ok(secs) => {
-                    let mut settings = load_settings_from(&ctx.paths);
-                    settings.request_timeout_secs = Some(secs);
-                    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
-                        tracing::warn!("Failed to save settings: {e}");
-                    }
+                    update_settings_from(&ctx.paths, |s| {
+                        s.request_timeout_secs = Some(secs);
+                    });
                     let mut p = provider.lock().await;
                     p.set_timeout(secs);
                     let _ = writeln!(ctx.output, "{BOLD}Timeout set to {BLUE}{secs}s.{RESET}",);
@@ -94,11 +90,9 @@ async_command!(
 
             match arg.parse::<u32>() {
                 Ok(count) => {
-                    let mut settings = load_settings_from(&ctx.paths);
-                    settings.request_max_retries = Some(count);
-                    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
-                        tracing::warn!("Failed to save settings: {e}");
-                    }
+                    update_settings_from(&ctx.paths, |s| {
+                        s.request_max_retries = Some(count);
+                    });
                     let mut p = provider.lock().await;
                     p.set_retries(count);
                     let _ = writeln!(ctx.output, "{BOLD}Max retries set to {BLUE}{count}.{RESET}",);
@@ -143,11 +137,9 @@ pub fn execute_context_limit(
     }
 
     if a == "auto" || a == "default" {
-        let mut settings = load_settings_from(paths);
-        settings.context_limit = None;
-        if let Err(e) = save_settings_to(paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        update_settings_from(paths, |s| {
+            s.context_limit = None;
+        });
         let _ = writeln!(
             out,
             "{BOLD}Context limit cleared. Using model default for warnings.{RESET}",
@@ -157,11 +149,9 @@ pub fn execute_context_limit(
 
     match a.parse::<u32>() {
         Ok(limit) if limit > 0 => {
-            let mut settings = load_settings_from(paths);
-            settings.context_limit = Some(limit);
-            if let Err(e) = save_settings_to(paths, &settings) {
-                tracing::warn!("Failed to save settings: {e}");
-            }
+            update_settings_from(paths, |s| {
+                s.context_limit = Some(limit);
+            });
             let _ = writeln!(
                 out,
                 "{BOLD}Context limit set to {BLUE}{limit} tokens{RESET} for warning calculations.",
@@ -208,11 +198,9 @@ pub fn execute_autoaccept(
         }
     };
 
-    let mut settings = load_settings_from(paths);
-    settings.auto_accept_mode = mode;
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
+    update_settings_from(paths, |s| {
+        s.auto_accept_mode = mode;
+    });
 
     let (mode_str, color) = match mode {
         AutoAcceptMode::All => ("all tools", GREEN),
@@ -220,6 +208,62 @@ pub fn execute_autoaccept(
         AutoAcceptMode::Off => ("off", ORANGE),
     };
     let _ = writeln!(out, "{BOLD}Auto-accept set to {color}{mode_str}{RESET}",);
+
+    Ok(CommandResult::Ok)
+}
+
+// ── Shared boolean toggle helper ─────────────────────────────────────────────
+
+/// Parse an on/off argument string. Returns `Some(bool)` for valid values,
+/// `None` otherwise.
+fn parse_toggle(s: &str) -> Option<bool> {
+    match s.to_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => Some(true),
+        "off" | "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Generic show/set toggle for a boolean setting field.
+///
+/// `label` is the display name (e.g. "Auto-compact"), `cmd` is the command
+/// name for error messages (e.g. "autocompact"), `off_color` is the ANSI
+/// color for the off state.
+fn toggle_bool_setting(
+    out: &mut Output,
+    paths: &Paths,
+    arg: Option<&str>,
+    label: &str,
+    cmd: &str,
+    off_color: &str,
+    get: impl Fn(&tinyharness_lib::config::Settings) -> bool,
+    set: impl Fn(&mut tinyharness_lib::config::Settings, bool),
+) -> Result<CommandResult, String> {
+    let a = arg.unwrap_or("");
+
+    if a.is_empty() {
+        let settings = load_settings_from(paths);
+        let (status, color) = if get(&settings) {
+            ("on", GREEN)
+        } else {
+            ("off", off_color)
+        };
+        let _ = writeln!(out, "{BOLD}{label}: {color}{status}{RESET}",);
+        return Ok(CommandResult::Ok);
+    }
+
+    let new_value = parse_toggle(a).ok_or_else(|| {
+        format!("Invalid value. Use 'on' or 'off', e.g. /{cmd} off")
+    })?;
+
+    update_settings_from(paths, |s| set(s, new_value));
+
+    let (status, color) = if new_value {
+        ("on", GREEN)
+    } else {
+        ("off", off_color)
+    };
+    let _ = writeln!(out, "{BOLD}{label} set to {color}{status}{RESET}",);
 
     Ok(CommandResult::Ok)
 }
@@ -232,41 +276,16 @@ pub fn execute_autocompact(
     paths: &Paths,
     arg: Option<&str>,
 ) -> Result<CommandResult, String> {
-    let a = arg.unwrap_or("");
-
-    if a.is_empty() {
-        let settings = load_settings_from(paths);
-        let (status, color) = if settings.auto_compact_enabled {
-            ("on", GREEN)
-        } else {
-            ("off", ORANGE)
-        };
-        let _ = writeln!(out, "{BOLD}Auto-compact: {color}{status}{RESET}",);
-        return Ok(CommandResult::Ok);
-    }
-
-    let new_value = match a.to_lowercase().as_str() {
-        "on" | "true" | "yes" | "1" => true,
-        "off" | "false" | "no" | "0" => false,
-        _ => {
-            return Err("Invalid value. Use 'on' or 'off', e.g. /autocompact off".to_string());
-        }
-    };
-
-    let mut settings = load_settings_from(paths);
-    settings.auto_compact_enabled = new_value;
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
-
-    let (status, color) = if new_value {
-        ("on", GREEN)
-    } else {
-        ("off", ORANGE)
-    };
-    let _ = writeln!(out, "{BOLD}Auto-compact set to {color}{status}{RESET}",);
-
-    Ok(CommandResult::Ok)
+    toggle_bool_setting(
+        out,
+        paths,
+        arg,
+        "Auto-compact",
+        "autocompact",
+        ORANGE,
+        |s| s.auto_compact_enabled,
+        |s, v| s.auto_compact_enabled = v,
+    )
 }
 
 // ── Questions (sync — no provider access needed) ─────────────────────────────
@@ -277,41 +296,16 @@ pub fn execute_questions(
     paths: &Paths,
     arg: Option<&str>,
 ) -> Result<CommandResult, String> {
-    let a = arg.unwrap_or("");
-
-    if a.is_empty() {
-        let settings = load_settings_from(paths);
-        let (status, color) = if settings.questions_enabled {
-            ("on", GREEN)
-        } else {
-            ("off", ORANGE)
-        };
-        let _ = writeln!(out, "{BOLD}Questions: {color}{status}{RESET}",);
-        return Ok(CommandResult::Ok);
-    }
-
-    let new_value = match a.to_lowercase().as_str() {
-        "on" | "true" | "yes" | "1" => true,
-        "off" | "false" | "no" | "0" => false,
-        _ => {
-            return Err("Invalid value. Use 'on' or 'off', e.g. /questions off".to_string());
-        }
-    };
-
-    let mut settings = load_settings_from(paths);
-    settings.questions_enabled = new_value;
-    if let Err(e) = save_settings_to(paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
-
-    let (status, color) = if new_value {
-        ("on", GREEN)
-    } else {
-        ("off", ORANGE)
-    };
-    let _ = writeln!(out, "{BOLD}Questions set to {color}{status}{RESET}",);
-
-    Ok(CommandResult::Ok)
+    toggle_bool_setting(
+        out,
+        paths,
+        arg,
+        "Questions",
+        "questions",
+        ORANGE,
+        |s| s.questions_enabled,
+        |s, v| s.questions_enabled = v,
+    )
 }
 
 // ── Show Think (sync — no provider access needed) ─────────────────────────────
@@ -321,47 +315,22 @@ pub fn execute_showthink(
     arg: Option<&str>,
     ctx: &mut CommandContext,
 ) -> Result<CommandResult, String> {
-    let a = arg.unwrap_or("");
-
-    if a.is_empty() {
-        let (status, color) = if ctx.show_thinking {
-            ("on", GREEN)
-        } else {
-            ("off", GRAY)
-        };
-        let _ = writeln!(
-            ctx.output,
-            "{BOLD}Show thinking chain: {color}{status}{RESET}",
-        );
-        return Ok(CommandResult::Ok);
-    }
-
-    let new_value = match a.to_lowercase().as_str() {
-        "on" | "true" | "yes" | "1" => true,
-        "off" | "false" | "no" | "0" => false,
-        _ => {
-            return Err("Invalid value. Use 'on' or 'off', e.g. /showthink on".to_string());
-        }
-    };
-
-    ctx.show_thinking = new_value;
-    let mut settings = load_settings_from(&ctx.paths);
-    settings.show_thinking = new_value;
-    if let Err(e) = save_settings_to(&ctx.paths, &settings) {
-        tracing::warn!("Failed to save settings: {e}");
-    }
-
-    let (status, color) = if new_value {
-        ("on", GREEN)
-    } else {
-        ("off", GRAY)
-    };
-    let _ = writeln!(
-        ctx.output,
-        "{BOLD}Show thinking chain set to {color}{status}{RESET}",
+    // show_thinking lives on the context, not just in settings — update both.
+    let result = toggle_bool_setting(
+        &mut ctx.output,
+        &ctx.paths,
+        arg,
+        "Show thinking chain",
+        "showthink",
+        GRAY,
+        |s| s.show_thinking,
+        |s, v| s.show_thinking = v,
     );
-
-    Ok(CommandResult::Ok)
+    // Sync the in-memory context flag with the parsed value.
+    if let Some(v) = arg.and_then(parse_toggle) {
+        ctx.show_thinking = v;
+    }
+    result
 }
 
 #[cfg(test)]

@@ -77,7 +77,7 @@ impl CommandHelper {
     ///
     /// - `command_names`: all slash-command names (primary + aliases), e.g. `"/help"`, `"/quit"`.
     /// - `subcommands`: mapping from command name to its argument completions,
-    ///   e.g. `"/mode" → ["agent", "casual", "planning", "research"]`.
+    ///   e.g. `"/mode" → ["agent", "casual", "planning"]`.
     pub fn with_commands(
         command_names: Vec<String>,
         subcommands: HashMap<String, Vec<String>>,

@@ -218,7 +218,6 @@ async fn questions_disabled_hides_question_tool_in_every_mode() {
     for mode in [
         tinyharness_lib::mode::AgentMode::Agent,
         tinyharness_lib::mode::AgentMode::Planning,
-        tinyharness_lib::mode::AgentMode::Research,
         tinyharness_lib::mode::AgentMode::Casual,
     ] {
         let defs = manager.tools_for_mode(mode, availability);

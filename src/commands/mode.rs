@@ -118,17 +118,18 @@ mod tests {
     }
 
     #[test]
-    fn mode_switch_to_research() {
+    fn mode_switch_research_alias_maps_to_planning() {
         let (mut ctx, _mock) = make_context();
         let (output, buf) = captured_output();
         ctx.output = output;
         let mut messages = make_messages("test");
 
+        // "research" is now an alias for "planning"
         let result = execute(Some("research"), &mut ctx, &mut messages).unwrap();
         assert!(matches!(result, CommandResult::Ok));
 
         let plain = strip_ansi(&captured_string(&buf));
-        assert!(plain.contains("research"));
-        assert_eq!(ctx.current_mode, tinyharness_lib::mode::AgentMode::Research);
+        assert!(plain.contains("planning"));
+        assert_eq!(ctx.current_mode, tinyharness_lib::mode::AgentMode::Planning);
     }
 }

@@ -90,7 +90,7 @@ pub fn build_registry() -> CommandRegistry {
 
     reg.register_sync_with_usage(
         "/mode",
-        "Show or switch mode (casual/planning/agent/research)",
+        "Show or switch mode (casual/planning/agent)",
         "/mode [mode]",
         |arg, ctx, msg| crate::commands::mode::execute(arg, ctx, msg),
     );
@@ -411,6 +411,7 @@ pub fn build_registry() -> CommandRegistry {
     // ── Aliases ───────────────────────────────────────────────────────────
 
     // Mode aliases: /plan, /agent, /research, /casual → /mode <mode>
+    // /research is kept as an alias for backward compatibility — it maps to planning.
     reg.register_alias(
         "/plan",
         "/mode",
@@ -426,8 +427,8 @@ pub fn build_registry() -> CommandRegistry {
     reg.register_alias(
         "/research",
         "/mode",
-        Some("research"),
-        "Switch to research mode (alias for /mode research)",
+        Some("planning"),
+        "Switch to planning mode (alias for /mode planning)",
     );
     reg.register_alias(
         "/casual",
@@ -455,7 +456,7 @@ pub fn build_registry() -> CommandRegistry {
         ],
     );
     reg.register_subcommands("/session", vec!["delete"]);
-    reg.register_subcommands("/mode", vec!["agent", "casual", "planning", "research"]);
+    reg.register_subcommands("/mode", vec!["agent", "casual", "planning"]);
     reg.register_subcommands("/settings", vec!["all"]);
     reg.register_subcommands("/autoaccept", vec!["off", "safe", "all"]);
     reg.register_subcommands("/autocompact", vec!["off", "on"]);

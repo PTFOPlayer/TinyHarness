@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use tinyharness_lib::{
     Paths,
-    config::{load_settings_from, save_settings_to},
+    config::update_settings_from,
     context::WorkspaceContext,
     image::ImageAttachment,
     mode::AgentMode,
@@ -138,11 +138,9 @@ impl CommandContext {
         self.refresh_system_prompt(messages);
 
         // Auto-save mode
-        let mut settings = load_settings_from(&self.paths);
-        settings.preferred_mode = self.current_mode;
-        if let Err(e) = save_settings_to(&self.paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        update_settings_from(&self.paths, |s| {
+            s.preferred_mode = self.current_mode;
+        });
 
         Ok(())
     }
@@ -731,7 +729,7 @@ mod tests {
     #[test]
     fn register_subcommands_stores_completions() {
         let mut reg = CommandRegistry::new();
-        reg.register_subcommands("/mode", vec!["agent", "casual", "planning", "research"]);
+        reg.register_subcommands("/mode", vec!["agent", "casual", "planning"]);
         let subs = reg.subcommands();
         assert!(subs.contains_key("/mode"));
         assert_eq!(
@@ -740,7 +738,6 @@ mod tests {
                 "agent".to_string(),
                 "casual".to_string(),
                 "planning".to_string(),
-                "research".to_string(),
             ]
         );
     }

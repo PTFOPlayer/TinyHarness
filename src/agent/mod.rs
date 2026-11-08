@@ -145,7 +145,6 @@ pub async fn run_agent_loop(
             AgentMode::Casual => GREEN,
             AgentMode::Planning => YELLOW,
             AgentMode::Agent => CYAN,
-            AgentMode::Research => ORANGE,
         };
         let pinned_count = ctx.file_context.pinned_file_count();
 

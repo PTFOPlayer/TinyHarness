@@ -211,7 +211,7 @@ fn execute_init(out: &mut Output, paths: &Paths) {
   // "project_md_files": ["RULES.md", ".cursorrules"],
 
   // Preferred agent mode for this project.
-  // Valid modes: casual, planning, agent, research
+  // Valid modes: casual, planning, agent
   // "preferred_mode": "agent",
 
   // Enable or disable the auto_compact tool for this project.

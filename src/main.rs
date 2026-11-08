@@ -14,7 +14,7 @@ use std::{
 use tinyharness_lib::{
     Paths, SecretString,
     config::{
-        ProviderKind, Settings, ensure_prompts_initialized_in, load_settings_from, save_settings_to,
+        ProviderKind, Settings, ensure_prompts_initialized_in, load_settings_from, update_settings_from,
     },
     context::WorkspaceContext,
     custom_tools::CustomToolManager,
@@ -443,24 +443,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // URL-resolution block above already calls `save_provider_settings` when
     // a provider flag was passed without --url, so we only need to cover
     // the remaining cases here.
-    let mut settings = settings;
     let explicit_provider =
         args.ollama || args.llama_cpp || args.vllm || args.sockudo || args.openai_compat;
     if explicit_provider && !args.url.is_empty() {
         // User gave both --ollama/--llama-cpp/--vllm and --url. Persist both.
-        if settings.last_provider != provider_kind {
-            settings.last_provider = provider_kind;
-        }
-        settings.set_url_for(provider_kind, url.clone());
-        if let Err(e) = save_settings_to(&paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        update_settings_from(&paths, |s| {
+            if s.last_provider != provider_kind {
+                s.last_provider = provider_kind;
+            }
+            s.set_url_for(provider_kind, url.clone());
+        });
     } else if !explicit_provider && !args.url.is_empty() {
         // User gave --url only (provider resolved from saved settings).
-        settings.set_url_for(provider_kind, url.clone());
-        if let Err(e) = save_settings_to(&paths, &settings) {
-            tracing::warn!("Failed to save settings: {e}");
-        }
+        update_settings_from(&paths, |s| {
+            s.set_url_for(provider_kind, url.clone());
+        });
     }
     // else: no CLI override — leave settings as they are.
 

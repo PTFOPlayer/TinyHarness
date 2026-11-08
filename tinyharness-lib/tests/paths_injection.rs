@@ -69,7 +69,6 @@ fn prompts_are_seeded_into_injected_dir_without_touching_home() {
         "casual.md",
         "planning.md",
         "agent.md",
-        "research.md",
     ] {
         let file = dir.join(name);
         assert!(file.is_file(), "missing seeded prompt {name}");
