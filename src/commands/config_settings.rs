@@ -241,7 +241,13 @@ fn toggle_bool_setting(
     spec: &ToggleSpec,
 ) -> Result<CommandResult, String> {
     let a = arg.unwrap_or("");
-    let ToggleSpec { label, cmd, off_color, get, set } = *spec;
+    let ToggleSpec {
+        label,
+        cmd,
+        off_color,
+        get,
+        set,
+    } = *spec;
 
     if a.is_empty() {
         let settings = load_settings_from(paths);
