@@ -10,9 +10,9 @@ pub mod tools;
 
 use std::{
     error::Error,
-    io::{self, Write},
+    io::Write,
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -26,7 +26,7 @@ use tinyharness_lib::{
     mode::AgentMode,
     provider::tool_pairs::repair_tool_pairs,
     provider::{AnyProvider, Message, Provider, Role},
-    session::Session,
+    session::{Session, SessionStore},
     token::ContextWindowSize,
     tools::ToolManager,
 };
@@ -34,7 +34,7 @@ use tinyharness_ui::output::Output;
 
 use crate::commands::{CommandContext, CommandResult, build_registry};
 use tinyharness_ui::style::*;
-use tinyharness_ui::ui::input::CommandHelper;
+use tinyharness_ui::ui::input::{CommandHelper, CompletionSources};
 
 pub use display::{
     format_args_summary, format_context_status, print_context_load_warning,
@@ -43,6 +43,40 @@ pub use display::{
 pub use input::read_multiline_input;
 pub use safety::{is_safe_command, strip_safe_descriptor_redirections};
 pub use tools::handle_tool_calls;
+
+/// How many recent sessions to offer as `/session` completion candidates.
+const MAX_COMPLETION_SESSIONS: usize = 20;
+
+/// Refresh the dynamic tab-completion sources from the current context:
+/// recent sessions (ID prefix + name) and skill names. Model names are
+/// fetched once at startup and passed through.
+fn refresh_completion_sources(
+    sources: &Arc<RwLock<CompletionSources>>,
+    ctx: &CommandContext,
+    models: &[String],
+) {
+    let sessions: Vec<String> = SessionStore::from_paths(&ctx.paths)
+        .list_all()
+        .iter()
+        .take(MAX_COMPLETION_SESSIONS)
+        .flat_map(|meta| {
+            let id_prefix = &meta.id[..meta.id.len().min(12)];
+            std::iter::once(id_prefix.to_string()).chain(meta.name.clone())
+        })
+        .collect();
+    let skills = ctx
+        .skill_registry
+        .skills
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    let mut guard = sources.write().unwrap_or_else(|e| e.into_inner());
+    *guard = CompletionSources {
+        sessions,
+        skills,
+        models: models.to_vec(),
+    };
+}
 
 pub async fn run_agent_loop(
     provider: Arc<Mutex<AnyProvider>>,
@@ -57,17 +91,31 @@ pub async fn run_agent_loop(
     let registry = build_registry();
 
     let mut stdout = Output::stdout();
-    stdout.write_all(
-        format!(
-            "{BOLD}{TITLE_COLOR}TinyHarness{RESET}{BOLD} AI Assistant{RESET} {DIM}v{}{RESET}\n\
-             {DIM}{}{RESET}\n\
-             {DIM}Tip:{RESET} {CYAN}/help{RESET} {DIM}shows all commands{RESET}\n\n",
-            env!("CARGO_PKG_VERSION"),
-            "─".repeat(44)
-        )
-        .as_bytes(),
-    )?;
-    stdout.flush()?;
+    {
+        let model_name = {
+            let p = provider.lock().await;
+            p.current_model().map(|s| s.to_string())
+        };
+        let mode_color = match ctx.current_mode {
+            AgentMode::Casual => GREEN,
+            AgentMode::Planning => YELLOW,
+            AgentMode::Agent => CYAN,
+        };
+        display::print_startup_card(
+            &mut stdout,
+            &display::StartupInfo {
+                version: env!("CARGO_PKG_VERSION"),
+                provider: &session.meta().provider,
+                model: model_name.as_deref(),
+                mode: &ctx.current_mode.to_string(),
+                mode_color,
+                sandbox_backend: ctx.sandbox.as_ref().map(|s| s.backend.as_str()),
+                session_id: session.id(),
+                session_name: session.meta().name.as_deref(),
+                working_dir: &ctx.paths.project_dir().to_string_lossy(),
+            },
+        )?;
+    }
 
     // If resuming a session with existing messages, print the conversation history
     if messages.len() > 1 {
@@ -90,31 +138,52 @@ pub async fn run_agent_loop(
         &mut stdout,
     )?;
 
-    let helper = CommandHelper::with_commands(
+    // Fetch model names once for `/model` tab-completion. Bounded so a hung
+    // provider can't stall startup (the health check has already run by now).
+    let model_names = {
+        let p = provider.lock().await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), p.list_models())
+            .await
+            .unwrap_or_default()
+    };
+
+    // Dynamic completion sources (sessions, skills) are refreshed from `ctx`
+    // before every read; the helper holds a shared handle to them.
+    let completion_sources: Arc<RwLock<CompletionSources>> =
+        Arc::new(RwLock::new(CompletionSources::default()));
+    let helper = CommandHelper::with_sources(
         registry
             .command_names()
             .into_iter()
             .map(|s| s.to_string())
             .collect(),
         registry.subcommands(),
+        Arc::clone(&completion_sources),
     );
     // History lives in the data dir (`~/.local/share/tinyharness`), resolved
     // through the session's Paths rather than reading $HOME directly.
     let history_dir = ctx.paths.history_dir();
     std::fs::create_dir_all(&history_dir).ok();
     let history_path = history_dir.join("history.txt");
-    let mut rl = Editor::new()?;
-    rl.set_helper(Some(helper));
-    rl.load_history(&history_path).ok();
+    // The editor is shared with command handlers via `ctx.editor`, so
+    // interactive confirmations (session delete, /audit clear, retry) read
+    // through the same rustyline instance as the main prompt.
+    let rl = Arc::new(std::sync::Mutex::new(Editor::new()?));
+    ctx.editor = Some(Arc::clone(&rl));
+    {
+        let mut ed = rl.lock().unwrap_or_else(|e| e.into_inner());
+        ed.set_helper(Some(helper));
+        ed.load_history(&history_path).ok();
 
-    // Configure multi-line input:
-    // - Ctrl+J inserts a newline
-    // - Enter submits the input
-    // - Validator detects incomplete input (trailing \, unclosed fences) and shows continuation prompt
-    rl.bind_sequence(
-        rustyline::KeyEvent(rustyline::KeyCode::Char('j'), rustyline::Modifiers::CTRL),
-        rustyline::EventHandler::Simple(rustyline::Cmd::Newline),
-    );
+        // Configure multi-line input:
+        // - Ctrl+J inserts a newline
+        // - Enter submits the input
+        // - Validator detects incomplete input (trailing \, unclosed fences) and shows continuation prompt
+        ed.bind_sequence(
+            rustyline::KeyEvent(rustyline::KeyCode::Char('j'), rustyline::Modifiers::CTRL),
+            rustyline::EventHandler::Simple(rustyline::Cmd::Newline),
+        );
+    }
 
     // Track the last known token count from the LLM provider.
     // Providers report total_tokens (prompt + completion) on every call
@@ -157,7 +226,7 @@ pub async fn run_agent_loop(
         // the best number we have.
         let token_usage_for_status = last_known_token_usage.as_ref();
 
-        let status_line = display::format_context_status(
+        let mut status_line = display::format_context_status(
             messages.len(),
             pinned_count,
             token_usage_for_status,
@@ -166,9 +235,35 @@ pub async fn run_agent_loop(
             total_tokens_used,
         );
 
-        // Include session name in prompt if available
-        let session_name = session.meta().name.as_deref().unwrap_or("unnamed");
-        let session_suffix = format!(" {DIM}({}){RESET}", session_name);
+        // Surface pending state on the status line: attached images and active
+        // skills are otherwise invisible until the next message is sent.
+        let mut status_extras: Vec<String> = Vec::new();
+        if !ctx.pending_images.is_empty() {
+            status_extras.push(format!("{BLUE}🖼 {}{RESET}", ctx.pending_images.len()));
+        }
+        if !ctx.active_skills.is_empty() {
+            let names = ctx.active_skills.join(", ");
+            let short: String = names.chars().take(40).collect();
+            let short = if names.chars().count() > 40 {
+                format!("{short}…")
+            } else {
+                names
+            };
+            status_extras.push(format!("{YELLOW}⚡ {short}{RESET}"));
+        }
+        if !status_extras.is_empty() {
+            status_line.push_str(&format!(
+                "{DIM} · {RESET}{}{RESET}",
+                status_extras.join(&format!("{DIM} · {RESET}"))
+            ));
+        }
+
+        // Include the session name in the prompt only when one was set —
+        // "(unnamed)" is noise on every turn.
+        let session_suffix = match session.meta().name.as_deref() {
+            Some(name) => format!(" {DIM}({name}){RESET}"),
+            None => String::new(),
+        };
 
         // Include current model name next to the mode label.
         // When no model is known yet (e.g. Sockudo before the first
@@ -183,7 +278,7 @@ pub async fn run_agent_loop(
         };
 
         let prompt = format!(
-            "{}{}{}\n{}[{}]{}{} {BOLD}{BLUE}You >{RESET} {}{}",
+            "{}{}{}\n{}[{}]{}{} {BOLD}{BLUE}❯{RESET} {}{}",
             status_line,
             session_suffix,
             RESET,
@@ -195,7 +290,7 @@ pub async fn run_agent_loop(
             RESET
         );
         let continuation_prompt = format!(
-            "{}[{}]{}{}...> {}{}",
+            "{}[{}]{}{} {DIM}…{RESET} {BOLD}{}❯{RESET} {}",
             mode_color, mode_label, RESET, model_suffix, BLUE, RESET
         );
 
@@ -205,8 +300,10 @@ pub async fn run_agent_loop(
         let user_input = if let Some(pending) = pending_user_input.take() {
             Some(pending)
         } else {
+            refresh_completion_sources(&completion_sources, ctx, &model_names);
+            let mut ed = rl.lock().unwrap_or_else(|e| e.into_inner());
             read_multiline_input(
-                &mut rl,
+                &mut ed,
                 &prompt,
                 &continuation_prompt,
                 interrupted,
@@ -224,7 +321,9 @@ pub async fn run_agent_loop(
         if trimmed.is_empty() {
             continue;
         }
-        rl.add_history_entry(&trimmed)?;
+        rl.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_history_entry(&trimmed)?;
 
         if user_input.starts_with('/') {
             match registry.dispatch(&user_input, ctx, messages).await {
@@ -344,6 +443,9 @@ pub async fn run_agent_loop(
             let attempt_base = messages.len();
 
             // Call the provider — it returns a receiver for streaming chunks
+            // Start the clock for the spinner's elapsed-time display.
+            let request_start = std::time::Instant::now();
+
             let mut recv = {
                 let mut provider = provider.lock().await;
                 match provider.chat(messages.clone(), tools).await {
@@ -434,12 +536,12 @@ pub async fn run_agent_loop(
 
                                     // Show [thinking] header once, before the first delta
                                     if !thinking_header_shown {
-                                        write!(stdout, "\n{DIM}{THINK_COLOR}[thinking] ")?;
+                                        write!(stdout, "\n{THINK_COLOR_DIM}{ITALIC}✧ thinking{RESET}{DIM} │ {RESET}")?;
                                         thinking_header_shown = true;
                                     }
 
                                     // Each chunk's `thinking` is a delta — print only the new part
-                                    write!(stdout, "{thinking}")?;
+                                    write!(stdout, "{DIM}{ITALIC}{thinking}{RESET}")?;
                                     thinking_content.push_str(thinking);
                                     stdout.flush()?;
                                 }
@@ -507,10 +609,14 @@ pub async fn run_agent_loop(
                         if waiting_for_first_chunk && !ctx.show_thinking {
                             let frame = SPINNER_FRAMES[spinner_idx % SPINNER_FRAMES.len()];
                             spinner_idx += 1;
+                            let secs = request_start.elapsed().as_secs();
+                            let text = format!(
+                                "{DIM}{frame}{RESET} Thinking… {secs}s {DIM}· ctrl+c to interrupt{RESET}"
+                            );
                             if has_shown_spinner {
-                                write!(stdout, "\r{DIM}{frame} Thinking...{RESET}")?;
+                                write!(stdout, "\r{CLEAR_LINE}{text}")?;
                             } else {
-                                write!(stdout, "{DIM}{frame} Thinking...{RESET}")?;
+                                write!(stdout, "{text}")?;
                                 has_shown_spinner = true;
                             }
                             stdout.flush()?;
@@ -587,29 +693,33 @@ pub async fn run_agent_loop(
                     format!("\n{}⚠ Request failed.{} {}\n", RED, RESET, error_detail).as_bytes(),
                 )?;
 
-                // Ask the user if they want to retry
-                let should_retry;
-                loop {
-                    write!(stdout, "{}Retry request? [Y/n]{} ", BOLD, RESET)?;
-                    stdout.flush()?;
-
-                    let mut answer = String::new();
-                    io::stdin()
-                        .read_line(&mut answer)
-                        .expect("Failed to read line");
-                    let answer = answer.trim().to_lowercase();
-
-                    if answer.is_empty() || answer == "y" || answer == "yes" {
-                        should_retry = true;
-                        break;
-                    } else if answer == "n" || answer == "no" {
-                        should_retry = false;
-                        break;
-                    } else {
-                        writeln!(stdout, "{}Please answer y or n.{}", GRAY, RESET)?;
-                        continue;
+                // Ask the user if they want to retry — read through the same
+                // rustyline editor as the main prompt, so line editing works
+                // and buffered input isn't eaten by a raw stdin read.
+                let should_retry = loop {
+                    let retry_prompt = format!("{BOLD}Retry request? [Y/n]{RESET} ");
+                    let mut ed = rl.lock().unwrap_or_else(|e| e.into_inner());
+                    match ed.readline(&retry_prompt) {
+                        Ok(line) => {
+                            let answer = line.trim().to_lowercase();
+                            if answer.is_empty() || answer == "y" || answer == "yes" {
+                                break true;
+                            } else if answer == "n" || answer == "no" {
+                                break false;
+                            } else {
+                                writeln!(stdout, "{GRAY}Please answer y or n.{RESET}")?;
+                            }
+                        }
+                        Err(rustyline::error::ReadlineError::Interrupted) => {
+                            // Ctrl+C at the retry prompt — treat as "no".
+                            interrupted.store(false, Ordering::SeqCst);
+                            writeln!(stdout, "^C")?;
+                            break false;
+                        }
+                        Err(rustyline::error::ReadlineError::Eof) => break false,
+                        Err(e) => return Err(Box::new(e)),
                     }
-                }
+                };
 
                 if should_retry {
                     // Rewind to where this attempt started. Retrying without
@@ -676,7 +786,10 @@ pub async fn run_agent_loop(
     }
 
     // Save history on exit
-    rl.save_history(&history_path).ok();
+    rl.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .save_history(&history_path)
+        .ok();
 
     Ok(())
 }

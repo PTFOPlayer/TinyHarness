@@ -591,7 +591,7 @@ Files over 20,000 characters are truncated (70% head / 30% tail with a marker).
 Run `/init` in a TinyHarness session and the AI will analyze your project and generate a `TINYHARNESS.md`:
 
 ```
-[agent]> /init
+[agent] ❯ /init
   Generating project instruction file...
   ✦ Created /path/to/TINYHARNESS.md (45 lines)
 ```

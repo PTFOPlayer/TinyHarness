@@ -303,9 +303,6 @@ pub fn describe(sandbox: &Sandbox, guard_root: &Path) -> Vec<String> {
         sandbox.backend(),
         sandbox.workspace().display()
     )];
-    // Stated unconditionally: it is a limit of the sandbox, not a setting, and
-    // a security banner that stays silent about it invites false confidence.
-    lines.push("network: available (not isolated by the sandbox)".to_string());
     lines.push(format!(
         "file tools are confined to {}",
         guard_root.display()
@@ -604,8 +601,8 @@ mod fs_tests {
         let lines = describe(&sandbox, tmp.path());
         let joined = lines.join("\n");
         assert!(joined.contains("bwrap"), "{joined}");
-        // The banner must state the network limitation, not imply isolation.
-        assert!(joined.contains("not isolated"), "{joined}");
+        // The network is never isolated, so the banner must not mention it.
+        assert!(!joined.contains("network"), "{joined}");
         // Extra bind paths are canonicalized (macOS /var -> /private/var), so
         // compare against the canonical spelling.
         let extra_s = extra
