@@ -4,6 +4,7 @@ use tinyharness_lib::Paths;
 use tinyharness_lib::session::{SessionMeta, SessionStore, format_age};
 use tinyharness_ui::output::Output;
 
+use crate::commands::registry::CommandContext;
 use tinyharness_ui::style::*;
 
 /// Format a session for display in the `/sessions` listing.
@@ -96,14 +97,11 @@ pub fn execute_list(out: &mut Output, paths: &Paths, current_session_id: Option<
     let _ = writeln!(out, "{output}");
 }
 
-/// Delete a session by ID or name.
-pub fn execute_delete(
-    out: &mut Output,
-    paths: &Paths,
-    session_id: &str,
-    current_session_id: Option<&str>,
-) {
-    let store = SessionStore::from_paths(paths);
+/// Delete a session by ID or name. The confirmation is read through the
+/// shared rustyline editor (see [`CommandContext::read_line`]), so it gets the
+/// same line editing and Ctrl+C/EOF handling as the main prompt.
+pub fn execute_delete(ctx: &mut CommandContext, session_id: &str) {
+    let store = SessionStore::from_paths(&ctx.paths);
 
     // Find the session
     let meta = store
@@ -114,41 +112,40 @@ pub fn execute_delete(
     let meta = match meta {
         Some(m) => m,
         None => {
-            let _ = writeln!(out, "{RED}✗ Session '{session_id}' not found{RESET}");
+            let _ = writeln!(ctx.output, "{RED}✗ Session '{session_id}' not found{RESET}");
             return;
         }
     };
 
     // Prevent deleting current session without warning
-    let is_current = current_session_id == Some(meta.id.as_str());
+    let is_current = ctx.session_id.as_deref() == Some(meta.id.as_str());
 
     let name_str = meta.name.as_deref().unwrap_or("unnamed");
-    let _ = writeln!(
-        out,
-        "{ORANGE}⚠ Delete session \"{name_str}\" ({} messages)? This cannot be undone.{RESET}",
+    let confirm_prompt = format!(
+        "{ORANGE}⚠ Delete session \"{name_str}\" ({} messages)? This cannot be undone.{RESET} {BOLD}Type 'yes' to confirm:{RESET} ",
         meta.message_count,
     );
-    let _ = write!(out, "{BOLD}Type 'yes' to confirm: {RESET}");
-    let _ = out.flush();
-
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        let _ = writeln!(out, "{RED}✗ Cancelled{RESET}");
-        return;
-    }
+    let input = match ctx.read_line(&confirm_prompt) {
+        Some(line) => line,
+        None => {
+            // EOF or Ctrl+C — cancelled
+            let _ = writeln!(ctx.output, "{GRAY}✗ Cancelled{RESET}");
+            return;
+        }
+    };
 
     if input.trim() != "yes" {
-        let _ = writeln!(out, "{GRAY}✗ Cancelled{RESET}");
+        let _ = writeln!(ctx.output, "{GRAY}✗ Cancelled{RESET}");
         return;
     }
 
     if let Err(e) = store.delete(&meta.id) {
-        let _ = writeln!(out, "{RED}✗ Failed to delete session: {e}{RESET}");
+        let _ = writeln!(ctx.output, "{RED}✗ Failed to delete session: {e}{RESET}");
         return;
     }
 
     let _ = writeln!(
-        out,
+        ctx.output,
         "{GREEN}✓ Deleted session {} — \"{name_str}\"{RESET}",
         &meta.id[..12],
     );
@@ -156,7 +153,7 @@ pub fn execute_delete(
     // If we deleted the current session, warn the user
     if is_current {
         let _ = writeln!(
-            out,
+            ctx.output,
             "{ORANGE}⚠ You deleted the current session. Consider switching to another session or starting a new one.{RESET}",
         );
     }

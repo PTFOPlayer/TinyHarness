@@ -82,7 +82,7 @@ Each file is truncated at 20,000 characters (70% head / 30% tail).
 Use `/init` to have the AI analyze your project and generate a `TINYHARNESS.md`:
 
 ```
-[agent]> /init
+[agent] ❯ /init
   Generating project instruction file...
   ✦ Created /path/to/TINYHARNESS.md (45 lines)
 ```

@@ -238,12 +238,6 @@ async fn auto_select_model(provider: &mut AnyProvider, saved_model: Option<&Stri
                 return;
             }
         }
-
-        let mut err_out = Output::stderr();
-        let _ = writeln!(
-            err_out,
-            "{BOLD}Using saved model:{RESET} {BLUE}{saved}{RESET}",
-        );
         provider.select_model(saved.clone());
         return;
     }
@@ -529,11 +523,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let _ = writeln!(
             err_out,
             "{BOLD}{GREEN}Sandbox enabled{RESET} {DIM}— {}{RESET}",
-            banner[0]
+            banner.join("; ")
         );
-        for line in &banner[1..] {
-            let _ = writeln!(err_out, "{DIM}  {line}{RESET}");
-        }
         tool_manager.set_sandbox(sandbox);
     }
 

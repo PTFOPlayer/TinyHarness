@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tinyharness_lib::Paths;
 use tinyharness_ui::output::Output;
 
+use crate::commands::registry::CommandContext;
 use tinyharness_ui::style::*;
 
 // ── Data types ──────────────────────────────────────────────────────────────
@@ -288,9 +289,21 @@ pub fn show_session(out: &mut Output, paths: &Paths, session_id: &str) {
     let _ = writeln!(out);
 }
 
-/// Execute the /audit command.
-pub fn execute(out: &mut Output, paths: &Paths, args: &str) {
+/// Execute the /audit command. The `/audit clear` confirmation is read through
+/// the shared rustyline editor (see [`CommandContext::read_line`]), so it gets
+/// the same line editing and Ctrl+C/EOF handling as the main prompt.
+pub fn execute(ctx: &mut CommandContext, args: &str) {
     let args = args.trim();
+
+    // Handle "clear" before borrowing `ctx.output`/`ctx.paths`, since the
+    // confirmation needs `ctx.read_line` (an immutable borrow of `ctx`).
+    if args.eq_ignore_ascii_case("clear") {
+        clear_with_confirm(ctx);
+        return;
+    }
+
+    let out = &mut ctx.output;
+    let paths = &ctx.paths;
 
     if args.is_empty() {
         // Default: show last 20
@@ -315,28 +328,6 @@ pub fn execute(out: &mut Output, paths: &Paths, args: &str) {
             }
             show_session(out, paths, session_id);
         }
-        "clear" => {
-            let _ = writeln!(
-                out,
-                "{ORANGE}⚠ This will delete the entire audit log. Type 'yes' to confirm: {RESET}",
-            );
-            let _ = write!(out, "{BOLD}> {RESET}");
-            let _ = out.flush();
-
-            let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_ok() && input.trim().to_lowercase() == "yes" {
-                match clear(paths) {
-                    Ok(()) => {
-                        let _ = writeln!(out, "{GREEN}✓ Audit log cleared.{RESET}");
-                    }
-                    Err(e) => {
-                        let _ = writeln!(out, "{RED}✗ Failed to clear audit log: {e}{RESET}");
-                    }
-                }
-            } else {
-                let _ = writeln!(out, "{GRAY}✗ Cancelled.{RESET}");
-            }
-        }
         _ => {
             let _ = writeln!(out, "{ORANGE}Usage:{RESET}");
             let _ = writeln!(out, "  /audit              - Show last 20 commands");
@@ -344,6 +335,27 @@ pub fn execute(out: &mut Output, paths: &Paths, args: &str) {
             let _ = writeln!(out, "  /audit session <id> - Show commands from a session");
             let _ = writeln!(out, "  /audit clear        - Delete the audit log");
         }
+    }
+}
+
+/// `/audit clear`: ask for confirmation through the shared editor, then clear.
+fn clear_with_confirm(ctx: &mut CommandContext) {
+    let confirm_prompt = format!(
+        "{ORANGE}⚠ This will delete the entire audit log.{RESET} {BOLD}Type 'yes' to confirm:{RESET} "
+    );
+    let confirmed = matches!(ctx.read_line(&confirm_prompt), Some(line) if line.trim().eq_ignore_ascii_case("yes"));
+
+    if confirmed {
+        match clear(&ctx.paths) {
+            Ok(()) => {
+                let _ = writeln!(ctx.output, "{GREEN}✓ Audit log cleared.{RESET}");
+            }
+            Err(e) => {
+                let _ = writeln!(ctx.output, "{RED}✗ Failed to clear audit log: {e}{RESET}");
+            }
+        }
+    } else {
+        let _ = writeln!(ctx.output, "{GRAY}✗ Cancelled.{RESET}");
     }
 }
 
