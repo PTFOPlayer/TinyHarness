@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
+use rustyline::Editor;
+use tinyharness_ui::ui::input::CommandHelper;
 use tokio::sync::Mutex;
 
 use tinyharness_lib::{
@@ -37,6 +39,13 @@ pub enum CommandResult {
 
 // ── CommandContext ────────────────────────────────────────────────────────────
 
+/// Shared handle to the agent loop's rustyline editor. Installed by
+/// `run_agent_loop` so command handlers can read interactive confirmations
+/// through the same editor as the main prompt — same line editing, history,
+/// and Ctrl+C/EOF behavior.
+pub type SharedEditor =
+    Arc<std::sync::Mutex<Editor<CommandHelper, rustyline::history::DefaultHistory>>>;
+
 /// Context passed to every command handler.
 /// Holds the shared state that commands may need to read or mutate.
 pub struct CommandContext {
@@ -64,6 +73,10 @@ pub struct CommandContext {
     pub show_thinking: bool,
     /// Structured output writer — all terminal I/O goes through this.
     pub output: tinyharness_ui::output::Output,
+    /// The agent loop's line editor, shared so command handlers can read
+    /// interactive input through the same rustyline instance as the main
+    /// prompt. `None` in tests (falls back to raw stdin).
+    pub editor: Option<SharedEditor>,
     /// Whether `--sandbox` is active: shell commands run inside an OS-level
     /// sandbox (bwrap/firejail). `None` when unsandboxed.
     ///
@@ -104,7 +117,23 @@ impl CommandContext {
             compaction_token_usage: None,
             show_thinking: false,
             output: tinyharness_ui::output::Output::stdout(),
+            editor: None,
             sandbox: None,
+        }
+    }
+
+    /// Read one line of interactive input (e.g. a yes/no confirmation) through
+    /// the shared rustyline editor when one is installed, so confirmations get
+    /// the same line editing and Ctrl+C/EOF handling as the main prompt.
+    /// Falls back to raw stdin when no editor is installed (tests).
+    /// Returns `None` on EOF or Ctrl+C, so callers can treat it as "cancelled".
+    pub fn read_line(&self, prompt: &str) -> Option<String> {
+        if let Some(editor) = &self.editor {
+            let mut ed = editor.lock().unwrap_or_else(|e| e.into_inner());
+            ed.readline(prompt).ok()
+        } else {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).ok().map(|_| line)
         }
     }
 

@@ -197,7 +197,7 @@ pub fn build_registry() -> CommandRegistry {
         "View command execution audit log",
         "/audit [last|session|clear]",
         |arg, ctx, _msg| {
-            crate::commands::audit::execute(&mut ctx.output, &ctx.paths, arg.unwrap_or(""));
+            crate::commands::audit::execute(ctx, arg.unwrap_or(""));
             Ok(CommandResult::Ok)
         },
     );
@@ -228,12 +228,7 @@ pub fn build_registry() -> CommandRegistry {
                     if id.is_empty() { None } else { Some(id) },
                     "/session delete <id|name> — use /sessions to list available sessions",
                 )?;
-                crate::commands::sessions::execute_delete(
-                    &mut ctx.output,
-                    &ctx.paths,
-                    id,
-                    ctx.session_id.as_deref(),
-                );
+                crate::commands::sessions::execute_delete(ctx, id);
                 return Ok(CommandResult::Ok);
             }
             Ok(CommandResult::SwitchSession(a.to_string()))

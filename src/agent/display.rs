@@ -6,6 +6,7 @@ use tinyharness_lib::{
 };
 
 use tinyharness_ui::style::*;
+use tinyharness_ui::ui::frame::{FOOT, GUTTER, gutter_line, truncate_ellipsis, write_band};
 use tinyharness_ui::ui::tool_result::{ToolStatus, tool_subject};
 
 /// Print a warning if the loaded session's conversation has many messages.
@@ -100,11 +101,87 @@ pub fn print_context_load_warning<W: Write>(
     Ok(())
 }
 
+/// Everything the startup card shows about the running session.
+pub struct StartupInfo<'a> {
+    pub version: &'a str,
+    pub provider: &'a str,
+    pub model: Option<&'a str>,
+    pub mode: &'a str,
+    pub mode_color: &'a str,
+    pub sandbox_backend: Option<&'a str>,
+    pub session_id: &'a str,
+    pub session_name: Option<&'a str>,
+    pub working_dir: &'a str,
+}
+
+/// Startup card: a band with the brand glyph + name, then gutter rows with the
+/// session's vital stats (provider/model, mode/sandbox, session/cwd), closed
+/// by a foot row with the key hints. Drawn from the same tool-frame primitives
+/// as tool cards, so the whole UI reads as one language.
+pub fn print_startup_card<W: Write>(
+    stdout: &mut W,
+    info: &StartupInfo<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ver = format!(" v{}", info.version);
+    write_band(
+        stdout,
+        &[("✦ ", ORANGE), ("TinyHarness", FG_BAND), (&ver, FG_MUTED)],
+    )?;
+
+    let model_str = info.model.unwrap_or("no model");
+    gutter_line(
+        stdout,
+        GUTTER,
+        &format!(
+            "{FG_MUTED}{} · {FG_ACCENT}{model_str}{RESET}",
+            info.provider
+        ),
+    )?;
+
+    let sandbox_part = match info.sandbox_backend {
+        Some(backend) => format!(" · sandbox {backend}"),
+        None => " · sandbox off".to_string(),
+    };
+    gutter_line(
+        stdout,
+        GUTTER,
+        &format!(
+            "{FG_MUTED}mode {}{}{RESET}{FG_MUTED}{sandbox_part}{RESET}",
+            info.mode_color, info.mode
+        ),
+    )?;
+
+    let id_prefix = &info.session_id[..info.session_id.len().min(12)];
+    let session_label = match info.session_name {
+        Some(name) => format!("{id_prefix} \"{name}\""),
+        None => id_prefix.to_string(),
+    };
+    gutter_line(
+        stdout,
+        GUTTER,
+        &format!(
+            "{FG_MUTED}session {FG_ACCENT}{session_label}{FG_MUTED} · {}{RESET}",
+            truncate_ellipsis(info.working_dir, 60)
+        ),
+    )?;
+
+    gutter_line(
+        stdout,
+        FOOT,
+        &format!(
+            "{FG_FAINT}/help{RESET}{FG_MUTED} commands · {FG_FAINT}ctrl+c{RESET}{FG_MUTED} interrupts · {FG_FAINT}/exit{RESET}{FG_MUTED} quits{RESET}"
+        ),
+    )?;
+    writeln!(stdout)?;
+    stdout.flush()?;
+    Ok(())
+}
+
 /// Separate assistant output from user input without coloring the prose.
 pub fn write_assistant_header<W: Write>(stdout: &mut W) -> std::io::Result<()> {
     writeln!(
         stdout,
-        "\n{RESET}{DIM}──{RESET} {BOLD}{CYAN}Assistant{RESET} {DIM}{}{RESET}\n",
+        "\n{RESET}{ORANGE}✦{RESET} {BOLD}{CYAN}Assistant{RESET} {DIM}{}{RESET}\n",
         "─".repeat(28)
     )?;
     stdout.flush()
@@ -133,7 +210,7 @@ pub fn print_conversation_history<W: Write>(
         match msg.role {
             Role::System => {}
             Role::User => {
-                writeln!(stdout, "{BOLD}{BLUE}You >{RESET} {}", msg.content)?;
+                writeln!(stdout, "{BOLD}{BLUE}❯{RESET} {}", msg.content)?;
             }
             Role::Assistant => {
                 if !msg.content.is_empty() || !msg.tool_calls.is_empty() {
@@ -516,7 +593,7 @@ mod tests {
         let mut out = Vec::new();
         print_conversation_history(&messages, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
-        assert!(out.contains(&format!("You >{RESET} question\n")));
+        assert!(out.contains(&format!("❯{RESET} question\n")));
         assert!(out.contains("Assistant"));
         assert!(out.find("question").unwrap() < out.find("Assistant").unwrap());
         assert!(out.find("Assistant").unwrap() < out.find("answer").unwrap());
@@ -590,6 +667,62 @@ mod tests {
         assert!(out.contains(BOLD), "heading should be bold: {out:?}");
         assert!(out.contains("body"));
         assert!(out.ends_with(&format!("{RESET}\n\n")));
+    }
+
+    #[test]
+    fn test_startup_card_shows_session_stats() {
+        let mut buf = Vec::new();
+        print_startup_card(
+            &mut buf,
+            &StartupInfo {
+                version: "0.5.6",
+                provider: "ollama",
+                model: Some("qwen3:8b"),
+                mode: "agent",
+                mode_color: CYAN,
+                sandbox_backend: Some("bwrap"),
+                session_id: "abcdef1234567890",
+                session_name: Some("my-session"),
+                working_dir: "/home/user/project",
+            },
+        )
+        .unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("✦ TinyHarness v0.5.6"), "{plain}");
+        assert!(plain.contains("ollama · qwen3:8b"), "{plain}");
+        assert!(plain.contains("mode agent · sandbox bwrap"), "{plain}");
+        assert!(
+            plain.contains("session abcdef123456 \"my-session\" · /home/user/project"),
+            "{plain}"
+        );
+        assert!(plain.contains("/help"), "{plain}");
+        // band + 3 gutter rows + foot = 5 lines, plus trailing blank
+        assert_eq!(plain.lines().count(), 6, "{plain}");
+    }
+
+    #[test]
+    fn test_startup_card_without_model_sandbox_or_name() {
+        let mut buf = Vec::new();
+        print_startup_card(
+            &mut buf,
+            &StartupInfo {
+                version: "0.5.6",
+                provider: "llama.cpp",
+                model: None,
+                mode: "casual",
+                mode_color: GREEN,
+                sandbox_backend: None,
+                session_id: "abcdef1234567890",
+                session_name: None,
+                working_dir: "/tmp",
+            },
+        )
+        .unwrap();
+        let plain = strip_ansi(&String::from_utf8(buf).unwrap());
+        assert!(plain.contains("llama.cpp · no model"), "{plain}");
+        assert!(plain.contains("sandbox off"), "{plain}");
+        assert!(plain.contains("session abcdef123456 · /tmp"), "{plain}");
     }
 
     #[test]
