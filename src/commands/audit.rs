@@ -139,15 +139,19 @@ pub fn clear(paths: &Paths) -> std::io::Result<()> {
 
 // ── Display ─────────────────────────────────────────────────────────────────
 
-/// Format a timestamp as a human-readable string.
+/// Format a timestamp as a human-readable string (YYYY-MM-DD HH:MM:SS).
 fn format_timestamp(ts: u64) -> String {
-    let duration = std::time::Duration::from_secs(ts);
-    let datetime = UNIX_EPOCH + duration;
-
-    // Format as YYYY-MM-DD HH:MM:SS
-    let system_time: SystemTime = datetime;
-    let datetime: chrono::DateTime<chrono::Local> = system_time.into();
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    let Ok(dt) = time::OffsetDateTime::from_unix_timestamp(ts as i64) else {
+        return ts.to_string();
+    };
+    // Local-offset detection can fail (e.g. in multi-threaded processes on
+    // Unix, where `time` refuses to call localtime_r); fall back to UTC.
+    let offset = time::UtcOffset::local_offset_at(dt).unwrap_or(time::UtcOffset::UTC);
+    dt.to_offset(offset)
+        .format(&time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute]:[second]"
+        ))
+        .unwrap_or_else(|_| ts.to_string())
 }
 
 /// Display the last N audit entries in a table.

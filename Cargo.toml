@@ -27,7 +27,7 @@ serde_json = "1.0.149"
 regex = "1.11.1"
 rustyline = { version = "18.0.0", features = ["derive"] }
 ctrlc = "3"
-chrono = "0.4.42"
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
