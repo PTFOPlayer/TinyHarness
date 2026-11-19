@@ -539,7 +539,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("hello.txt"), "x").unwrap();
         let helper = make_helper(sources());
-        let line = format!("/add {}/he", dir.display());
+        // Use the platform separator: rustyline's FilenameCompleter splits
+        // the path at the last MAIN_SEPARATOR, so a hardcoded '/' after a
+        // Windows-style dir.display() would end up inside the filename filter.
+        let line = format!("/add {}", dir.join("he").display());
         let history = DefaultHistory::new();
         let ctx = rustyline::Context::new(&history);
         let (start, candidates) = helper.completer.complete(&line, line.len(), &ctx).unwrap();
