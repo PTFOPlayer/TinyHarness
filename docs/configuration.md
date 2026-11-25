@@ -69,14 +69,36 @@ Settings are saved atomically: written to a `.tmp` file, then renamed. This prev
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>` or the `OPENAI_API_KEY` env var; use `--api-key -` to clear the saved key |
+| `openai_compat_api_key` | string\|null | `null` | Bearer token for `--openai-compat` provider. Sent as `Authorization: Bearer <key>`. Set via `--api-key <key>` or the `OPENAI_API_KEY` env var; use `--api-key -` to clear the saved key. Only read when the active provider is `--openai-compat` — see [below](#the-key-is-only-read-for-the-openai-compatible-provider) |
 | `skip_health_check` | bool | `false` | Skip the provider health check at startup. A failed health check only warns and doesn't block startup; errors surface on the first request. Set via `--skip-health-check` to suppress the warning. OpenAI-compatible providers probe `/health` first and fall back to `/v1/models` when the server has no `/health` endpoint (404) — a non-empty model list counts as healthy |
 
-**API key resolution precedence:**
-1. `--api-key <key>` CLI flag (highest — also persists to settings)
-2. `OPENAI_API_KEY` environment variable
-3. `openai_compat_api_key` in settings.json
-4. None (provider startup fails with an error)
+### API key resolution precedence
+
+`--api-key` is resolved in this order (highest first):
+
+1. `--api-key <key>` — also persists to `openai_compat_api_key` so later launches pick it up
+2. `OPENAI_API_KEY` environment variable, if set and non-empty
+3. `openai_compat_api_key` in settings.json, if set and non-empty
+4. none — `--openai-compat` fails at startup with an error
+
+`--api-key -` clears the saved key; `--api-key ""` explicitly opts out of
+auth (the gateway must accept unauthenticated requests).
+
+### The key is only read for the OpenAI-compatible provider
+
+The key is sent as an `Authorization: Bearer` header, and only
+`--openai-compat` sends one. Ollama, llama.cpp, and vLLM bind a plain-HTTP local
+socket and send no credential; Sockudo authenticates with its own app key and
+secret in settings. So:
+
+- An `OPENAI_API_KEY` set in the environment has **no effect** when the active provider is `--ollama`, `--llama-cpp`, `--vllm`, or `--sockudo`.
+- `openai_compat_api_key` is only read when the active provider is
+  `--openai-compat`. Storing a key for a hosted gateway does not add
+  authentication to a local backend — and there is nothing to authenticate on one of those endpoints anyway.
+- Conversely, `--ollama --api-key sk-x` does **not** persist `sk-x` for a later `--openai-compat` run. Only the OpenAI-compatible path persists the flag.
+
+If you need a key for a local server (for example a remote or proxied Ollama
+that requires a bearer token), set the provider URL to the proxied endpoint and configure that proxy instead; TinyHarness itself does not send a credential to `--ollama`.
 
 ### Sockudo Provider (Experimental)
 
@@ -376,7 +398,7 @@ All CLI flags override settings:
 | Variable | Effect |
 |----------|--------|
 | `TINYHARNESS_MD_FILES` | Comma-separated list of instruction file names, overrides `project_md_files` in settings |
-| `OPENAI_API_KEY` | Bearer token for the `--openai-compat` provider (used when `--api-key` is not passed) |
+| `OPENAI_API_KEY` | Bearer token for the `--openai-compat` provider (used when `--api-key` is not passed). Only that provider attaches it: Ollama, llama.cpp, vLLM, and Sockudo never send a bearer token, so the variable has no effect on them |
 | `HOME` / `USERPROFILE` | Fallback used to resolve `~/.config/tinyharness/` and `~/.local/share/tinyharness/` when the matching `XDG_*` var is unset |
 | `XDG_CONFIG_HOME` | Overrides the config root (`settings.json`, `prompts/`, `custom_tools.json`, `skills/`) |
 | `XDG_DATA_HOME` | Overrides the data root (`sessions/`, `history.txt`) |
