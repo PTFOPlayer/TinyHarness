@@ -35,6 +35,11 @@ use tinyharness_ui::output::Output;
 use tinyharness_ui::style::*;
 use tokio::sync::Mutex;
 
+/// A double quote, used in the `--api-key` error text. Named so the literal
+/// isn't repeated (clippy's `write-literal` lint flags format-string
+/// literals such as `"\""`).
+const Q: &str = "\"";
+
 #[derive(clap::Parser, Debug)]
 #[command(version, about = "tinyharness - ai coding harness")]
 struct Args {
@@ -71,8 +76,12 @@ struct Args {
     /// setting and the `OPENAI_API_KEY` env var. Use `--api-key -` to clear
     /// the saved key, or `--api-key ""` to explicitly disable auth (no
     /// `Authorization` header sent — useful for local OpenAI-compatible
-    /// servers behind no auth). Has no effect on Ollama, llama.cpp, vLLM, or
-    /// Sockudo.
+    /// servers behind no auth).
+    ///
+    /// `--openai-compat` is the only provider that sends a bearer token: the
+    /// value is not persisted to settings for Ollama, llama.cpp, vLLM, or
+    /// Sockudo (they authenticate differently or not at all), so passing the
+    /// flag for them is a no-op rather than a credential leak.
     #[arg(long)]
     api_key: Option<String>,
 
@@ -160,12 +169,24 @@ async fn create_provider(
         let _ = writeln!(
             err_out,
             "{BOLD}Error:{RESET} --openai-compat requires an API key. \
-             Pass {CYAN}--api-key <KEY>{RESET} or set the {CYAN}OPENAI_API_KEY{RESET} \
-             env var. \
-             To use the gateway without auth, pass {CYAN}--api-key \"\"{RESET}.",
+             Pass {CYAN}--api-key <KEY>{RESET} or set the {CYAN}OPENAI_API_KEY{RESET} env var. \
+             To use the gateway without auth, pass {CYAN}--api-key {q}{RESET}.",
+            q = Q,
         );
         std::process::exit(1);
     }
+
+    // Provider selection owns the credential, not the caller: only a kind that
+    // declares it sends an `Authorization: Bearer` header may receive one. A
+    // resolved `OPENAI_API_KEY` must never be attached to the plain-HTTP local
+    // sockets (Ollama / llama.cpp / vLLM) — that is the case where a key saved
+    // for one provider silently authenticates another. See
+    // `agent_setup::provider_sends_auth`.
+    let api_key = if agent_setup::provider_sends_auth(kind) {
+        api_key
+    } else {
+        None
+    };
 
     let provider: Arc<Mutex<AnyProvider>> = Arc::new(Mutex::new(AnyProvider::build(
         kind,
@@ -370,7 +391,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         args.url.clone()
     };
 
-    let api_key = agent_setup::resolve_api_key(&paths, args.api_key.as_deref(), &settings);
+    // Only `--openai-compat` sends a bearer token. Resolving against the
+    // active kind here keeps the persisted key (and the startup check that
+    // follows) from touching credentials the backend will never use. The
+    // call is side-effect free for every other kind.
+    let api_key = agent_setup::resolve_api_key(
+        &paths,
+        args.api_key.as_deref(),
+        &settings,
+        agent_setup::provider_sends_auth(provider_kind),
+    );
 
     // Reload settings to include any API key persisted by resolve_api_key
     let settings = load_settings_from(&paths);

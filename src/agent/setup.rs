@@ -107,8 +107,15 @@ pub fn save_provider_settings(paths: &tinyharness_lib::Paths, kind: ProviderKind
     });
 }
 
-/// Resolve the bearer token for the OpenAI-compatible provider using the
-/// precedence:
+/// Resolve the bearer token for the provider selected on the command line.
+///
+/// This is the CLI/settings entry point. `send_auth` decides whether the
+/// provider actually puts a credential on the wire; for every kind other than
+/// `--openai-compat` it is `false`, which means (a) no key is returned and
+/// (b) `--api-key` is not persisted, because storing a token for a backend
+/// that never reads it would silently authenticate the wrong provider later.
+///
+/// Precedence when auth is active:
 ///
 /// 1. `cli_api_key` — the value of `--api-key` if passed:
 ///    - A non-empty value (other than `-`) is used as the key and persisted
@@ -125,13 +132,27 @@ pub fn save_provider_settings(paths: &tinyharness_lib::Paths, kind: ProviderKind
 ///   so the provider can be constructed without an `Authorization` header.
 /// * `Some(key)` — use this key (and persist it).
 ///
-/// Returns `None` when no key should be sent. Only the `OpenAiCompat`
-/// provider uses this value; Ollama, llama.cpp, vLLM, and Sockudo ignore it.
+/// Returns `None` when no key should be sent. Ollama, llama.cpp, vLLM, and
+/// Sockudo ignore the value — see [`provider_sends_auth`].
 pub fn resolve_api_key(
     paths: &tinyharness_lib::Paths,
     cli_api_key: Option<&str>,
     settings: &Settings,
+    send_auth: bool,
 ) -> Option<SecretString> {
+    // The flag's *presence* is what may authorize a persisted key: a sentinel
+    // such as `""` must not be swallowed by the policy gate.
+    if !send_auth {
+        // A key passed for a backend that does not authenticate is discarded,
+        // and nothing is persisted.
+        if cli_api_key.is_some() {
+            tracing::warn!(
+                "`--api-key` was passed but the active provider is not the \
+                 OpenAI-compatible provider: no credential is sent and none is saved"
+            );
+        }
+        return None;
+    }
     let result = resolve_api_key_pure(cli_api_key, settings);
     // Persist side-effects only when the user actually passed `--api-key` on
     // the command line (cli_api_key is Some). The pure function is used in
@@ -153,8 +174,12 @@ pub fn resolve_api_key(
 
 /// Pure (side-effect-free) API key resolution.  Used by tests so they never
 /// touch the real `<config_dir>/settings.json`.
-pub fn resolve_api_key_pure(
+///
+/// `env_key` is injected rather than read here so the precedence rule can be
+/// tested without mutating the process environment.
+pub fn resolve_api_key_pure_with(
     cli_api_key: Option<&str>,
+    env_key: Option<&str>,
     settings: &Settings,
 ) -> Option<SecretString> {
     match cli_api_key {
@@ -163,15 +188,39 @@ pub fn resolve_api_key_pure(
         Some(k) => return Some(SecretString::new(k)),
         None => {}
     }
-    if let Ok(env_key) = std::env::var("OPENAI_API_KEY")
-        && !env_key.is_empty()
-    {
+    if let Some(env_key) = env_key.filter(|k| !k.is_empty()) {
         return Some(SecretString::new(env_key));
     }
     settings
         .openai_compat_api_key
         .clone()
         .filter(|s| !s.is_empty())
+}
+
+/// [`resolve_api_key_pure_with`] reading the real `OPENAI_API_KEY`.
+pub fn resolve_api_key_pure(
+    cli_api_key: Option<&str>,
+    settings: &Settings,
+) -> Option<SecretString> {
+    resolve_api_key_pure_with(
+        cli_api_key,
+        std::env::var("OPENAI_API_KEY").ok().as_deref(),
+        settings,
+    )
+}
+
+/// Whether `kind` sends a bearer token on its requests.
+///
+/// `OpenAiCompat` is the only backend that is actually authenticated: the
+/// OpenAI-compatible surface (OpenRouter / Together / Groq / custom gateways)
+/// requires it. `Ollama`, `llama.cpp`, and `vLLM` bind a plain-HTTP local
+/// socket and send no credential, so a saved or env `OPENAI_API_KEY` is never
+/// attached to them — passing a key for one of them is silently dropped.
+///
+/// `Sockudo` authenticates with its own app credentials in settings
+/// (`sockudo_app_key` / `sockudo_app_secret`), never with this value.
+pub fn provider_sends_auth(kind: ProviderKind) -> bool {
+    matches!(kind, ProviderKind::OpenAiCompat)
 }
 
 #[cfg(test)]
@@ -257,7 +306,11 @@ mod tests {
     #[test]
     fn resolve_api_key_empty_settings_returns_none() {
         let s = Settings::default();
-        assert_eq!(resolve_api_key_pure(None, &s), None);
+        assert_eq!(
+            resolve_api_key_pure_with(None, None, &s),
+            None,
+            "no provider gets an auth value for free"
+        );
     }
 
     #[test]
@@ -279,6 +332,84 @@ mod tests {
         assert_eq!(
             resolve_api_key_pure(Some("sk-from-cli"), &s),
             Some(SecretString::new("sk-from-cli"))
+        );
+    }
+
+    // ── Auth policy per provider ──
+
+    /// `OPENAI_API_KEY` is only consulted by the OpenAI-compatible provider.
+    /// Ollama, llama.cpp, and vLLM talk to a plain-HTTP local socket and must
+    /// never inherit a token from another tool's environment.
+    #[test]
+    fn only_openai_compat_sends_a_bearer_token() {
+        for kind in [
+            ProviderKind::Ollama,
+            ProviderKind::LlamaCpp,
+            ProviderKind::Vllm,
+            ProviderKind::OpenAiCompat,
+            ProviderKind::Sockudo,
+        ] {
+            assert_eq!(
+                provider_sends_auth(kind),
+                matches!(kind, ProviderKind::OpenAiCompat),
+                "{kind} must have a well-defined auth policy"
+            );
+        }
+    }
+
+    /// Regression test for "a saved key silently authenticates the wrong
+    /// provider": the resolved value is only attached to the requests of a
+    /// kind that declares it sends auth.
+    #[test]
+    fn env_key_not_attached_to_local_providers() {
+        // Resolution itself is provider-agnostic ...
+        let s = Settings::default();
+        assert_eq!(
+            resolve_api_key_pure_with(None, Some("sk-from-env"), &s),
+            Some(SecretString::new("sk-from-env"))
+        );
+        // ... and the active kind gates it. `AnyProvider::build` passes `None`
+        // for every local backend, so a resolved key can never leak into an
+        // Ollama / llama.cpp / vLLM request.
+        for kind in [
+            ProviderKind::Ollama,
+            ProviderKind::LlamaCpp,
+            ProviderKind::Vllm,
+            ProviderKind::Sockudo,
+        ] {
+            assert!(
+                !provider_sends_auth(kind),
+                "{kind} must not attach a bearer token"
+            );
+        }
+        assert!(provider_sends_auth(ProviderKind::OpenAiCompat));
+    }
+
+    /// The env var must be checked but never beat an explicit `--api-key ""`
+    /// opt-out (which means "this gateway is unauthenticated").
+    #[test]
+    fn explicit_empty_beats_env_key() {
+        let s = Settings::default();
+        assert_eq!(
+            resolve_api_key_pure_with(Some(""), Some("sk-from-env"), &s),
+            Some(SecretString::default())
+        );
+        assert_eq!(
+            resolve_api_key_pure_with(Some("-"), Some("sk-from-env"), &s),
+            None
+        );
+    }
+
+    /// An empty env var counts as unset (falls through to settings).
+    #[test]
+    fn empty_env_var_falls_through_to_settings() {
+        let s = Settings {
+            openai_compat_api_key: Some(SecretString::new("sk-settings")),
+            ..Settings::default()
+        };
+        assert_eq!(
+            resolve_api_key_pure_with(None, Some(""), &s),
+            Some(SecretString::new("sk-settings"))
         );
     }
 
@@ -306,12 +437,89 @@ mod tests {
         );
     }
 
-    // ── Impure (persisting) variants — isolated root, never the real profile ──
+    #[test]
+    fn local_backends_are_never_built_with_a_credential() {
+        // Mirrors the gate in `create_provider`: only `OpenAiCompat` may be
+        // handed a resolved key, so a value read from `OPENAI_API_KEY` (or
+        // persisted in settings) can never reach a local or Sockudo backend.
+        let resolved = Some(SecretString::new("sk-from-env"));
+        for kind in [
+            ProviderKind::Ollama,
+            ProviderKind::LlamaCpp,
+            ProviderKind::Vllm,
+            ProviderKind::OpenAiCompat,
+            ProviderKind::Sockudo,
+        ] {
+            let passed = if provider_sends_auth(kind) {
+                resolved.clone()
+            } else {
+                None
+            };
+            assert_eq!(
+                passed.is_some(),
+                kind == ProviderKind::OpenAiCompat,
+                "{kind} must not receive the credential"
+            );
+        }
+    }
+
+    #[test]
+    fn api_key_persisted_for_openai_compat() {
+        let paths = crate::test_helpers::isolated_paths("setup-auth-gate");
+        resolve_api_key(&paths, Some("sk-from-cli"), &Settings::default(), true);
+        assert_eq!(
+            load_settings_from(&paths).openai_compat_api_key,
+            Some(SecretString::new("sk-from-cli"))
+        );
+    }
+
+    /// Regression test: `--api-key` passed for a local backend must not be
+    /// persisted, because a token stored for one provider silently becomes the
+    /// credential for the next `--openai-compat` launch.
+    #[test]
+    fn api_key_for_local_backend_is_not_persisted() {
+        let paths = crate::test_helpers::isolated_paths("setup-auth-gate-local");
+        // A key already stored for a hosted gateway must survive an unrelated run.
+        update_settings_from(&paths, |s| {
+            s.openai_compat_api_key = Some(SecretString::new("sk-hosted"));
+        });
+        let before = load_settings_from(&paths).openai_compat_api_key;
+
+        let key = resolve_api_key(&paths, Some("sk-local"), &Settings::default(), false);
+
+        assert_eq!(
+            key, None,
+            "the local backend must not receive the resolved key"
+        );
+        assert_eq!(
+            load_settings_from(&paths).openai_compat_api_key,
+            before,
+            "an unrelated run must not overwrite the hosted-gateway key"
+        );
+    }
+
+    #[test]
+    fn api_key_local_backend_does_not_clear_hosted_key() {
+        let paths = crate::test_helpers::isolated_paths("setup-auth-gate-clear");
+        update_settings_from(&paths, |s| {
+            s.openai_compat_api_key = Some(SecretString::new("sk-hosted"));
+        });
+        // An explicit clear sentinel is still honoured (it's the documented way
+        // to forget a key), but only for the provider that reads the key.
+        resolve_api_key(&paths, Some("-"), &Settings::default(), false);
+        assert_eq!(
+            load_settings_from(&paths).openai_compat_api_key,
+            Some(SecretString::new("sk-hosted")),
+            "the clear sentinel must not be applied to a backend that ignores the flag"
+        );
+    }
+
+    // ── Persisting helpers — isolated root, never the real profile ──
 
     #[test]
     fn resolve_api_key_persists_to_injected_paths() {
         let paths = crate::test_helpers::isolated_paths("setup");
-        let key = resolve_api_key(&paths, Some("sk-from-cli"), &Settings::default());
+        let key = resolve_api_key(&paths, Some("sk-from-cli"), &Settings::default(), true);
         assert_eq!(key, Some(SecretString::new("sk-from-cli")));
         assert_eq!(
             load_settings_from(&paths).openai_compat_api_key,
@@ -323,8 +531,8 @@ mod tests {
     #[test]
     fn resolve_api_key_sentinel_clears_saved_key_in_injected_paths() {
         let paths = crate::test_helpers::isolated_paths("setup");
-        resolve_api_key(&paths, Some("sk-stored"), &Settings::default());
-        resolve_api_key(&paths, Some("-"), &Settings::default());
+        resolve_api_key(&paths, Some("sk-stored"), &Settings::default(), true);
+        resolve_api_key(&paths, Some("-"), &Settings::default(), true);
         assert_eq!(load_settings_from(&paths).openai_compat_api_key, None);
     }
 
