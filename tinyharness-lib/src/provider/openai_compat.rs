@@ -251,15 +251,7 @@ impl OpenAiCompatInner {
 }
 
 /// Send the chat request with retry + exponential backoff for transient
-/// failures, then stream the response chunks through `send`.
-///
-/// Retryable failures: connection errors, request timeouts (when the whole
-/// attempt is cut off before any output), and 5xx / 429 responses. Once a
-/// terminal chunk has reached the receiver (success, mid-stream error, or a
-/// 4xx error), the outcome is final — retrying would duplicate output.
-///
-/// Backoff between attempts: 1s, 2s, 4s, … Returns the token usage when a
-/// final attempt succeeds.
+/// failures, then stream the response chunks through `send`. ADR-0011.
 async fn chat_with_retries(
     client: &reqwest::Client,
     url: &str,

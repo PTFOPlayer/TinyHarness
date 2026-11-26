@@ -98,57 +98,21 @@ impl fmt::Display for AutoAcceptMode {
 
 /// OS-level sandbox configuration for shell-executing tools.
 ///
-/// Serializes as the `sandbox` object in the **global** `settings.json` only:
+/// Serializes as the `sandbox` object in the **global** `settings.json`:
+/// `{"sandbox": {"backend": "bwrap", "writable_paths": ["/tmp/build-cache"]}}`.
+/// `backend` is required whenever the object is present and accepts `off`,
+/// `auto`, `bwrap` or `firejail`; omit the key entirely for `auto`.
 ///
-/// ```json
-/// {
-///   "sandbox": {
-///     "backend": "bwrap",
-///     "writable_paths": ["/tmp/build-cache"]
-///   }
-/// }
-/// ```
-///
-/// The default is [`SandboxConfig::auto`] — sandbox with whatever backend is
-/// installed, bwrap preferred. Sandboxing shell commands is the baseline, and
-/// turning it off is a deliberate act: `--no-sandbox` on the command line, or
-/// `{"backend": "off"}` in the global settings file.
-///
-/// This block is deliberately **absent from `.tinyharness/config.json`**
-/// ([`ProjectSettings`] has no `sandbox` field). A project config is shipped
-/// inside the repository, so honouring it would let any cloned repo downgrade
-/// the user's chosen containment — including switching the sandbox off
-/// entirely. Unknown keys are ignored by serde, so a stray `sandbox` block in
-/// a project file has no effect.
-///
-/// `backend` is **required** whenever the `sandbox` object is present, and
-/// accepts `auto` (use whatever is installed, bwrap preferred), `bwrap`,
-/// `firejail`, or `off`. See
-/// [`SandboxBackend`](crate::sandbox::SandboxBackend). Requiring it is
-/// deliberate: a block like `{"sandbox": {"writable_paths": ["/tmp/x"]}}`
-/// states an intention to be sandboxed without naming a backend, and silently
-/// defaulting that to `off` would leave the user unprotected while believing
-/// otherwise. Omit the whole `sandbox` key to get [`SandboxConfig::auto`].
-///
-/// There is deliberately **no network setting**: sandboxed commands always
-/// have the network. A coding agent runs `git fetch`, `curl`, and `cargo add`
-/// constantly, so a knob that would break those is not worth exposing.
-///
-/// Extra host directories come from the top-level `allowed_paths` setting,
-/// which also drives the built-in file tools' path guard (those tools run
-/// in-process, so the guard is their only confinement); only write access
-/// *inside the sandbox* is configured here.
+/// Global-only, no network setting, and `writable_paths` kept separate from
+/// `allowed_paths` are all deliberate — see ADR-0006 and ADR-0008.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxConfig {
     /// Backend selector: `off` | `auto` | `bwrap` | `firejail`. Required
     /// whenever a `sandbox` block is present.
     pub backend: String,
-    /// Extra host directories sandboxed commands may **write**.
-    ///
-    /// Deliberately separate from `allowed_paths`: that setting also feeds the
-    /// path guard confining the built-in file tools, and those tools run
-    /// in-process, so granting it write access would widen their reach too.
-    /// Anything here is reachable *only* by sandboxed shell commands.
+    /// Extra host directories sandboxed commands may **write** — reachable
+    /// *only* by sandboxed shell commands, never by the in-process file tools
+    /// (grant those via `allowed_paths`). See ADR-0008.
     #[serde(default)]
     pub writable_paths: Vec<String>,
 }
@@ -161,7 +125,7 @@ impl Default for SandboxConfig {
 }
 
 impl SandboxConfig {
-    /// No sandbox (the default).
+    /// No sandbox — explicit opt-out (not the default; see `Default`).
     pub fn disabled() -> Self {
         SandboxConfig {
             backend: "off".to_string(),
@@ -222,13 +186,8 @@ pub struct ProjectSettings {
     /// Override whether the model may ask questions for this project
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions_enabled: Option<bool>,
-    // Deliberately **no `allowed_paths` field**: the path-guard allow list
-    // widens read *and write* access for the in-process file tools
-    // (`read`/`write`/`edit`), which no OS sandbox confines. A project config
-    // travels with the repository, so honouring it here would let any cloned
-    // repo open the user's home directory to those tools. Unknown keys are
-    // ignored by serde, so a stray `allowed_paths` block in a project file has
-    // no effect — the allow list is global-only, like `sandbox`.
+    // Deliberately **no `allowed_paths` field**: the allow list is global-only.
+    // ADR-0006.
 }
 
 /// Discover and load `.tinyharness/config.json` by walking up from `start_dir`.
@@ -661,25 +620,15 @@ pub struct Settings {
     pub questions_enabled: bool,
     /// OS-level sandbox for shell-executing tools (`run`, custom tools).
     ///
-    /// Defaults to disabled; set `sandbox.backend` to `auto`, `bwrap`, or
-    /// `firejail` to enable, or pass `--sandbox` on the command line (which
-    /// overrides the stored value for one session).
+    /// **On by default** (`auto`): set `sandbox.backend` to `off` to opt out, or
+    /// pass `--no-sandbox` on the command line, which overrides the stored value
+    /// for one session. See ADR-0008.
     #[serde(default, skip_serializing_if = "SandboxConfig::is_disabled")]
     pub sandbox: SandboxConfig,
     /// Extra host directories the built-in file tools may access, beyond the
-    /// workspace root. **Global-only**: a project `.tinyharness/config.json`
-    /// cannot add entries, because the file tools run in-process (no OS
-    /// sandbox) and this list grants them read *and* write.
-    ///
-    /// Entries may be absolute, `~`-prefixed, or relative to the workspace
-    /// root. The workspace root itself is always allowed and is exempt from
-    /// the blocked-prefix list. System paths (`/etc`, `/usr`, `/proc`, …) can
-    /// never be allowed this way — see
-    /// [`DEFAULT_BLOCKED_PREFIXES`](crate::path_guard::DEFAULT_BLOCKED_PREFIXES).
-    ///
-    /// Under bwrap these are also bound read-only into the sandbox, so
-    /// `run` sees the same view as `read`. Grant write access to sandboxed
-    /// commands via [`SandboxConfig::writable_paths`] instead.
+    /// workspace root. **Global-only** — a project `.tinyharness/config.json`
+    /// cannot add entries, because these tools run in-process and this list
+    /// grants read *and* write. ADR-0006 (global-only) and ADR-0008 (guard).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_paths: Option<Vec<String>>,
 }

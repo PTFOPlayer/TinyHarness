@@ -5,19 +5,8 @@ use crate::{
 
 use super::openai_compat::OpenAiCompatInner;
 
-/// Unified provider for any OpenAI-compatible chat-completions endpoint.
-///
-/// Covers three concrete back-ends that previously had their own wrapper
-/// modules:
-///
-/// * Local llama.cpp servers (no auth, hard-coded single-model list).
-/// * Local vLLM servers (no auth, fetches `/v1/models`).
-/// * Hosted gateways like OpenRouter / Together / Groq (Bearer auth,
-///   fetches `/v1/models`).
-///
-/// The variation between them is just (a) whether an `Authorization: Bearer`
-/// header is sent and (b) how `list_models` resolves, so they collapse into
-/// a single struct with builder-style options.
+/// Unified provider for any OpenAI-compatible chat-completions endpoint. The
+/// variation is only Bearer auth and how `list_models` resolves. ADR-0013.
 pub struct OpenAiCompatProvider {
     inner: OpenAiCompatInner,
     /// When `Some`, `list_models` returns this fixed list instead of querying

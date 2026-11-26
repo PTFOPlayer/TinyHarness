@@ -1,18 +1,12 @@
 //! Provider resolution helpers: URL prompting, URL/API-key precedence.
 //!
-//! Used by the binary crate when the user passes a provider flag
-//! (`--ollama` / `--llama-cpp` / `--vllm` / `--sockudo` / `--openai-compat`)
-//! without a `--url` — we prompt for the URL only.
+//! Used by the binary crate when a provider flag is passed without a `--url` —
+//! we prompt for the URL only. There is intentionally no interactive setup
+//! wizard; `docs/configuration.md` covers configuration, and Sockudo
+//! credentials are settings-file-only.
 //!
-//! There is intentionally no interactive setup wizard: configuration is covered
-//! by `docs/configuration.md`, and every setting is reachable via CLI flags or
-//! in-app slash commands (`/model`, `/timeout`, `/retries`,
-//! `/contextlimit`, …). Sockudo credentials are settings-file-only.
-//!
-//! `prompt_for_url` reads directly from stdin and writes user-facing messages to
-//! stdout. It refuses to run when stdin is not a TTY (i.e. the process is being
-//! piped or scripted) and instead returns a clear error so callers can fall back
-//! to a non-interactive default.
+//! `prompt_for_url` reads stdin and refuses to run when stdin is not a TTY, so
+//! scripted callers get a clear error instead of a hang.
 
 use std::io::{IsTerminal, Write};
 

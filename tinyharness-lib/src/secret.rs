@@ -1,18 +1,11 @@
 use serde::{Deserialize, Serialize, Serializer};
 
-/// Minimal no-new-dependency replacement for `secrecy::SecretString`.
-/// Exposes the secret only on explicit `.expose_secret()` calls. The secret
-/// cannot be implicitly leaked by the `Debug` implementation, e.g. in logs.
+/// Minimal no-new-dependency replacement for `secrecy::SecretString`: exposes
+/// the secret only via `.expose_secret()`, and its `Debug` impl cannot leak it.
 ///
-/// Retains serialization/deserialization via `serde`.
-///
-/// Deviations from `secrecy`:
-/// 1. Does not zero on `Drop`: the heap bytes remain after deallocation, and,
-///    e.g., a core dump could contain leaked secrets.
-/// 2. Implements `Clone`: `secrecy` uses its own `SecretBox` smart pointer for
-///    space efficiency. Since we can reasonably expect only a handful of
-///    secrets in memory for TinyHarness, that optimization is not worth the
-///    added complexity.
+/// Deviations from `secrecy`: it does not zero on `Drop` (so a core dump could
+/// contain the bytes) and it implements `Clone` (a handful of secrets per
+/// process does not justify `SecretBox`).
 #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SecretString(String);
 

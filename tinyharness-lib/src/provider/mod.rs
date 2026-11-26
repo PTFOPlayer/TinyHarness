@@ -145,15 +145,8 @@ impl Message {
     }
 }
 
-/// Concrete wrapper over all built-in provider backends.
-///
-/// This enum *is* the provider interface. There is deliberately no `Provider`
-/// trait: every HTTP backend (Ollama, llama.cpp, vLLM, hosted gateways)
-/// collapsed into [`OpenAiCompatProvider`], the remaining backends are Sockudo
-/// and the test mock, and no code is generic over a backend — so a trait would
-/// only add a second dispatch layer over the `match` that already has to exist.
-/// Commands and the agent loop share an `Arc<Mutex<AnyProvider>>`. See
-/// ADR-0002.
+/// Concrete wrapper over all built-in provider backends — this enum *is* the
+/// provider interface. Shared as `Arc<Mutex<AnyProvider>>`. ADR-0002.
 pub enum AnyProvider {
     OpenAiCompat(crate::provider::openai_compat_provider::OpenAiCompatProvider),
     Sockudo(crate::provider::sockudo::SockudoProvider),

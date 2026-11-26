@@ -13,12 +13,8 @@ pub struct CustomToolConfig {
     pub custom_tools: Vec<CustomToolDefinition>,
 }
 
-/// Custom-tool manager — loads the **global** custom-tools config.
-///
-/// Deliberately global-only: a custom tool is a shell command template, and a
-/// project-level `.tinyharness/custom_tools.json` travels with the repository,
-/// so honouring it would let any cloned repo register commands that run on the
-/// user's machine (contained by the process sandbox only when that is on).
+/// Custom-tool manager — loads the **global** custom-tools config only.
+/// ADR-0014.
 #[derive(Debug, Clone, Default)]
 pub struct CustomToolManager {
     config: CustomToolConfig,

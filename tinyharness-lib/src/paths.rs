@@ -1,34 +1,11 @@
 //! Central resolution of every filesystem location TinyHarness touches.
 //!
-//! Previously each module hard-coded its own `~/.config/tinyharness/...` or
-//! `~/.local/share/tinyharness/...` path by reading `$HOME` inline, which made
-//! the library impossible to drive against an alternate root (tests, embedded
-//! use, portable installs, a second profile). Every such location now lives in
-//! [`Paths`], and every subsystem accepts a `&Paths` (or an explicit `Path`).
+//! [`Paths`] is the **only** place that reads `$HOME`, `$XDG_CONFIG_HOME`,
+//! `$XDG_DATA_HOME` or the process CWD, and every subsystem accepts a `&Paths`.
+//! ADR-0009 — resolution rules, relative fallbacks, and escape hatches.
 //!
-//! # Resolution rules
-//!
-//! | Logical location | Default |
-//! |---|---|
-//! | config dir | `$XDG_CONFIG_HOME/tinyharness` → `$HOME/.config/tinyharness` → `.config/tinyharness` |
-//! | data dir | `$XDG_DATA_HOME/tinyharness` → `$HOME/.local/share/tinyharness` → `.local/share/tinyharness` |
-//! | project dir | process CWD → `.` |
-//!
-//! The relative fallbacks preserve the pre-existing behaviour when `HOME` is
-//! unset (the old code did `home.unwrap_or(".")`, yielding `./.config/...`), so
-//! a caller with no home directory still gets a writable, self-consistent tree
-//! instead of a panic.
-//!
-//! Per the XDG spec, `XDG_*_HOME` values that are empty or relative are
-//! ignored (a relative path is not an absolute path, so it cannot be resolved
-//! predictably against a project root); the `$HOME` fallback is used instead.
-//!
-//! # Legacy locations
-//!
-//! Personal skills historically lived in `~/.tinyharness/skills`. That
-//! directory is still searched, *after* `config_dir/skills`, so an existing
-//! install keeps working while the documented XDG location takes precedence.
-//! See [`Paths::personal_skills_dirs`].
+//! Personal skills are also read from the legacy `~/.tinyharness/skills`, after
+//! `config_dir/skills` — see [`Paths::personal_skills_dirs`].
 //!
 //! # Example
 //!

@@ -422,13 +422,7 @@ pub async fn run_agent_loop(
             let (_, _, merged) = load_merged_settings_from(&ctx.paths);
             let tools = tool_manager.tools_for_mode(ctx.current_mode, merged.tool_availability());
 
-            // Repair the assistant ↔ tool-call pairing before the history leaves
-            // this process. Strict providers (Azure/OpenAI behind OpenRouter)
-            // reject the whole request with HTTP 400 "No tool output found for
-            // function call <id>" if a declared call has no result, so an
-            // interrupted tool batch, a `/compact` that cut a pair, or a session
-            // resumed mid-turn would otherwise wedge the conversation permanently
-            // — every later turn replays the same broken history.
+            // Repair the assistant ↔ tool-call pairing before send. ADR-0012.
             let fixes = repair_tool_pairs(messages);
             if fixes.changed() {
                 tracing::debug!(
@@ -585,11 +579,10 @@ pub async fn run_agent_loop(
                             break;
                         }
 
-                        // Backpressure metric: the producer (provider HTTP
-                        // task) suspends when the channel buffer is full, so
-                        // a persistently large pending count means the UI is
-                        // consuming slower than the model generates. Logged
-                        // at most once per second to stay useful but quiet.
+                        // Backpressure metric: a persistently large pending
+                        // count means the UI consumes slower than the model
+                        // generates. Logged at most once a second; the bounded
+                        // channel itself is ADR-0011.
                         backpressure_log_ticks += 1;
                         if backpressure_log_ticks >= 10 {
                             backpressure_log_ticks = 0;

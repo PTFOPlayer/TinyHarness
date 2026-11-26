@@ -1,26 +1,8 @@
-//! Resolve the CLI sandbox flags and settings into a concrete sandbox and
-//! path guard for this session.
+//! Resolve the CLI sandbox flags and settings into a concrete process sandbox
+//! and path guard for this session.
 //!
-//! Two independent containment layers are decided here:
-//!
-//! 1. **Path guard** — confines the built-in file tools (`ls`, `read`,
-//!    `write`, `edit`, `grep`, `glob`) to the workspace plus `allowed_paths`.
-//!    Always on; there is no way to turn it off.
-//! 2. **Process sandbox** — wraps `run` and custom tools in bwrap/firejail.
-//!    **On by default** (`sandbox.backend` defaults to `auto`); opt out with
-//!    `--no-sandbox`, or pin a backend with `--sandbox=bwrap|firejail`.
-//!
-//! Precedence for the process sandbox: an explicit `--sandbox…` flag wins over
-//! settings, and `--no-sandbox` (like `--sandbox=off`) forces it off for one
-//! session. A bare `--sandbox` means "auto". The setting is global-only — a
-//! project `.tinyharness/config.json` cannot reach it, so a cloned repository
-//! cannot downgrade the user's containment. See [`SandboxConfig`].
-//!
-//! Failure handling: because sandboxing is the default rather than an opt-in,
-//! a sandbox that was *expected* but cannot be built is a **hard exit** — the
-//! alternative is silently running every shell command unsandboxed, which is
-//! exactly the failure the flag exists to prevent. Only an explicit
-//! `--no-sandbox` opts out of that, and it opts out loudly.
+//! Both containment layers, their guarantees and the hard-exit policy are
+//! ADR-0008; the global-only rule is ADR-0006.
 
 use std::path::{Path, PathBuf};
 

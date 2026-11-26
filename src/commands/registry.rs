@@ -77,13 +77,8 @@ pub struct CommandContext {
     /// interactive input through the same rustyline instance as the main
     /// prompt. `None` in tests (falls back to raw stdin).
     pub editor: Option<SharedEditor>,
-    /// Whether `--sandbox` is active: shell commands run inside an OS-level
-    /// sandbox (bwrap/firejail). `None` when unsandboxed.
-    ///
-    /// Note this describes the *process* sandbox only. The built-in file tools
-    /// are confined by the always-on path guard, which is deliberately not
-    /// mentioned in the system prompt — a violation there is self-explanatory
-    /// from the tool error.
+    /// Whether `--sandbox` is active. Describes the *process* sandbox only; the
+    /// always-on path guard is omitted from the system prompt. ADR-0008.
     pub sandbox: Option<SandboxStatus>,
 }
 

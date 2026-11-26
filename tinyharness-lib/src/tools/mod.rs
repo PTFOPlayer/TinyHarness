@@ -125,17 +125,8 @@ impl ToolManager {
         self.sandbox.as_ref()
     }
 
-    /// Validate a tool call's path arguments against the guard and return
-    /// arguments with every path **replaced by its resolved absolute form**.
-    ///
-    /// Substitution is the point: a handler that received the raw string would
-    /// resolve a relative path against the *process* cwd, while the guard
-    /// resolved it against the *workspace root*. Those coincide only when the
-    /// harness happens to be started in the workspace, so checking one and
-    /// opening the other leaves the containment purely incidental.
-    ///
-    /// Returns `Err(violation_message)` when the guard rejects a path, or the
-    /// arguments unchanged when no guard is active.
+    /// Validate a tool call's path arguments and return them with every path
+    /// **replaced by its resolved absolute form**. ADR-0008.
     pub fn guard_arguments(
         &self,
         tool_name: &str,
@@ -147,17 +138,9 @@ impl ToolManager {
         }
     }
 
-    /// Confine a `glob` result to the guard's roots, line by line.
-    ///
-    /// Validating the pattern's static prefix is not sufficient: the `glob`
-    /// crate descends into symlinked directories, so `**/*.env` lists
-    /// `<root>/link/canary.env` — and thus whatever is really under
-    /// `/outside` — even though every argument was in bounds. Filtering the
-    /// *results* through the guard is what confines the tool.
-    ///
-    /// Non-path lines (the "no files found" and truncation notices) resolve
-    /// under the workspace root and so survive; only paths a symlink carried
-    /// the walker out to are dropped.
+    /// Confine a `glob` result to the guard's roots, line by line — the pattern
+    /// prefix passing is not enough, because the walker follows symlinks.
+    /// ADR-0008.
     fn filter_glob_output(&self, result: String) -> String {
         let Some(guard) = self.path_guard.as_ref() else {
             return result;
@@ -370,18 +353,9 @@ impl ToolManager {
     }
 }
 
-/// Resolve a tool call's path arguments against the guard.
-///
-/// Path-bearing tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`) have
-/// their path/pattern arguments resolved, and the resolved absolute form is
-/// **substituted into the arguments** the handler receives. The `run` tool's
-/// explicit `cwd` is resolved too — not because a sandboxed shell could
-/// escape (it couldn't; the directory simply would not exist in the mount
-/// tree), but so the model gets a clear containment error instead of a
-/// confusing `No such file or directory`.
-///
-/// Returns `Err(violation)` if any path is outside the allowed roots, or the
-/// arguments with paths rewritten to absolute form.
+/// Resolve a tool call's path arguments and substitute the resolved absolute
+/// forms back in (so handlers never re-resolve against the process cwd).
+/// ADR-0008.
 fn resolve_tool_args_guarded(
     guard: &crate::path_guard::PathGuard,
     tool_name: &str,
