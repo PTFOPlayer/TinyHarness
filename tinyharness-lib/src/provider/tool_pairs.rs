@@ -1,22 +1,7 @@
 //! Repair the assistant ↔ tool-call pairing in a conversation history.
 //!
-//! OpenAI-compatible servers (and the Azure/OpenAI Responses API behind
-//! OpenRouter) reject a request with HTTP 400
-//! `“No tool output found for function call <id>”` when the message list
-//! contains an assistant `tool_calls` entry with no matching `tool` result, or
-//! a `tool` result whose call was never declared. Strict providers also reject
-//! a `tool` result carrying an empty/missing `tool_call_id`.
-//!
-//! Real histories grow holes in several ways: the user presses Ctrl+C between
-//! the assistant message and its results, a signal tool answers with something
-//! other than a `tool` message, `/compact` cuts the keep-window between a call
-//! and its result, or a session resumed with `-c` was killed mid-turn. Rather
-//! than patch every cause, [`sanitize_tool_pairs`] repairs the invariant at the
-//! one place that sees the exact shape of the outgoing request.
-//!
-//! The transform is deliberately conservative: a message that is already
-//! correctly paired is returned untouched, and the only content ever *invented*
-//! is a placeholder result for a call that has none.
+//! Repaired at the one place that sees the outgoing request, rather than at each
+//! cause. ADR-0012.
 
 use std::collections::{HashMap, HashSet};
 
@@ -73,22 +58,7 @@ struct DeclaredCall {
 
 /// Return a copy of `messages` in which every assistant tool call has exactly
 /// one matching `tool` result, and every `tool` result matches a declared call.
-///
-/// Three repairs are applied:
-///
-/// 1. **Unusable ids** — a tool call with a missing, empty, or repeated id gets
-///    a synthesized unique one, echoed consistently in the assistant message and
-///    in its result. Two calls sharing an id can never both be answered.
-/// 2. **Unanswered calls** — a placeholder result is inserted directly after the
-///    assistant message that declared the call.
-/// 3. **Orphan / duplicate results** — a `tool` message whose `tool_call_id`
-///    matches no declared call, or that repeats an already-answered call, is
-///    dropped. A `tool` message with *no* id is not treated as an orphan: it is
-///    bound to the oldest declared call still awaiting a result, which keeps
-///    providers that omit ids (plain Ollama, local servers) working.
-///
-/// Ordering is otherwise preserved, so a correctly paired history comes back
-/// unchanged with zeroed [`ToolPairFixes`].
+/// ADR-0012.
 pub fn sanitize_tool_pairs(messages: &[Message]) -> (Vec<Message>, ToolPairFixes) {
     // ── Pass 1: normalize call ids and index every declared call ────────────
     //
@@ -226,7 +196,6 @@ mod tests {
             function: ToolCallFunction {
                 name: name.to_string(),
                 arguments: json!({}),
-                thought_signature: None,
             },
         }
     }

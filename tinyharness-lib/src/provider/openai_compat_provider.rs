@@ -1,23 +1,12 @@
 use crate::{
     SecretString,
-    provider::{ChatMessageResponse, Message, Provider, ToolDefinition},
+    provider::{ChatMessageResponse, Message, ToolDefinition},
 };
 
 use super::openai_compat::OpenAiCompatInner;
 
-/// Unified provider for any OpenAI-compatible chat-completions endpoint.
-///
-/// Covers three concrete back-ends that previously had their own wrapper
-/// modules:
-///
-/// * Local llama.cpp servers (no auth, hard-coded single-model list).
-/// * Local vLLM servers (no auth, fetches `/v1/models`).
-/// * Hosted gateways like OpenRouter / Together / Groq (Bearer auth,
-///   fetches `/v1/models`).
-///
-/// The variation between them is just (a) whether an `Authorization: Bearer`
-/// header is sent and (b) how `list_models` resolves, so they collapse into
-/// a single struct with builder-style options.
+/// Unified provider for any OpenAI-compatible chat-completions endpoint. The
+/// variation is only Bearer auth and how `list_models` resolves. ADR-0013.
 pub struct OpenAiCompatProvider {
     inner: OpenAiCompatInner,
     /// When `Some`, `list_models` returns this fixed list instead of querying
@@ -71,35 +60,49 @@ impl OpenAiCompatProvider {
     }
 }
 
-impl Provider for OpenAiCompatProvider {
-    async fn health_check(&self) -> Result<(), String> {
+/// Runtime behaviour of the provider: health, model selection, and streaming.
+///
+/// A separate inherent `impl` block from the constructors above, only for
+/// readability.
+impl OpenAiCompatProvider {
+    /// Check whether the backend is reachable and healthy; see
+    /// [`OpenAiCompatInner::health_check`] for the `/health` → `/v1/models`
+    /// fallback.
+    pub async fn health_check(&self) -> Result<(), String> {
         self.inner.health_check().await
     }
 
-    async fn list_models(&self) -> Vec<String> {
+    /// List the models the server exposes, or the fixed list supplied via
+    /// [`OpenAiCompatProvider::with_static_models`].
+    pub async fn list_models(&self) -> Vec<String> {
         if let Some(models) = &self.static_models {
             return models.clone();
         }
         self.inner.fetch_model_list().await
     }
 
-    fn select_model(&mut self, name: String) {
+    /// Select the model used for subsequent [`Self::chat`] requests.
+    pub fn select_model(&mut self, name: String) {
         self.inner.select_model(name);
     }
 
-    fn current_model(&self) -> Option<String> {
+    /// The currently selected model, if any.
+    pub fn current_model(&self) -> Option<String> {
         self.inner.current_model()
     }
 
-    fn set_timeout(&mut self, timeout_secs: u64) {
+    /// Set the per-request timeout in seconds.
+    pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.inner.set_timeout(timeout_secs);
     }
 
-    fn set_retries(&mut self, max_retries: u32) {
+    /// Set the maximum number of retries for transient failures.
+    pub fn set_retries(&mut self, max_retries: u32) {
         self.inner.set_retries(max_retries);
     }
 
-    async fn chat(
+    /// Send a chat request and return a receiver for streaming chunks.
+    pub async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,

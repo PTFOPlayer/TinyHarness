@@ -127,26 +127,11 @@ pub fn is_notebook_file(path: &str) -> bool {
 
 /// Read a Jupyter notebook as compact, model-safe JSON.
 ///
-/// Notebook cells routinely embed rendered figures as base64 payloads
-/// (`"image/png": "iVBOR…"` — hundreds of kilobytes *on a single line*), which
-/// can push a request past the provider's input-length limit. The JSON is
-/// therefore parsed and sanitized before it is returned:
-///
-/// * every binary payload (image/*, `application/pdf`) is replaced by a
-///   short placeholder recording the mime type and the stripped size — this
-///   covers both `outputs[].data` and markdown `attachments`;
-/// * remaining text values longer than [`MAX_NOTEBOOK_VALUE_CHARS`] are
-///   truncated with a marker, so a giant `text/plain` dump cannot recreate
-///   the same problem;
-/// * cell sources, stream text, `text/plain` results and execution counts are
-///   preserved verbatim.
-///
-/// If the file is not valid JSON (or is a notebook-shaped document the
-/// sanitizer cannot walk), the raw text is returned with over-long lines
-/// truncated instead, so the base64 blow-up is still neutralised.
-///
-/// `from`/`to` page through the *rendered* text, not the on-disk file, so the
-/// line numbers stay stable across reads.
+/// Base64 figures (hundreds of KB on one line) would blow the provider's
+/// input-length limit, so binary payloads are replaced by a short placeholder
+/// and oversized text values are truncated; cell sources and stream text are
+/// preserved. Invalid JSON falls back to per-line truncation. `from`/`to` page
+/// through the *rendered* text, not the on-disk file.
 fn read_notebook(
     path: &str,
     from: Option<usize>,

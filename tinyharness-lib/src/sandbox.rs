@@ -1,59 +1,7 @@
 //! OS-level process sandbox for shell-executing tools (`run`, custom tools).
 //!
-//! The built-in file tools are confined by [`PathGuard`](crate::path_guard::PathGuard)
-//! — a pure path check, because they run in-process. Shell commands cannot be
-//! confined that way: a command string is arbitrary, so there is nothing
-//! reliable to inspect before it runs. Those go through a real kernel-enforced
-//! sandbox instead, via `bwrap` (bubblewrap) or `firejail`.
-//!
-//! Both backends are auto-detected ([`Sandbox::detect`]); `bwrap` is preferred
-//! because it is deny-by-default and needs no setuid helper.
-//!
-//! # What the backends guarantee
-//!
-//! **bwrap** builds a fresh mount tree from a `tmpfs` root and binds *only*
-//! what the command needs, so anything not bound simply does not exist inside
-//! the sandbox: the workspace (read-write), the system libraries and `/etc`
-//! (read-only), the file `/etc/resolv.conf` points at when it is a symlink out
-//! of `/etc` (see `resolv_conf_target`), and whatever the user added via
-//! `allowed_paths`. It also unshares the PID, IPC, UTS and cgroup namespaces,
-//! clears the environment, and starts a new session so a command cannot grab
-//! the terminal.
-//!
-//! **firejail** takes the opposite approach: it mounts the *existing* host
-//! filesystem read-only and re-binds the workspace read-write, then drops
-//! capabilities and applies seccomp. Reads outside the workspace are
-//! therefore **still possible** under firejail — it is write/privilege
-//! containment, not visibility containment. It also normally relies on a
-//! setuid helper. Prefer bwrap when containment matters.
-//!
-//! # Network
-//!
-//! The network is **always available** to sandboxed commands, under both
-//! backends. A coding agent runs `git fetch`, `curl`, and `cargo add` constantly;
-//! blocking those would make the sandbox unusable rather than safe, and the
-//! exfiltration risk it would mitigate is already accepted by giving the model
-//! shell access. Network isolation is out of scope here.
-//!
-//! Reachability is not the same as *configuration*, though: name resolution
-//! needs `/etc/resolv.conf`, which on a systemd-resolved host is a symlink into
-//! the unbound `/run`. bwrap therefore binds that target explicitly, or every
-//! `curl`/`npm`/`git fetch` fails with a DNS error that looks exactly like a
-//! blocked network.
-//!
-//! # Limits
-//!
-//! Neither backend defends against a hostile *user*: the sandboxed process
-//! still runs as the same uid, so anything the workspace bind exposes (`.env`,
-//! `.git`, committed credentials) is in scope — and reachable over the network.
-//! Nor is either a container: no image, no uid remapping, no resource limits
-//! beyond what the flags here provide.
-//!
-//! # Widening the sandbox
-//!
-//! `allowed_paths` widens the filesystem view (read-only) and
-//! `sandbox.writable_paths` grants write access to specific extra directories.
-//! Both are reported in the startup banner.
+//! `bwrap` (preferred) or `firejail`, auto-detected by [`Sandbox::detect`].
+//! ADR-0008 — two containment layers, backend guarantees, and limits.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

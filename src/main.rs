@@ -21,8 +21,7 @@ use tinyharness_lib::{
     custom_tools::CustomToolManager,
     mode::AgentMode,
     provider::{
-        AnyProvider, Message, Provider, Role, SockudoCredentials,
-        model_variants::is_variant_available,
+        AnyProvider, Message, Role, SockudoCredentials, model_variants::is_variant_available,
     },
     session::{Session, SessionStore},
     tools::ToolManager,
@@ -493,14 +492,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ensure_prompts_initialized_in(&paths.prompts_dir());
 
     // ── Containment: path guard (always) + process sandbox (on by default) ──
-    // Both are configured *before* the tools are registered: tool handlers are
-    // opaque closures, so the process sandbox is cloned into `run` and the
-    // custom tools at construction time.
-    //
-    // The process sandbox is Linux-only. On other platforms it is forced off
-    // — not just the flag, but the settings too, so a shared `settings.json`
-    // with `sandbox.backend` set degrades silently instead of warning on
-    // every startup. (The flag itself is rejected earlier, at arg parsing.)
+    // Configured *before* tool registration, because handlers are opaque
+    // closures that capture the sandbox at construction. ADR-0008.
     let (_global_settings, _project_settings, merged) =
         tinyharness_lib::config::load_merged_settings_from(&paths);
 

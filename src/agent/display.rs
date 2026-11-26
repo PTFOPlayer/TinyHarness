@@ -675,7 +675,7 @@ mod tests {
         print_startup_card(
             &mut buf,
             &StartupInfo {
-                version: "0.5.6",
+                version: env!("CARGO_PKG_VERSION"),
                 provider: "ollama",
                 model: Some("qwen3:8b"),
                 mode: "agent",
@@ -689,7 +689,10 @@ mod tests {
         .unwrap();
         let out = String::from_utf8(buf).unwrap();
         let plain = strip_ansi(&out);
-        assert!(plain.contains("✦ TinyHarness v0.5.6"), "{plain}");
+        assert!(
+            plain.contains(&format!("✦ TinyHarness v{}", env!("CARGO_PKG_VERSION"))),
+            "{plain}"
+        );
         assert!(plain.contains("ollama · qwen3:8b"), "{plain}");
         assert!(plain.contains("mode agent · sandbox bwrap"), "{plain}");
         assert!(
@@ -707,7 +710,7 @@ mod tests {
         print_startup_card(
             &mut buf,
             &StartupInfo {
-                version: "0.5.6",
+                version: env!("CARGO_PKG_VERSION"),
                 provider: "llama.cpp",
                 model: None,
                 mode: "casual",
@@ -755,7 +758,6 @@ mod tests {
                 function: ToolCallFunction {
                     name: "read".to_string(),
                     arguments: serde_json::json!({"path": "src/lib.rs"}),
-                    thought_signature: None,
                 },
             }],
             tool_call_id: None,
@@ -793,7 +795,6 @@ mod tests {
                 function: ToolCallFunction {
                     name: "run".to_string(),
                     arguments: serde_json::json!({"command": "rm -rf /"}),
-                    thought_signature: None,
                 },
             }],
             tool_call_id: None,

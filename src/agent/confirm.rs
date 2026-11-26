@@ -1,10 +1,7 @@
-// ── Tool Confirmation Logic ────────────────────────────────────────────────
+//! ADR-0003 — command safety model; ADR-0008 — why containment adds no prompt.
 //
-// The decision tree for whether a tool call is approved lives here. At the
-// "ask user" step, the CLI uses an interactive terminal prompt.
-//
-// This module extracts the pure decision logic so the loop only needs to
-// implement the I/O part.
+// Pure decision logic for whether a tool call is approved; the caller does the
+// terminal I/O.
 
 use tinyharness_lib::config::AutoAcceptMode;
 use tinyharness_lib::provider::ToolCall;
@@ -29,24 +26,7 @@ pub enum ConfirmationDecision {
 }
 
 /// Determine whether a tool call should be approved, needs user confirmation,
-/// or should be denied.
-///
-/// This is pure logic — no I/O. The caller is responsible for implementing
-/// the user interaction when `NeedsConfirmation` is returned.
-///
-/// The logic follows these rules:
-/// 1. Read-only tools (no confirmation needed) → `AutoApproved { auto_accepted: false }`
-/// 2. Per-turn auto-accept (`auto_accept == true`) → `AutoApproved { auto_accepted: true }`
-///    for everything except unsafe `run` commands (which prompt via `NeedsConfirmation`).
-/// 3. Auto-accept mode (All) → `AutoApproved { auto_accepted: true }` for everything.
-/// 4. Auto-accept mode (Safe) → auto-approve safe `run` commands;
-///    unsafe `run` and other destructive tools need confirmation.
-/// 5. Everything else → `NeedsConfirmation`
-///
-/// Sandboxing does not feature here: shell commands are confined by the OS
-/// (`--sandbox`) and the built-in file tools by the path guard, both enforced
-/// at execution time, so approval follows the ordinary auto-accept policy
-/// either way.
+/// or should be denied. Pure logic — no I/O. See ADR-0003.
 pub fn decide_tool_confirmation(
     call: &ToolCall,
     auto_accept: bool,
@@ -118,7 +98,6 @@ mod tests {
             function: tinyharness_lib::provider::ToolCallFunction {
                 name: name.to_string(),
                 arguments: args,
-                thought_signature: None,
             },
         }
     }

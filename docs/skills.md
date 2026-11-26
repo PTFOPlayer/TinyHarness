@@ -211,7 +211,7 @@ metadata:
 
 ## Architecture
 - Keep `tinyharness-lib` free of terminal I/O
-- Prefer RPITIT (`impl Future`) over `async-trait`; use `AnyProvider` for dyn dispatch
+- Prefer RPITIT (`impl Future`) over `async-trait` for traits; providers use the `AnyProvider` enum instead of a trait at all
 - Use `Result<T, String>` for user-facing errors
 ```
 

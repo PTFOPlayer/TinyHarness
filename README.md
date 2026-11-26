@@ -327,8 +327,8 @@ Frontend-agnostic — no terminal I/O, no ANSI codes, no rustyline.
 ```
 tinyharness-lib/src/
 ├── lib.rs               Re-exports all public types
-├── provider/             Provider trait + implementations
-│   ├── mod.rs            Provider trait, AnyProvider enum, Message types, ToolDefinition, ToolCall
+├── provider/             AnyProvider enum + backend implementations
+│   ├── mod.rs            AnyProvider enum, Message types, ToolDefinition, ToolCall
 │   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
 │   ├── openai_compat.rs  Shared HTTP/SSE logic for OpenAI-compatible backends
 │   ├── openai_compat_provider.rs OpenAiCompatProvider — unified Ollama / llama.cpp / vLLM / gateway provider
@@ -482,6 +482,19 @@ After making changes, run:
 2. `cargo clippy --workspace -- -D warnings` — no clippy warnings
 3. `cargo test --workspace` — all tests pass
 4. `cargo build` — clean debug build succeeds
+
+### Changelog and Architecture Decisions
+
+Notable changes are recorded in [CHANGELOG.md](CHANGELOG.md), which follows
+[Keep a Changelog](https://keepachangelog.com/) and Semantic Versioning.
+
+The reasoning behind non-obvious design choices lives in
+[docs/adr/](docs/adr/README.md) as Architecture Decision Records. Read
+[ADR-0009](docs/adr/009-paths-injection.md),
+[ADR-0002](docs/adr/002-anyprovider-enum.md),
+[ADR-0016](docs/adr/016-tool-handler-closures.md) and
+[ADR-0008](docs/adr/008-two-layer-containment.md) first — between them they
+explain the shape of the rest of the codebase.
 
 ## AI Usage & Security
 

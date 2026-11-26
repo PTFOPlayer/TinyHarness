@@ -1,4 +1,4 @@
-//! Dev-only test utility: a mock [`Provider`] with pre-programmed responses.
+//! Dev-only test utility: a mock provider with pre-programmed responses.
 //!
 //! Available under the `test-util` feature. Queued responses are popped in
 //! order on each `chat()` call; an empty queue yields a default text
@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use crate::provider::{
-    AnyProvider, ChatMessage, ChatMessageResponse, Message, Provider, TokenUsage, ToolDefinition,
+    AnyProvider, ChatMessage, ChatMessageResponse, Message, TokenUsage, ToolDefinition,
 };
 
 /// A mock provider that returns pre-programmed responses.
@@ -74,7 +74,6 @@ impl MockProvider {
                     function: ToolCallFunction {
                         name: tool_name.to_string(),
                         arguments,
-                        thought_signature: None,
                     },
                 }],
                 thinking: None,
@@ -119,10 +118,9 @@ impl MockProvider {
     pub fn set_models(&mut self, models: Vec<String>) {
         self.models = models;
     }
-}
 
-impl Provider for MockProvider {
-    async fn health_check(&self) -> Result<(), String> {
+    /// Check whether the mock is configured to report healthy.
+    pub async fn health_check(&self) -> Result<(), String> {
         if self.health_ok {
             Ok(())
         } else {
@@ -130,19 +128,23 @@ impl Provider for MockProvider {
         }
     }
 
-    async fn list_models(&self) -> Vec<String> {
+    /// The queued model list.
+    pub async fn list_models(&self) -> Vec<String> {
         self.models.clone()
     }
 
-    fn select_model(&mut self, name: String) {
+    /// Select the model reported by [`Self::current_model`].
+    pub fn select_model(&mut self, name: String) {
         self.model = Some(name);
     }
 
-    fn current_model(&self) -> Option<String> {
+    /// The currently selected model.
+    pub fn current_model(&self) -> Option<String> {
         self.model.clone()
     }
 
-    async fn chat(
+    /// Pop the next queued response and stream it through a channel.
+    pub async fn chat(
         &mut self,
         _messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
@@ -191,13 +193,11 @@ impl MockProviderHandle {
     pub fn inner(&self) -> &std::sync::Arc<Mutex<MockProvider>> {
         &self.0
     }
-}
 
-impl Provider for MockProviderHandle {
-    async fn health_check(&self) -> Result<(), String> {
-        // Read state under the lock, then drop the guard before returning —
-        // a std::sync::MutexGuard held across an await would make the
-        // future non-Send (and risks deadlocks under contention).
+    /// Delegate to the inner mock. Reads state under the lock and drops the
+    /// guard before returning — a `MutexGuard` held across an await would make
+    /// the future non-`Send` (and risks deadlocks under contention).
+    pub async fn health_check(&self) -> Result<(), String> {
         let ok = self.0.lock().unwrap().health_ok;
         if ok {
             Ok(())
@@ -206,19 +206,23 @@ impl Provider for MockProviderHandle {
         }
     }
 
-    async fn list_models(&self) -> Vec<String> {
+    /// The queued model list.
+    pub async fn list_models(&self) -> Vec<String> {
         self.0.lock().unwrap().models.clone()
     }
 
-    fn select_model(&mut self, name: String) {
+    /// Select the model reported by [`Self::current_model`].
+    pub fn select_model(&mut self, name: String) {
         self.0.lock().unwrap().select_model(name);
     }
 
-    fn current_model(&self) -> Option<String> {
+    /// The currently selected model.
+    pub fn current_model(&self) -> Option<String> {
         self.0.lock().unwrap().current_model()
     }
 
-    async fn chat(
+    /// Pop the next queued response from the shared mock and stream it.
+    pub async fn chat(
         &mut self,
         _messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
@@ -255,11 +259,13 @@ impl Provider for MockProviderHandle {
         Ok(rx)
     }
 
-    fn set_timeout(&mut self, timeout_secs: u64) {
+    /// Set the request timeout recorded on the inner mock.
+    pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.0.lock().unwrap().set_timeout(timeout_secs);
     }
 
-    fn set_retries(&mut self, max_retries: u32) {
+    /// Set the retry count recorded on the inner mock.
+    pub fn set_retries(&mut self, max_retries: u32) {
         self.0.lock().unwrap().set_retries(max_retries);
     }
 }

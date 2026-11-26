@@ -1,27 +1,8 @@
-//! Path containment guard for the built-in file tools.
+//! Path containment guard for the built-in file tools, always active.
 //!
-//! The built-in tools (`ls`, `read`, `write`, `edit`, `grep`, `glob`) run
-//! in-process, so they cannot be confined by an OS-level sandbox the way the
-//! shell tools can. Their containment is therefore a *path* check performed
-//! before the tool handler executes: every path argument must resolve inside
-//! the workspace root (or an explicitly allowed extra root).
-//!
-//! [`PathGuard`] is always active — there is no flag to turn it off. The
-//! workspace root is trusted; everything else is unreachable unless the user
-//! adds it to `allowed_paths`. Resolution handles:
-//!
-//! - relative paths (joined with the workspace root),
-//! - `..` traversal,
-//! - symlink escapes, including a `..` *after* a symlink (resolved component
-//!   by component, in the order `open(2)` uses),
-//! - glob patterns (only the static prefix can be checked, so `glob` also
-//!   filters its results — see [`crate::tools::glob`]).
-//!
-//! Checks fail closed: a path that cannot be *proven* to be inside an allowed
-//! root is rejected, and the rejection is reported as a tool error regardless
-//! of auto-accept mode. Callers must act on the **returned** path rather than
-//! the raw argument — a relative argument means "relative to the workspace
-//! root" here, but "relative to the process cwd" to `std::fs`.
+//! The tools run in-process, so they cannot be kernel-confined; every path must
+//! resolve inside the workspace root (or an `allowed_paths` root) before the
+//! handler runs, and callers must act on the **returned** path. ADR-0008.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;

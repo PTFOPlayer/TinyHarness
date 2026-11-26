@@ -25,8 +25,8 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::SecretString;
 use crate::provider::{
-    ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,
-    ToolCallFunction, ToolDefinition,
+    ChatMessage, ChatMessageResponse, Message, Role, TokenUsage, ToolCall, ToolCallFunction,
+    ToolDefinition,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -533,8 +533,13 @@ async fn send_error(send: &mpsc::Sender<ChatMessageResponse>, message: &str) -> 
     .is_ok()
 }
 
-impl Provider for SockudoProvider {
-    async fn health_check(&self) -> Result<(), String> {
+/// Runtime behaviour of the provider: health, model selection, and streaming.
+///
+/// A separate inherent `impl` block from the constructor above, only for
+/// readability.
+impl SockudoProvider {
+    /// Check that the Sockudo server answers on its health endpoint.
+    pub async fn health_check(&self) -> Result<(), String> {
         let url = self.health_url();
         match self.http_client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => Ok(()),
@@ -552,7 +557,12 @@ impl Provider for SockudoProvider {
         }
     }
 
-    async fn list_models(&self) -> Vec<String> {
+    /// List the model names available on the backend.
+    ///
+    /// Sockudo AI Transport exposes no model-list endpoint, so this returns
+    /// the currently selected model (if any) or an empty vec — which makes
+    /// first-launch auto-selection prompt the user.
+    pub async fn list_models(&self) -> Vec<String> {
         // Sockudo AI Transport doesn't expose a model list endpoint.
         // Return the currently selected model if set, or an empty vec
         // so that auto-selection can prompt the user on first launch.
@@ -564,21 +574,31 @@ impl Provider for SockudoProvider {
             .collect()
     }
 
-    fn select_model(&mut self, name: String) {
+    /// Select the model used for subsequent [`Self::chat`] requests.
+    pub fn select_model(&mut self, name: String) {
         if let Ok(mut m) = self.model.lock() {
             *m = Some(name);
         }
     }
 
-    fn current_model(&self) -> Option<String> {
+    /// The currently selected model, if any.
+    pub fn current_model(&self) -> Option<String> {
         self.model.lock().ok().and_then(|m| m.clone())
     }
 
-    fn set_timeout(&mut self, timeout_secs: u64) {
+    /// Set the request timeout in seconds.
+    pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.timeout_secs = timeout_secs;
     }
 
-    async fn chat(
+    /// No-op: the Sockudo transport has no request-retry logic.
+    ///
+    /// Present so [`crate::provider::AnyProvider::set_retries`] can forward
+    /// uniformly to every backend instead of special-casing this one.
+    pub fn set_retries(&mut self, _max_retries: u32) {}
+
+    /// Send a chat request and return a receiver for streaming response chunks.
+    pub async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
@@ -831,11 +851,7 @@ fn parse_tool_calls(value: &serde_json::Value) -> Option<Vec<ToolCall>> {
                 .unwrap_or(serde_json::Value::Null);
             Some(ToolCall {
                 id: None,
-                function: ToolCallFunction {
-                    name,
-                    arguments,
-                    thought_signature: None,
-                },
+                function: ToolCallFunction { name, arguments },
             })
         })
         .collect();
@@ -1299,7 +1315,6 @@ mod tests {
             function: ToolCallFunction {
                 name: "ls".to_string(),
                 arguments: serde_json::json!({"path": "/"}),
-                thought_signature: None,
             },
         }];
         let mut tool_msg = Message::simple(Role::Tool, "file1\nfile2");

@@ -22,7 +22,7 @@ Three crates in a Cargo workspace:
 
 ### Key `tinyharness-lib` modules
 
-- `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `OpenAiCompatProvider` (unified llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
+- `provider/` — `AnyProvider` enum (the provider interface: `OpenAiCompat` / `Sockudo` / test `Mock`; **no `Provider` trait**, see ADR-0002), `OpenAiCompatProvider` (unified Ollama / llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
 - `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering, `ToolAvailability` (opt-out flags for `auto_compact`/`question`, both default on), `register_custom_tools()` for custom tools
 - `custom_tools/` — Custom-tool system: `CustomToolManager` (loads the global `custom_tools.json` only — project-level files are not discovered), `CustomToolDefinition`/`CustomToolCategory`, `ShellCommand` (template substitution, shell escaping, timeout, `TH_*` env vars)
 - `paths.rs` — `Paths`: the **only** place that reads `$HOME`/`$XDG_*`/CWD. Config/data/project roots + every derived file (settings, prompts, sessions, custom tools, skills). Built via `default()`, `with_home()`, `from_env()`, or `new()` + `with_*` builders
@@ -49,7 +49,8 @@ Three crates in a Cargo workspace:
 - Rust edition 2024
 - Core logic (`tinyharness-lib`) must not use terminal I/O, ANSI codes, or rustyline
 - Use `serde` + `schemars` for serialization and tool schema generation
-- Provider async methods use RPITIT (`-> impl Future<...> + Send`) in the `Provider` trait — no `async-trait`, no `Pin<Box<dyn Future>>`. The trait is not dyn-compatible; use the `AnyProvider` enum (concrete wrapper over Ollama / OpenAI-compat / Sockudo) for shared `Arc<Mutex<AnyProvider>>` state. The test mock (`MockProvider`, feature `test-util`) is an `AnyProvider::Mock` variant.
+- Providers use **no trait**: `AnyProvider` is a concrete enum with inherent async methods (`chat`, `health_check`, `list_models`, `select_model`, `current_model`, `set_timeout`, `set_retries`), and each backend exposes the same methods inherently so the enum arms forward. Adding a backend = a variant + a match arm. Shared `Arc<Mutex<AnyProvider>>` state; the test mock (`MockProvider`, feature `test-util`) is the `AnyProvider::Mock` variant. No `async-trait`, no `Pin<Box<dyn Future>>`. See ADR-0002.
+- Trait-less dispatch is a provider-specific choice, not a house rule: `Provider` had a closed set of impls and no generic callers. Open-ended extension points (tool handlers) still use boxed futures/trait objects — see ADR-0016.
 - Error handling: `Result<T, String>` for user-facing, `Result<T, Box<dyn Error>>` for internal
 - Minimize dependencies; avoid adding new crates when existing ones suffice
 - `#[macro_export]` macros (`extract_args!`) live at `tinyharness_lib` root, not inside `tools`
@@ -76,15 +77,15 @@ Three crates in a Cargo workspace:
 ## Testing
 
 - `cargo test --workspace` runs all tests
-- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests
 - Use `tempfile` for test isolation; tool tests must not touch the real filesystem
 - Run specific test: `cargo test <test_name>`
 - Run per crate: `cargo test -p tinyharness-lib`, `cargo test -p TinyHarness`, `cargo test -p tinyharness-ui`
 
 ## Important Rules & Gotchas
 
-- **Provider startup**: All providers run a health check (Ollama calls `list_local_models`). OpenAI-compatible providers probe `/health` and fall back to `/v1/models` on HTTP 404 — a non-empty model list counts as healthy (empty list or a failing `/v1/models` still fails). A failed health check is a non-fatal warning — the agent starts anyway and errors surface on the first request. Use `--skip-health-check` to skip the check entirely. If saved model is unavailable, auto-select picks the first available with a warning. OpenRouter-style variant suffixes (`:free`, `:floor`, `:batch`) are ignored when validating a model against the server's list (`tinyharness-lib/src/provider/model_variants.rs`). `--openai-compat` requires `--api-key` (or `OPENAI_API_KEY` env var) and `--url`.
-- **Ollama specifics**: Own raw SSE parser (not ollama-rs streaming) to handle native and OpenAI-compatible formats; captures Gemini `thought_signature` from tool responses and re-injects them; fixes serialization quirks (lowercases tool type, injects `name` in tool results, synthesizes `tool_call_id` when missing for OpenAI-compatible servers).
+- **Provider startup**: All providers run a health check. OpenAI-compatible providers (which is now every backend except Sockudo) probe `/health` and fall back to `/v1/models` on HTTP 404 — a non-empty model list counts as healthy (empty list or a failing `/v1/models` still fails). A failed health check is a non-fatal warning — the agent starts anyway and errors surface on the first request. Use `--skip-health-check` to skip the check entirely. If saved model is unavailable, auto-select picks the first available with a warning. OpenRouter-style variant suffixes (`:free`, `:floor`, `:batch`) are ignored when validating a model against the server's list (`tinyharness-lib/src/provider/model_variants.rs`). `--openai-compat` requires `--api-key` (or `OPENAI_API_KEY` env var) and `--url`.
+- **OpenAI-compatible serialization quirks** (`provider/openai_compat.rs`): lowercases the tool `type`, synthesizes `tool_call_id` when a server omits it, and sends `content: null` for assistant messages that carry only tool calls (MiniMax and other strict providers reject `""`).
 - **System prompts**: Assembled from `header.md` + `<mode>.md` for Agent/Planning/Research; Casual is self-contained. Prompts are refreshed on mode switch, file pinning changes, skill activation, and `/refresh`.
 - **Command safety** (`src/agent/safety.rs`): Prefix matching with word boundaries, deny list priority, strips redirections before matching; rejects `;`, `&`, `|`, `$()`, backticks, newlines. Redirections like `2>&1` are auto-accepted if base command is safe.
 - **Confirmation**: `decide_tool_confirmation` (`src/agent/confirm.rs`) is pure logic and knows nothing about sandboxing — containment is enforced at execution time, so it never adds a prompt. Auto-accept has three modes: `off` (always prompt), `safe` (auto-approve safe `run` commands per the prefix lists, prompt otherwise), `all` (approve every destructive tool). The per-turn `a` key approves for the rest of the turn except unsafe `run` commands.

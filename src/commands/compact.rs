@@ -2,7 +2,7 @@ use std::io::Write;
 
 use std::collections::HashSet;
 
-use tinyharness_lib::provider::{AnyProvider, Message, Provider, Role, TokenUsage};
+use tinyharness_lib::provider::{AnyProvider, Message, Role, TokenUsage};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
@@ -179,19 +179,7 @@ struct CompactContext {
 }
 
 /// Move a compaction cut-point back so it never splits an assistant tool call
-/// from its results.
-///
-/// `/compact` keeps the last `KEEP_RECENT` messages verbatim and summarizes the
-/// rest. If the cut lands between an assistant message carrying `tool_calls`
-/// and the `tool` results that answer them, the kept window starts with
-/// orphaned results — and strict providers (Azure/OpenAI behind OpenRouter)
-/// reject the next request with HTTP 400 `“No tool output found for function
-/// call <id>”`. Pulling the cut back to the message that *declared* those calls
-/// reunites each pair inside the kept window.
-///
-/// Results whose call is nowhere in the history are left alone — the
-/// request-time tool-pair sanitizer drops those. `aligned` never drops below 1,
-/// so the system prompt always stays at index 0.
+/// from its results. ADR-0012 (pairing), ADR-0010 (strategy).
 fn align_keep_window(messages: &[Message], candidate: usize) -> usize {
     let mut aligned = candidate.min(messages.len()).max(1);
 
@@ -232,16 +220,8 @@ fn align_keep_window(messages: &[Message], candidate: usize) -> usize {
     }
 }
 
-/// Compact the conversation history by summarizing older messages.
-///
-/// For short conversations, this uses a single LLM call (single-pass compaction).
-/// For long conversations that would exceed the context window, it uses cascading
-/// multi-stage compaction: the intermediate messages are split into chunks, each
-/// chunk is summarized separately, and then the chunk summaries are merged into
-/// a final summary.
-///
-/// This keeps the system prompt and the most recent messages intact,
-/// while replacing all intermediate messages with a single summary message.
+/// Compact the conversation history by summarizing older messages, keeping the
+/// system prompt and recent messages intact. Single-pass vs cascade: ADR-0010.
 pub async fn execute_compact(
     out: &mut Output,
     provider: &mut AnyProvider,
@@ -685,7 +665,6 @@ mod tests {
                 function: tinyharness_lib::provider::ToolCallFunction {
                     name: "read".to_string(),
                     arguments: serde_json::json!({}),
-                    thought_signature: None,
                 },
             }],
             tool_call_id: None,

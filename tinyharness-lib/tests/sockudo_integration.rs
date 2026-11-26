@@ -3,7 +3,7 @@
 //! These tests run against a live Sockudo server (started via Docker by
 //! `tests/sockudo/run-test.sh`). They exercise the real `SockudoProvider`
 //! implementation — HTTP signing, event publishing, WebSocket subscription,
-//! and the `Provider` trait methods.
+//! and the provider methods on `SockudoProvider`.
 //!
 //! To run:
 //!   ./tests/sockudo/run-test.sh up
@@ -20,7 +20,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tinyharness_lib::{
     SecretString,
-    provider::{Message, Provider, Role, sockudo::SockudoProvider},
+    provider::{Message, Role, sockudo::SockudoProvider},
 };
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
@@ -179,19 +179,17 @@ async fn test_unsigned_request_is_rejected() {
 
 #[tokio::test]
 #[ignore = "requires live Sockudo server"]
-async fn test_provider_trait_health_check() {
+async fn test_provider_health_check() {
     require_sockudo!();
 
     let provider = make_provider();
-    // Use the Provider trait method
-    use tinyharness_lib::provider::Provider;
     let result = provider.health_check().await;
-    assert!(result.is_ok(), "Provider::health_check should succeed");
+    assert!(result.is_ok(), "health_check should succeed");
 }
 
 #[tokio::test]
 #[ignore = "requires live Sockudo server"]
-async fn test_provider_trait_list_models() {
+async fn test_provider_list_models() {
     require_sockudo!();
 
     let provider = make_provider();
@@ -203,7 +201,7 @@ async fn test_provider_trait_list_models() {
 
 #[tokio::test]
 #[ignore = "requires live Sockudo server"]
-async fn test_provider_trait_select_and_current_model() {
+async fn test_provider_select_and_current_model() {
     require_sockudo!();
 
     let mut provider = make_provider();

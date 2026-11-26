@@ -192,7 +192,6 @@ mod tests {
             function: ToolCallFunction {
                 name: name.to_string(),
                 arguments: args,
-                thought_signature: None,
             },
         }
     }
@@ -205,7 +204,6 @@ mod tests {
                 function: ToolCallFunction {
                     name: "ls".to_string(),
                     arguments: json!({}),
-                    thought_signature: None,
                 },
             },
             ToolCall {
@@ -213,7 +211,6 @@ mod tests {
                 function: ToolCallFunction {
                     name: "cat".to_string(),
                     arguments: json!({}),
-                    thought_signature: None,
                 },
             },
             ToolCall {
@@ -221,7 +218,6 @@ mod tests {
                 function: ToolCallFunction {
                     name: "grep".to_string(),
                     arguments: json!({}),
-                    thought_signature: None,
                 },
             },
         ];

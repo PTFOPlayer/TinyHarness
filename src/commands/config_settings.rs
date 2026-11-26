@@ -4,7 +4,6 @@ use tinyharness_lib::Paths;
 use tinyharness_lib::config::{
     AutoAcceptMode, load_settings_from, timeout_default_for, update_settings_from,
 };
-use tinyharness_lib::provider::Provider;
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
