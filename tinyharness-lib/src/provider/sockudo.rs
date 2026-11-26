@@ -593,8 +593,8 @@ impl SockudoProvider {
 
     /// No-op: the Sockudo transport has no request-retry logic.
     ///
-    /// Present so [`AnyProvider::set_retries`] can forward uniformly to every
-    /// backend instead of special-casing this one.
+    /// Present so [`crate::provider::AnyProvider::set_retries`] can forward
+    /// uniformly to every backend instead of special-casing this one.
     pub fn set_retries(&mut self, _max_retries: u32) {}
 
     /// Send a chat request and return a receiver for streaming response chunks.

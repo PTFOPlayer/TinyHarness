@@ -483,6 +483,19 @@ After making changes, run:
 3. `cargo test --workspace` — all tests pass
 4. `cargo build` — clean debug build succeeds
 
+### Changelog and Architecture Decisions
+
+Notable changes are recorded in [CHANGELOG.md](CHANGELOG.md), which follows
+[Keep a Changelog](https://keepachangelog.com/) and Semantic Versioning.
+
+The reasoning behind non-obvious design choices lives in
+[docs/adr/](docs/adr/README.md) as Architecture Decision Records. Read
+[ADR-0009](docs/adr/009-paths-injection.md),
+[ADR-0002](docs/adr/002-anyprovider-enum.md),
+[ADR-0016](docs/adr/016-tool-handler-closures.md) and
+[ADR-0008](docs/adr/008-two-layer-containment.md) first — between them they
+explain the shape of the rest of the codebase.
+
 ## AI Usage & Security
 
 TinyHarness grants LLMs the ability to interact with your filesystem through tool calling. This introduces specific risks:
