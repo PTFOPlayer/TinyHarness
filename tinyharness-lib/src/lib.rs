@@ -32,8 +32,8 @@ pub use mode::AgentMode;
 pub use path_guard::PathGuard;
 pub use paths::Paths;
 pub use provider::{
-    ChatMessage, ChatMessageResponse, Message, Provider, Role, TokenUsage, ToolCall,
-    ToolCallFunction, ToolDefinition,
+    ChatMessage, ChatMessageResponse, Message, Role, TokenUsage, ToolCall, ToolCallFunction,
+    ToolDefinition,
 };
 pub use sandbox::{Sandbox, SandboxBackend, SandboxOptions};
 pub use secret::SecretString;

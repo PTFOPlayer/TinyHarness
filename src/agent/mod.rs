@@ -25,7 +25,7 @@ use tinyharness_lib::{
     config::load_settings_from,
     mode::AgentMode,
     provider::tool_pairs::repair_tool_pairs,
-    provider::{AnyProvider, Message, Provider, Role},
+    provider::{AnyProvider, Message, Role},
     session::{Session, SessionStore},
     token::ContextWindowSize,
     tools::ToolManager,

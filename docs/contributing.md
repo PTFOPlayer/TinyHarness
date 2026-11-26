@@ -42,7 +42,7 @@ TinyHarness/                  Binary crate — CLI, agent loop, slash commands
 tinyharness-lib/              Core library — no terminal I/O, no ANSI, no rustyline
 ├── src/
 │   ├── lib.rs                Re-exports all public types
-│   ├── provider/             Provider trait + OpenAI-compat/Sockudo impls
+│   ├── provider/             AnyProvider enum + OpenAI-compat/Sockudo backends
 │   │   ├── openai_compat.rs      Shared HTTP/SSE logic for OpenAI-compatible backends (Ollama included, via `/v1`)
 │   │   ├── openai_compat_provider.rs OpenAiCompatProvider — unified llama.cpp / vLLM / Bearer-auth gateway provider
 │   │   └── sockudo.rs            SockudoProvider — AI Transport via WebSocket (⚠️ experimental)
@@ -151,30 +151,42 @@ All crates use Rust **edition 2024**. Check `Cargo.toml` files if you're unsure.
 
 ### Async Patterns
 
-Prefer RPITIT (`impl Future`) in traits over `async-trait`:
+Never pull in `async-trait`. Pick a shape based on whether the set of impls is
+closed or open:
+
+**Closed set with no generic callers → a concrete enum with inherent methods.**
+Providers are this case: `AnyProvider` (`tinyharness-lib/src/provider/mod.rs`) owns
+the dispatch, and each backend exposes the same methods inherently so the arms
+forward. Adding a backend is a variant plus a match arm.
 
 ```rust
-// tinyharness-lib/src/provider/mod.rs
-pub trait Provider: Send + Sync {
-    fn health_check(&self) -> impl Future<Output = Result<(), String>> + Send;
-    // ...
+pub enum AnyProvider {
+    OpenAiCompat(OpenAiCompatProvider),
+    Sockudo(SockudoProvider),
+    #[cfg(feature = "test-util")]
+    Mock(MockProviderHandle),
+}
+
+impl AnyProvider {
+    pub async fn chat(&mut self, messages: Vec<Message>, tools: Vec<ToolDefinition>)
+        -> Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String> { … }
 }
 ```
 
-RPITIT keeps the dependency tree small and avoids boxing, but makes the trait
-not dyn-compatible. For runtime provider selection use the `AnyProvider` enum
-(concrete dispatch) instead of `Arc<Mutex<dyn Provider>>`.
+**Open set, stored in a collection → boxed futures or boxed closures.** Tool
+handlers are this case, because custom tools are runtime data rather than
+compile-time impls:
 
 ```rust
-// ✅ Do this (RPITIT in traits)
-pub trait Provider: Send + Sync {
-    fn health_check(&self) -> impl Future<Output = Result<(), String>> + Send;
-}
-
-// ✅ Do this (boxed futures for dyn handlers, e.g. command registry callbacks)
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 handler: Box<dyn Fn(HashMap<String, String>) -> BoxFuture<'static, String> + Send + Sync>,
+```
 
+**RPITIT (`-> impl Future + Send`)** remains the right choice for a trait that is
+generic-only (never stored, never `dyn`). Nothing in the workspace needs one
+today; if you add one, prefer RPITIT over `#[async_trait]`.
+
+```rust
 // ❌ Not this
 #[async_trait]
 pub trait AsyncHandler {
@@ -182,9 +194,12 @@ pub trait AsyncHandler {
 }
 ```
 
-This avoids pulling in the `async-trait` crate and keeps the dependency tree small.
-Note the trade-off: RPITIT traits are not dyn-compatible — that's why
-`AnyProvider` exists (see the Provider trait in `tinyharness-lib/src/provider/mod.rs`).
+All three avoid `async-trait` and keep the dependency tree small. Note the
+trade-off: plain `async fn` in a trait cannot require `+ Send` on the returned
+future, so `dyn`-free but multi-threaded traits need RPITIT. See
+[ADR-0002](adr/002-anyprovider-enum.md) and
+[ADR-0016](adr/016-tool-handler-closures.md) for why providers and tools
+landed on different shapes.
 
 ### Serialization
 
@@ -243,7 +258,8 @@ Uses `dtolnay/rust-toolchain@stable` for Rust and `Swatinem/rust-cache@v2` for c
 2. **Make changes**: Follow code conventions above
 3. **Run verification checklist**: fmt → clippy → test → build
 4. **Update docs**: If adding/changing user-facing features, update relevant docs in `docs/`
-5. **Update todos**: If your PR completes a tracked enhancement, update the status in `todo/<number>-*.md` and `todo/todo.md`
+5. **Record architectural decisions**: If you made a non-obvious design choice, add an ADR (see [Architecture Decisions](#architecture-decisions))
+6. **Update todos**: If your PR completes a tracked enhancement, update the status in `todo/<number>-*.md` and `todo/todo.md`
 6. **Write a clear PR description**: What, why, and any breaking changes
 7. **PR to `master`**: CI runs automatically
 
@@ -330,13 +346,28 @@ must stay empty.
 
 ### Adding a New Provider
 
-1. Create `tinyharness-lib/src/provider/<name>.rs`
-2. Implement the `Provider` trait
-3. Add to `ProviderKind` enum in `config/mod.rs`
-4. Add CLI flag in `main.rs`
-5. Add provider creation in `src/agent/setup.rs`
-6. If the provider requires credentials (like Sockudo), add fields to `Settings` and handle them in setup
-7. If the provider needs a separate bridge/worker process (like Sockudo), create a standalone example crate (see `docs/examples/sockudo-worker/` for reference)
+The common case needs **no new provider type**: if the backend speaks
+`/v1/chat/completions`, it is an `OpenAiCompatProvider` and you only add a
+configuration path.
+
+1. Add a variant to `ProviderKind` in `tinyharness-lib/src/config/mod.rs`
+2. Add a CLI flag in `main.rs` and a default URL in `src/agent/setup.rs`
+3. Add an arm to `AnyProvider::build()` in `tinyharness-lib/src/provider/mod.rs`
+   returning `AnyProvider::OpenAiCompat(…)` with the right options
+   (`with_options` for auth/timeout, `with_static_models` for backends without a
+   useful `/v1/models`)
+4. If it needs credentials, add fields to `Settings` and pass them through
+   `AnyProvider::build()`
+
+Only when the backend cannot speak the OpenAI protocol do you need a new type:
+
+5. Create `tinyharness-lib/src/provider/<name>.rs` with an inherent `chat`,
+   `health_check`, `list_models`, `select_model`, `current_model`, `set_timeout`
+   and `set_retries` — there is no `Provider` trait to implement
+   (see [ADR-0002](adr/002-anyprovider-enum.md))
+6. Add an `AnyProvider` variant and one forwarding arm per method
+7. If it needs a separate bridge/worker process (like Sockudo), create a
+   standalone example crate (see `docs/examples/sockudo-worker/` for reference)
 
 ### Modifying Settings
 
@@ -399,10 +430,46 @@ hermetic tests.
 
 ---
 
+## Architecture Decisions
+
+Non-obvious design choices are recorded as Architecture Decision Records in
+[`docs/adr/`](adr/README.md). An ADR is not a design document for a feature — it
+records a decision that constrains future code, together with what it costs.
+
+Write one when a change:
+
+- picks one approach where a reasonable person would pick another (format,
+  protocol, storage layout, trait shape);
+- accepts a known limitation or workaround that a future contributor would
+  otherwise "clean up" and thereby break;
+- creates an invariant that is enforced by convention rather than by the type
+  system (registration order, global-only settings, "never call the no-arg
+  wrapper");
+- decides *not* to do something, where the temptation to do it will recur.
+
+You do not need one for a bug fix, a new tool following an existing pattern, a
+new provider built on `OpenAiCompatProvider`, or a documentation-only change.
+
+Procedure:
+
+1. Copy [`docs/adr/template.md`](adr/template.md) to
+   `docs/adr/NNNN-short-slug.md` using the next free number.
+2. Fill in Context / Decision / Consequences. Consequences must include the
+   costs, not only the benefits — that section is why the record is useful.
+3. Add a row to the index in [`docs/adr/README.md`](adr/README.md).
+4. Link it from the PR description.
+
+ADRs are immutable once accepted: to reverse a decision, write a new ADR and
+mark the old one `Superseded by ADR-XXXX`. Start with
+[the reading order](adr/README.md#reading-order) if you are new to the codebase.
+
+---
+
 ## Where to Get Help
 
 - **Code questions**: Look at existing patterns — most modules follow consistent idioms
-- **Architecture**: Read `TINYHARNESS.md` (the project's own instructions) and the module overview above
+- **Architecture**: Read `TINYHARNESS.md` (the project's own instructions), the
+  module overview above, and the [ADRs](adr/README.md) for the *why* behind a design
 - **OpenAI-compat provider**: See [Configuration Guide](configuration.md#openai-compatible-provider-settings) for API key setup
 - **Sockudo provider**: ⚠️ Highly experimental — see [Configuration Guide](configuration.md#sockudo-provider-experimental) for setup and limitations
 - **Planned work**: Check `todo/todo.md` and `todo/<number>-*.md` for tracked enhancements

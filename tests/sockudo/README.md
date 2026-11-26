@@ -47,9 +47,9 @@ The integration tests in `tinyharness-lib/tests/sockudo_integration.rs` use the
 | 3 | `test_signed_request_produces_valid_auth` | `sign_request()` generates all 5 auth params with correct values |
 | 4 | `test_publish_event_succeeds` | `publish_ai_input()` publishes an event via signed HTTP POST |
 | 5 | `test_unsigned_request_is_rejected` | Raw unsigned HTTP request is rejected with 401/403 |
-| 6 | `test_provider_trait_health_check` | `Provider` trait `health_check()` works |
-| 7 | `test_provider_trait_list_models` | `Provider` trait `list_models()` returns empty when no model set |
-| 8 | `test_provider_trait_select_and_current_model` | `select_model` + `current_model` round-trip |
+| 6 | `test_provider_health_check` | `health_check()` reaches the server |
+| 7 | `test_provider_list_models` | `list_models()` returns empty when no model set |
+| 8 | `test_provider_select_and_current_model` | `select_model` + `current_model` round-trip |
 | 9 | `test_chat_returns_receiver` | `Provider::chat()` returns Ok(receiver) |
 | 10 | `test_chat_without_model_fails` | `chat()` returns Err when no model selected |
 | 11 | `test_set_timeout` | `set_timeout()` doesn't panic |

@@ -7,7 +7,6 @@ pub mod sockudo;
 pub mod tool_pairs;
 
 use std::fmt::Display;
-use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
@@ -151,65 +150,15 @@ impl Message {
     }
 }
 
-/// Trait for LLM provider backends (OpenAI-compatible endpoints, Sockudo).
-///
-/// Async methods return `impl Future<...> + Send` (RPITIT) rather than
-/// `Pin<Box<dyn Future>>`: no allocation, no extra crates. The trade-off is
-/// that the trait is not dyn-compatible — for dynamic dispatch over a
-/// runtime-selected backend use [`AnyProvider`], the concrete enum covering
-/// all built-in providers.
-///
-/// Implementations are expected to be cheap to clone where the provider
-/// spawns background streaming tasks (see [`Provider::chat`]).
-pub trait Provider: Send + Sync {
-    /// Check whether the backend is reachable and healthy.
-    ///
-    /// Called once at startup; a failure is a non-fatal warning — errors
-    /// surface on the first real request. Providers whose dedicated health
-    /// endpoint may be missing (OpenAI-compatible servers) fall back to the
-    /// model list: a non-empty list proves the backend is up.
-    fn health_check(&self) -> impl Future<Output = Result<(), String>> + Send;
-
-    /// List model names available on the backend.
-    ///
-    /// Returns an empty vec when the backend doesn't expose a model list or
-    /// the request fails; callers fall back to saved or first-known models.
-    fn list_models(&self) -> impl Future<Output = Vec<String>> + Send;
-
-    /// Select the model used for subsequent [`Provider::chat`] requests.
-    fn select_model(&mut self, name: String);
-
-    /// The currently selected model, if any.
-    fn current_model(&self) -> Option<String>;
-
-    /// Send a chat request and return a receiver for streaming response chunks.
-    ///
-    /// Returns `Err(String)` if the request cannot be started (e.g. no model selected).
-    /// On success, the provider spawns a background task that streams `ChatMessageResponse`
-    /// chunks through the returned receiver. The caller drains the receiver until it
-    /// receives a chunk with `done: true`; dropping the receiver stops the stream.
-    ///
-    /// Token usage, when available, is included in the final `ChatMessageResponse`
-    /// chunk (in the `usage` field). No separate method is needed to retrieve it.
-    fn chat(
-        &mut self,
-        messages: Vec<Message>,
-        tools: Vec<ToolDefinition>,
-    ) -> impl Future<Output = Result<tokio::sync::mpsc::Receiver<ChatMessageResponse>, String>> + Send;
-
-    /// Set the request timeout in seconds. Only meaningful for providers that use timeouts.
-    fn set_timeout(&mut self, _timeout_secs: u64) {}
-
-    /// Set the maximum number of retries. Only meaningful for providers that use retries.
-    fn set_retries(&mut self, _max_retries: u32) {}
-}
-
 /// Concrete wrapper over all built-in provider backends.
 ///
-/// The [`Provider`] trait is not dyn-compatible (its async methods use
-/// RPITIT return types), so dynamic dispatch over a runtime-selected
-/// backend goes through this enum instead of `Arc<Mutex<dyn Provider>>`.
-/// Commands and the agent loop share an `Arc<Mutex<AnyProvider>>`.
+/// This enum *is* the provider interface. There is deliberately no `Provider`
+/// trait: every HTTP backend (Ollama, llama.cpp, vLLM, hosted gateways)
+/// collapsed into [`OpenAiCompatProvider`], the remaining backends are Sockudo
+/// and the test mock, and no code is generic over a backend — so a trait would
+/// only add a second dispatch layer over the `match` that already has to exist.
+/// Commands and the agent loop share an `Arc<Mutex<AnyProvider>>`. See
+/// ADR-0002.
 pub enum AnyProvider {
     OpenAiCompat(crate::provider::openai_compat_provider::OpenAiCompatProvider),
     Sockudo(crate::provider::sockudo::SockudoProvider),
@@ -285,8 +234,14 @@ impl From<&Settings> for SockudoCredentials {
     }
 }
 
-impl Provider for AnyProvider {
-    async fn health_check(&self) -> Result<(), String> {
+impl AnyProvider {
+    /// Check whether the backend is reachable and healthy.
+    ///
+    /// Called once at startup; a failure is a non-fatal warning — errors
+    /// surface on the first real request. Backends whose dedicated health
+    /// endpoint may be missing (OpenAI-compatible servers) fall back to the
+    /// model list: a non-empty list proves the backend is up.
+    pub async fn health_check(&self) -> Result<(), String> {
         match self {
             AnyProvider::OpenAiCompat(p) => p.health_check().await,
             AnyProvider::Sockudo(p) => p.health_check().await,
@@ -295,7 +250,11 @@ impl Provider for AnyProvider {
         }
     }
 
-    async fn list_models(&self) -> Vec<String> {
+    /// List model names available on the backend.
+    ///
+    /// Returns an empty vec when the backend doesn't expose a model list or
+    /// the request fails; callers fall back to saved or first-known models.
+    pub async fn list_models(&self) -> Vec<String> {
         match self {
             AnyProvider::OpenAiCompat(p) => p.list_models().await,
             AnyProvider::Sockudo(p) => p.list_models().await,
@@ -304,7 +263,8 @@ impl Provider for AnyProvider {
         }
     }
 
-    fn select_model(&mut self, name: String) {
+    /// Select the model used for subsequent [`AnyProvider::chat`] requests.
+    pub fn select_model(&mut self, name: String) {
         match self {
             AnyProvider::OpenAiCompat(p) => p.select_model(name),
             AnyProvider::Sockudo(p) => p.select_model(name),
@@ -313,7 +273,8 @@ impl Provider for AnyProvider {
         }
     }
 
-    fn current_model(&self) -> Option<String> {
+    /// The currently selected model, if any.
+    pub fn current_model(&self) -> Option<String> {
         match self {
             AnyProvider::OpenAiCompat(p) => p.current_model(),
             AnyProvider::Sockudo(p) => p.current_model(),
@@ -322,7 +283,18 @@ impl Provider for AnyProvider {
         }
     }
 
-    async fn chat(
+    /// Send a chat request and return a receiver for streaming response chunks.
+    ///
+    /// Returns `Err(String)` if the request cannot be started (e.g. no model
+    /// selected). On success, the backend spawns a background task that streams
+    /// `ChatMessageResponse` chunks through the returned receiver. The caller
+    /// drains the receiver until it receives a chunk with `done: true`;
+    /// dropping the receiver stops the stream.
+    ///
+    /// Token usage, when available, is included in the final
+    /// `ChatMessageResponse` chunk (in the `usage` field). No separate method is
+    /// needed to retrieve it.
+    pub async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
@@ -335,7 +307,9 @@ impl Provider for AnyProvider {
         }
     }
 
-    fn set_timeout(&mut self, timeout_secs: u64) {
+    /// Set the request timeout in seconds. Only meaningful for backends that
+    /// use timeouts (the Sockudo provider ignores retries).
+    pub fn set_timeout(&mut self, timeout_secs: u64) {
         match self {
             AnyProvider::OpenAiCompat(p) => p.set_timeout(timeout_secs),
             AnyProvider::Sockudo(p) => p.set_timeout(timeout_secs),
@@ -344,7 +318,9 @@ impl Provider for AnyProvider {
         }
     }
 
-    fn set_retries(&mut self, max_retries: u32) {
+    /// Set the maximum number of retries. Only meaningful for backends that
+    /// use retries.
+    pub fn set_retries(&mut self, max_retries: u32) {
         match self {
             AnyProvider::OpenAiCompat(p) => p.set_retries(max_retries),
             AnyProvider::Sockudo(p) => p.set_retries(max_retries),

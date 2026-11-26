@@ -21,8 +21,7 @@ use tinyharness_lib::{
     custom_tools::CustomToolManager,
     mode::AgentMode,
     provider::{
-        AnyProvider, Message, Provider, Role, SockudoCredentials,
-        model_variants::is_variant_available,
+        AnyProvider, Message, Role, SockudoCredentials, model_variants::is_variant_available,
     },
     session::{Session, SessionStore},
     tools::ToolManager,

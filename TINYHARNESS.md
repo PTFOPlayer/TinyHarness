@@ -22,7 +22,7 @@ Three crates in a Cargo workspace:
 
 ### Key `tinyharness-lib` modules
 
-- `provider/` — Provider trait, `OllamaProvider` (raw SSE, Gemini signatures), `OpenAiCompatProvider` (unified llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
+- `provider/` — `AnyProvider` enum (the provider interface: `OpenAiCompat` / `Sockudo` / test `Mock`; **no `Provider` trait**, see ADR-0002), `OpenAiCompatProvider` (unified Ollama / llama.cpp / vLLM / Bearer-auth hosted gateways — built on shared `OpenAiCompatInner`), `SockudoProvider` (WebSocket, ⚠️ experimental). `ToolCall` carries optional `id`, `Message` carries optional `tool_call_id`.
 - `tools/` — 15 tools (ls, read, write, edit, grep, glob, run, web_search, web_fetch, switch_mode, question, auto_compact, invoke_skill, screenshot), registration in `register_defaults()`, mode-based filtering, `ToolAvailability` (opt-out flags for `auto_compact`/`question`, both default on), `register_custom_tools()` for custom tools
 - `custom_tools/` — Custom-tool system: `CustomToolManager` (loads the global `custom_tools.json` only — project-level files are not discovered), `CustomToolDefinition`/`CustomToolCategory`, `ShellCommand` (template substitution, shell escaping, timeout, `TH_*` env vars)
 - `paths.rs` — `Paths`: the **only** place that reads `$HOME`/`$XDG_*`/CWD. Config/data/project roots + every derived file (settings, prompts, sessions, custom tools, skills). Built via `default()`, `with_home()`, `from_env()`, or `new()` + `with_*` builders
@@ -49,7 +49,8 @@ Three crates in a Cargo workspace:
 - Rust edition 2024
 - Core logic (`tinyharness-lib`) must not use terminal I/O, ANSI codes, or rustyline
 - Use `serde` + `schemars` for serialization and tool schema generation
-- Provider async methods use RPITIT (`-> impl Future<...> + Send`) in the `Provider` trait — no `async-trait`, no `Pin<Box<dyn Future>>`. The trait is not dyn-compatible; use the `AnyProvider` enum (concrete wrapper over Ollama / OpenAI-compat / Sockudo) for shared `Arc<Mutex<AnyProvider>>` state. The test mock (`MockProvider`, feature `test-util`) is an `AnyProvider::Mock` variant.
+- Providers use **no trait**: `AnyProvider` is a concrete enum with inherent async methods (`chat`, `health_check`, `list_models`, `select_model`, `current_model`, `set_timeout`, `set_retries`), and each backend exposes the same methods inherently so the enum arms forward. Adding a backend = a variant + a match arm. Shared `Arc<Mutex<AnyProvider>>` state; the test mock (`MockProvider`, feature `test-util`) is the `AnyProvider::Mock` variant. No `async-trait`, no `Pin<Box<dyn Future>>`. See ADR-0002.
+- Trait-less dispatch is a provider-specific choice, not a house rule: `Provider` had a closed set of impls and no generic callers. Open-ended extension points (tool handlers) still use boxed futures/trait objects — see ADR-0016.
 - Error handling: `Result<T, String>` for user-facing, `Result<T, Box<dyn Error>>` for internal
 - Minimize dependencies; avoid adding new crates when existing ones suffice
 - `#[macro_export]` macros (`extract_args!`) live at `tinyharness_lib` root, not inside `tools`

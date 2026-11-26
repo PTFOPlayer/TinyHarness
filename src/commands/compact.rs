@@ -2,7 +2,7 @@ use std::io::Write;
 
 use std::collections::HashSet;
 
-use tinyharness_lib::provider::{AnyProvider, Message, Provider, Role, TokenUsage};
+use tinyharness_lib::provider::{AnyProvider, Message, Role, TokenUsage};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;

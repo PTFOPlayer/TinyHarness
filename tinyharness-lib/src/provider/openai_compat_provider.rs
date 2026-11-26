@@ -1,6 +1,6 @@
 use crate::{
     SecretString,
-    provider::{ChatMessageResponse, Message, Provider, ToolDefinition},
+    provider::{ChatMessageResponse, Message, ToolDefinition},
 };
 
 use super::openai_compat::OpenAiCompatInner;
@@ -71,35 +71,49 @@ impl OpenAiCompatProvider {
     }
 }
 
-impl Provider for OpenAiCompatProvider {
-    async fn health_check(&self) -> Result<(), String> {
+/// Runtime behaviour of the provider: health, model selection, and streaming.
+///
+/// A separate inherent `impl` block from the constructors above, only for
+/// readability.
+impl OpenAiCompatProvider {
+    /// Check whether the backend is reachable and healthy; see
+    /// [`OpenAiCompatInner::health_check`] for the `/health` → `/v1/models`
+    /// fallback.
+    pub async fn health_check(&self) -> Result<(), String> {
         self.inner.health_check().await
     }
 
-    async fn list_models(&self) -> Vec<String> {
+    /// List the models the server exposes, or the fixed list supplied via
+    /// [`OpenAiCompatProvider::with_static_models`].
+    pub async fn list_models(&self) -> Vec<String> {
         if let Some(models) = &self.static_models {
             return models.clone();
         }
         self.inner.fetch_model_list().await
     }
 
-    fn select_model(&mut self, name: String) {
+    /// Select the model used for subsequent [`Self::chat`] requests.
+    pub fn select_model(&mut self, name: String) {
         self.inner.select_model(name);
     }
 
-    fn current_model(&self) -> Option<String> {
+    /// The currently selected model, if any.
+    pub fn current_model(&self) -> Option<String> {
         self.inner.current_model()
     }
 
-    fn set_timeout(&mut self, timeout_secs: u64) {
+    /// Set the per-request timeout in seconds.
+    pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.inner.set_timeout(timeout_secs);
     }
 
-    fn set_retries(&mut self, max_retries: u32) {
+    /// Set the maximum number of retries for transient failures.
+    pub fn set_retries(&mut self, max_retries: u32) {
         self.inner.set_retries(max_retries);
     }
 
-    async fn chat(
+    /// Send a chat request and return a receiver for streaming chunks.
+    pub async fn chat(
         &mut self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,

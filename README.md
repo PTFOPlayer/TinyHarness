@@ -327,8 +327,8 @@ Frontend-agnostic — no terminal I/O, no ANSI codes, no rustyline.
 ```
 tinyharness-lib/src/
 ├── lib.rs               Re-exports all public types
-├── provider/             Provider trait + implementations
-│   ├── mod.rs            Provider trait, AnyProvider enum, Message types, ToolDefinition, ToolCall
+├── provider/             AnyProvider enum + backend implementations
+│   ├── mod.rs            AnyProvider enum, Message types, ToolDefinition, ToolCall
 │   ├── sockudo.rs        SockudoProvider — AI Transport via WebSocket (⚠️ highly experimental)
 │   ├── openai_compat.rs  Shared HTTP/SSE logic for OpenAI-compatible backends
 │   ├── openai_compat_provider.rs OpenAiCompatProvider — unified Ollama / llama.cpp / vLLM / gateway provider

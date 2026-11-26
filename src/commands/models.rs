@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use tinyharness_lib::config::{load_settings_from, update_settings_from};
-use tinyharness_lib::provider::{AnyProvider, Provider, model_variants::is_variant_available};
+use tinyharness_lib::provider::{AnyProvider, model_variants::is_variant_available};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;

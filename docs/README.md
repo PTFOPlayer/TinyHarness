@@ -15,6 +15,7 @@
 ## Developer Docs
 
 - [Contributing](contributing.md) — project setup, code conventions, PR process
+- [Architecture Decision Records](adr/README.md) — why the code is shaped the way it is (index + template)
 
 ## Provider Guides
 
@@ -36,7 +37,7 @@
 | Setting up a project | [Project Instructions](project-instructions.md) → [Per-Project Settings](per-project-settings.md) |
 | Writing skills | [Skills Guide](skills.md) |
 | Security-conscious user | [Safety & Security](safety.md) |
-| Contributor | [Contributing](contributing.md) |
+| Contributor | [Contributing](contributing.md) → [ADRs](adr/README.md) |
 
 ### By Question
 
@@ -53,6 +54,7 @@
 | "What languages are auto-detected?" | [Language Detection](language-detection.md) |
 | "Is Sockudo production-ready?" | No — see [Configuration Guide](configuration.md#sockudo-provider-experimental) |
 | "How do I contribute?" | [Contributing](contributing.md) |
+| "Why is it built this way?" | [Architecture Decision Records](adr/README.md) |
 
 ## Files and Directories
 

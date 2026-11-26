@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use tinyharness_lib::context::{PROJECT_MD_FILE_NAMES, WorkspaceContext};
-use tinyharness_lib::provider::{AnyProvider, Message, Provider, Role};
+use tinyharness_lib::provider::{AnyProvider, Message, Role};
 use tinyharness_ui::output::Output;
 
 use crate::async_command;
