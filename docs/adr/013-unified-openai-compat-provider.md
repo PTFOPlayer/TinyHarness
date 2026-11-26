@@ -11,9 +11,11 @@ The only real differences were (a) whether an `Authorization: Bearer` header is
 sent and (b) how `list_models` resolves — llama.cpp serves a single model and has
 no useful `/v1/models`.
 
-Meanwhile Ollama *also* exposes an OpenAI-compatible `/v1`, but its native API is
-richer (thinking deltas, Gemini `thought_signature` round-tripping), so it keeps
-its own provider.
+Meanwhile Ollama *also* exposes an OpenAI-compatible `/v1`, but it has a native
+API of its own. That was the reason for keeping a separate `OllamaProvider`; it
+has since been removed, so **every** backend except Sockudo now goes through
+`OpenAiCompatProvider` and there is no native-protocol provider left. See
+[ADR-0017](017-toolcall-field-removal.md) for the cleanup that followed.
 
 ## Decision
 

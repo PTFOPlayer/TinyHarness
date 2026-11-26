@@ -685,7 +685,6 @@ mod tests {
                 function: tinyharness_lib::provider::ToolCallFunction {
                     name: "read".to_string(),
                     arguments: serde_json::json!({}),
-                    thought_signature: None,
                 },
             }],
             tool_call_id: None,

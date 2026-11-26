@@ -74,7 +74,6 @@ impl MockProvider {
                     function: ToolCallFunction {
                         name: tool_name.to_string(),
                         arguments,
-                        thought_signature: None,
                     },
                 }],
                 thinking: None,

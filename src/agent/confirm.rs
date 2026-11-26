@@ -118,7 +118,6 @@ mod tests {
             function: tinyharness_lib::provider::ToolCallFunction {
                 name: name.to_string(),
                 arguments: args,
-                thought_signature: None,
             },
         }
     }

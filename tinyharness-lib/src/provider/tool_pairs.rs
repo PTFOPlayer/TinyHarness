@@ -226,7 +226,6 @@ mod tests {
             function: ToolCallFunction {
                 name: name.to_string(),
                 arguments: json!({}),
-                thought_signature: None,
             },
         }
     }

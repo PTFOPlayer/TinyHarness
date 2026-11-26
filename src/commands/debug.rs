@@ -959,7 +959,6 @@ mod tests {
                     function: tinyharness_lib::provider::ToolCallFunction {
                         name: "read".to_string(),
                         arguments: serde_json::json!({"path": "/tmp/test.rs"}),
-                        thought_signature: None,
                     },
                 }],
                 tool_call_id: None,
@@ -1107,7 +1106,6 @@ mod tests {
                     function: tinyharness_lib::provider::ToolCallFunction {
                         name: "read".to_string(),
                         arguments: serde_json::json!({"path": "/tmp/test.rs"}),
-                        thought_signature: None,
                     },
                 }],
                 tool_call_id: None,

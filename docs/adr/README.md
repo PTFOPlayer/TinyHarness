@@ -40,6 +40,7 @@ new number and mark the old one `Superseded by ADR-XXXX` — do not edit history
 | [014](014-custom-tools-global-only.md) | Custom tools load from the global config only | Accepted |
 | [015](015-system-prompt-assembly.md) | System prompts are seeded files, assembled as header + mode | Accepted |
 | [016](016-tool-handler-closures.md) | Tool handlers are boxed closures over `HashMap<String, String>` | Accepted |
+| [017](017-toolcall-field-removal.md) | Remove the dead `thought_signature` tool-call field | Accepted |
 
 ## Reading order
 

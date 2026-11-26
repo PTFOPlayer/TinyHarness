@@ -851,11 +851,7 @@ fn parse_tool_calls(value: &serde_json::Value) -> Option<Vec<ToolCall>> {
                 .unwrap_or(serde_json::Value::Null);
             Some(ToolCall {
                 id: None,
-                function: ToolCallFunction {
-                    name,
-                    arguments,
-                    thought_signature: None,
-                },
+                function: ToolCallFunction { name, arguments },
             })
         })
         .collect();
@@ -1319,7 +1315,6 @@ mod tests {
             function: ToolCallFunction {
                 name: "ls".to_string(),
                 arguments: serde_json::json!({"path": "/"}),
-                thought_signature: None,
             },
         }];
         let mut tool_msg = Message::simple(Role::Tool, "file1\nfile2");
