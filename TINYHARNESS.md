@@ -77,7 +77,7 @@ Three crates in a Cargo workspace:
 ## Testing
 
 - `cargo test --workspace` runs all tests
-- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests
 - Use `tempfile` for test isolation; tool tests must not touch the real filesystem
 - Run specific test: `cargo test <test_name>`
 - Run per crate: `cargo test -p tinyharness-lib`, `cargo test -p TinyHarness`, `cargo test -p tinyharness-ui`

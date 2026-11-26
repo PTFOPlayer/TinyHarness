@@ -211,7 +211,7 @@ Use `serde` + `schemars` for serialization and JSON Schema generation:
 
 - **Minimize dependencies** — avoid adding new crates when existing ones suffice
 - **Feature-gate optional functionality** — e.g., a hypothetical `server` feature for HTTP API mode
-- **Audit existing usage** — `chrono` usage could be replaced with `std::time` (see `todo/16-dependency-slimming.md`)
+- **Audit existing usage** — prefer `std::time` over `chrono` where it suffices
 
 ### Macros
 
@@ -221,7 +221,7 @@ Use `serde` + `schemars` for serialization and JSON Schema generation:
 
 - Use `tempfile` for test isolation — tool tests must not touch the real filesystem
 - Test modules go inline: `#[cfg(test)] mod tests { ... }`
-- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests (see `todo/01-testing-gaps.md`)
+- `tinyharness-lib` has good coverage (~186 tests + 13 ignored Sockudo integration tests); `tinyharness-ui` covers output formatting, wrapping, diffs, and confirmation prompts (~45 tests); binary crate has ~186 tests
 
 ### Tool Categories
 
@@ -259,7 +259,9 @@ Uses `dtolnay/rust-toolchain@stable` for Rust and `Swatinem/rust-cache@v2` for c
 3. **Run verification checklist**: fmt → clippy → test → build
 4. **Update docs**: If adding/changing user-facing features, update relevant docs in `docs/`
 5. **Record architectural decisions**: If you made a non-obvious design choice, add an ADR (see [Architecture Decisions](#architecture-decisions))
-6. **Update todos**: If your PR completes a tracked enhancement, update the status in `todo/<number>-*.md` and `todo/todo.md`
+6. **Update todos**: If your PR completes a tracked enhancement, delete its
+   `todo/<number>-*.md` and close up the numbering in `todo/README.md` (the
+   directory is local-only, so cite an item by title rather than by number)
 6. **Write a clear PR description**: What, why, and any breaking changes
 7. **PR to `master`**: CI runs automatically
 
@@ -472,7 +474,7 @@ mark the old one `Superseded by ADR-XXXX`. Start with
   module overview above, and the [ADRs](adr/README.md) for the *why* behind a design
 - **OpenAI-compat provider**: See [Configuration Guide](configuration.md#openai-compatible-provider-settings) for API key setup
 - **Sockudo provider**: ⚠️ Highly experimental — see [Configuration Guide](configuration.md#sockudo-provider-experimental) for setup and limitations
-- **Planned work**: Check `todo/todo.md` and `todo/<number>-*.md` for tracked enhancements
+- **Planned work**: Check `todo/README.md` and the per-item `todo/<number>-*.md` files for tracked enhancements
 - **Tool docs**: See [Tools Reference](tools-reference.md) for tool schemas and behavior
 - **Configuration**: See [Configuration Guide](configuration.md) for settings and paths
 
